@@ -37,8 +37,6 @@ __version__ = '0.1.0'
 # ── Structured Data extraction ─────────────────────────────────────────────────
 
 SD_KEYS = [
-    'caption_en', 'caption_de', 'caption_fr', 'caption_it',
-    'caption_es', 'caption_nl', 'caption_pl', 'caption_ru', 'caption_zh',
     'creator', 'copyright', 'license', 'depicts', 'gallery_suffix',
 ]
 
@@ -52,9 +50,20 @@ PROPERTY_MAP = {
 NAME_SEPARATORS = [' at ', ' bei ', ' à ', ' al ', ' auf ', ' sur ', ' on ', ' sul ']
 
 def extract_structured_data(text):
-    """Extract key=value lines from description_all text."""
+    """Extract key=value lines from description_all text.
+    Lines starting with # are treated as comments and removed."""
     sd = {}
+    # Remove comment lines (starting with #)
+    text = re.sub(r'^#[^\n]*\n?', '', text, flags=re.MULTILINE)
     result = text
+    # Dynamically extract all caption_XX= lines (any language code)
+    for m in re.finditer(r'(?:^|\n)caption_([a-z]{2,3})=([^\n]+)', result):
+        lang = m.group(1)
+        val = m.group(2).strip()
+        sd['caption_' + lang] = val
+    # Remove all matched caption_XX= lines from result
+    result = re.sub(r'\ncaption_[a-z]{2,3}=[^\n]+', '', result)
+    result = re.sub(r'^caption_[a-z]{2,3}=[^\n]+\n?', '', result, flags=re.MULTILINE)
     for key in SD_KEYS:
         # Match at start of string
         m = re.match(rf'^{key}=([^\n]+)', result)
@@ -319,6 +328,8 @@ class UploadWorker(QThread):
                     info += f"|source={row['source']}\n"
                 if row.get('permission'):
                     info += f"|permission={row['permission']}\n"
+                if row.get('other_fields'):
+                    info += f"|other fields={row['other_fields']}\n"
                 info += '}}'
                 cats_str = '\n'.join(cats)
 
@@ -343,7 +354,7 @@ class UploadWorker(QThread):
                 claims = []
                 for key, val in sd.items():
                     if key.startswith('caption_'):
-                        lang = key[8:]
+                        lang = key[8:]  # e.g. 'caption_zh' -> 'zh'
                         labels[lang] = val
                     elif key in PROPERTY_MAP:
                         prop = PROPERTY_MAP[key]
@@ -505,6 +516,8 @@ class MainWindow(QMainWindow):
         self.permission_edit = QLineEdit()
         self.license_edit = QLineEdit('{{Cc-by-sa-4.0}}')
         self.other_templates_edit = QLineEdit()
+        self.other_fields_edit = QLineEdit()
+        self.other_fields_edit.setPlaceholderText('e.g. {{Credit line|Author=Harald Krichel|Other=WikiPortraits}}')
         self.gallery_prefix_edit = QLineEdit()
         self.gallery_prefix_edit.setPlaceholderText('e.g. User:Harald Krichel')
 
@@ -513,6 +526,7 @@ class MainWindow(QMainWindow):
         settings_form.addRow('Permission:', self.permission_edit)
         settings_form.addRow('License:', self.license_edit)
         settings_form.addRow('Other templates:', self.other_templates_edit)
+        settings_form.addRow('Other fields:', self.other_fields_edit)
         settings_form.addRow('Gallery prefix:', self.gallery_prefix_edit)
         right_layout.addWidget(settings_group)
 
@@ -563,12 +577,14 @@ class MainWindow(QMainWindow):
         self.author_edit.setText(self.settings.value('author', ''))
         self.source_edit.setText(self.settings.value('source', '{{own}}'))
         self.license_edit.setText(self.settings.value('license', '{{Cc-by-sa-4.0}}'))
+        self.other_fields_edit.setText(self.settings.value('other_fields', ''))
         self.gallery_prefix_edit.setText(self.settings.value('gallery_prefix', ''))
 
     def _save_settings(self):
         self.settings.setValue('author', self.author_edit.text())
         self.settings.setValue('source', self.source_edit.text())
         self.settings.setValue('license', self.license_edit.text())
+        self.settings.setValue('other_fields', self.other_fields_edit.text())
         self.settings.setValue('gallery_prefix', self.gallery_prefix_edit.text())
 
     def do_login(self):
@@ -680,6 +696,7 @@ class MainWindow(QMainWindow):
                 'permission': self.permission_edit.text(),
                 'license_text': self.license_edit.text(),
                 'other_templates': self.other_templates_edit.text(),
+                'other_fields': self.other_fields_edit.text(),
                 'template': 'Information',
             })
 
