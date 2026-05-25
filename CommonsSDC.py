@@ -14,15 +14,15 @@ import json
 import requests
 from datetime import datetime
 
-from PyQt6.QtWidgets import (
+from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton, QLabel, QLineEdit,
     QTextEdit, QFileDialog, QMessageBox, QProgressBar, QSplitter,
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
     QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
-from PyQt6.QtGui import QPixmap, QIcon, QFont
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings
+from PyQt5.QtGui import QPixmap, QIcon, QFont
 
 try:
     from PIL import Image
@@ -405,14 +405,14 @@ class LoginDialog(QDialog):
         self.url_edit = QLineEdit(self.settings.value('api_url', 'https://commons.wikimedia.org/w/api.php'))
         self.user_edit = QLineEdit(self.settings.value('username', ''))
         self.pass_edit = QLineEdit()
-        self.pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pass_edit.setEchoMode(QLineEdit.Password)
 
         form.addRow('API URL:', self.url_edit)
         form.addRow('Username:', self.user_edit)
         form.addRow('Password:', self.pass_edit)
         layout.addLayout(form)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -479,15 +479,15 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(toolbar)
 
         # ── Splitter: table + right panel ──
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = QSplitter(Qt.Horizontal)
 
         # File table
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_DESC, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_FILENAME, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
+        self.table.horizontalHeader().setSectionResizeMode(self.COL_DESC, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(self.COL_FILENAME, QHeaderView.ResizeToContents)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.itemSelectionChanged.connect(self.on_row_selected)
         splitter.addWidget(self.table)
 
@@ -540,7 +540,7 @@ class MainWindow(QMainWindow):
 
         # Preview
         self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(120)
         self.preview_label.setStyleSheet('background: #111; border-radius: 4px;')
         right_layout.addWidget(self.preview_label)
@@ -573,7 +573,7 @@ class MainWindow(QMainWindow):
 
     def do_login(self):
         dlg = LoginDialog(self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        if dlg.exec() != QDialog.Accepted:
             return
         api_url, username, password = dlg.get_credentials()
         api = MediaWikiApi(api_url, username, password)
@@ -608,10 +608,10 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, self.COL_DATE, QTableWidgetItem(date))
         self.table.setItem(row, self.COL_DESC, QTableWidgetItem(''))
         status_item = QTableWidgetItem('—')
-        status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(row, self.COL_STATUS, status_item)
         # Store filepath in item data
-        self.table.item(row, self.COL_FILENAME).setData(Qt.ItemDataRole.UserRole, filepath)
+        self.table.item(row, self.COL_FILENAME).setData(Qt.UserRole, filepath)
 
     def remove_selected(self):
         rows = sorted(set(i.row() for i in self.table.selectedItems()), reverse=True)
@@ -633,13 +633,13 @@ class MainWindow(QMainWindow):
         self.file_desc_edit.blockSignals(False)
 
         # Show preview
-        filepath = self.table.item(row, self.COL_FILENAME).data(Qt.ItemDataRole.UserRole)
+        filepath = self.table.item(row, self.COL_FILENAME).data(Qt.UserRole)
         if filepath and os.path.exists(filepath):
             pix = QPixmap(filepath)
             if not pix.isNull():
                 self.preview_label.setPixmap(
-                    pix.scaled(300, 200, Qt.AspectRatioMode.KeepAspectRatio,
-                               Qt.TransformationMode.SmoothTransformation)
+                    pix.scaled(300, 200, Qt.KeepAspectRatio,
+                               Qt.SmoothTransformation)
                 )
 
     def on_file_desc_changed(self):
@@ -661,7 +661,7 @@ class MainWindow(QMainWindow):
 
         rows = []
         for r in range(self.table.rowCount()):
-            filepath = self.table.item(r, self.COL_FILENAME).data(Qt.ItemDataRole.UserRole)
+            filepath = self.table.item(r, self.COL_FILENAME).data(Qt.UserRole)
             filename = self.table.item(r, self.COL_FILENAME).text()
             date = self.table.item(r, self.COL_DATE).text() if self.table.item(r, self.COL_DATE) else ''
             per_file_desc = self.table.item(r, self.COL_DESC).text() if self.table.item(r, self.COL_DESC) else ''
