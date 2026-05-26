@@ -87,4 +87,4 @@ gallery_suffix=Berlinale 2026
 
 ## License
 
-MIT
+CC0

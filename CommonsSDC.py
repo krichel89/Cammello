@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-CommonsSDC v1.0.0 - Batch upload tool for Wikimedia Commons
+CommonsSDC v0.1.1 - Batch upload tool for Wikimedia Commons
 Replaces VicunaUploader with structured data support (caption_*, creator, depicts, etc.)
 
-Requirements: pip install PyQt6 requests Pillow
-License: MIT
+Requirements: pip install PyQt5 requests Pillow
+License: CC0
 """
 
 import sys
@@ -32,7 +32,7 @@ except ImportError:
     HAS_PIL = False
 
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 # ── Structured Data extraction ─────────────────────────────────────────────────
 
@@ -91,13 +91,15 @@ def read_exif_date(filepath):
         return ''
     try:
         img = Image.open(filepath)
-        exif_data = img._getexif()
-        if exif_data:
-            for tag_id, value in exif_data.items():
-                tag = TAGS.get(tag_id, tag_id)
-                if tag == 'DateTimeOriginal':
-                    # Format: "2025:01:15 14:30:00" -> "2025-01-15 14:30:00"
-                    return value.replace(':', '-', 2)
+        # Use getexif() (public API); fall back to _getexif() for older Pillow
+        exif_data = img.getexif() if hasattr(img, 'getexif') else img._getexif()
+        if exif_data is None:
+            return ''
+        for tag_id, value in exif_data.items():
+            tag = TAGS.get(tag_id, tag_id)
+            if tag == 'DateTimeOriginal':
+                # Format: "2025:01:15 14:30:00" -> "2025-01-15 14:30:00"
+                return value.replace(':', '-', 2)
         return ''
     except Exception:
         return ''
@@ -109,7 +111,7 @@ class MediaWikiApi:
     def __init__(self, api_url, username, password):
         self.api_url = api_url
         self.session = requests.Session()
-        self.session.headers['User-Agent'] = 'CommonsSDC/1.0 (Python)'
+        self.session.headers['User-Agent'] = f'CommonsSDC/{__version__} (Python {sys.version_info.major}.{sys.version_info.minor}; PyQt5)'
         self.session.request = lambda method, url, **kwargs: requests.Session.request(
             self.session, method, url, timeout=kwargs.pop('timeout', 60), **kwargs
         )
@@ -118,6 +120,9 @@ class MediaWikiApi:
         self.password = password
 
     def login(self):
+        # Enforce HTTPS to prevent sending credentials over plain HTTP
+        if not self.api_url.startswith('https://'):
+            raise Exception('Security error: API URL must use HTTPS, not HTTP.')
         # Get login token
         r = self.session.get(self.api_url, params={
             'action': 'query', 'meta': 'tokens', 'type': 'login', 'format': 'json'
@@ -262,7 +267,9 @@ class MediaWikiApi:
         new_entries = ''
         for fname, caption in file_entries:
             name = extract_name_from_caption(caption)
+            # Sanitize caption: remove newlines and pipe characters to prevent wikitext injection
             if name:
+                name = name.replace('|', '-').replace('\n', ' ').replace('\r', '')
                 new_entries += f'File:{fname}|{name}\n'
             else:
                 new_entries += f'File:{fname}\n'
@@ -379,6 +386,8 @@ class UploadWorker(QThread):
                         gallery_page = self.gallery_prefix.rstrip('/') + '/' + gallery_suffix
                     else:
                         gallery_page = self.gallery_prefix
+                elif gallery_suffix:
+                    gallery_page = None  # no prefix set, skip gallery
                     caption = sd.get('caption_en', '')
                     gallery_entries.setdefault(gallery_page, []).append(
                         (row['filename'], caption)
@@ -393,10 +402,12 @@ class UploadWorker(QThread):
 
         # Update galleries
         for gallery_page, entries in gallery_entries.items():
+            if not gallery_page:
+                continue
             try:
                 self.api.update_gallery(gallery_page, entries)
             except Exception as e:
-                pass  # Gallery errors are non-fatal
+                self.error.emit(-1, f'Gallery error ({gallery_page}): {str(e)}')
 
         self.finished.emit(f'Done: {success_count}/{len(self.rows)} files uploaded.')
 
@@ -435,6 +446,29 @@ class LoginDialog(QDialog):
 
 
 # ── Main Window ────────────────────────────────────────────────────────────────
+
+
+# ── Login Worker Thread ────────────────────────────────────────────────────────
+
+class LoginWorker(QThread):
+    success = pyqtSignal(object)  # MediaWikiApi instance
+    failure = pyqtSignal(str)     # error message
+
+    def __init__(self, api_url, username, password):
+        super().__init__()
+        self.api_url = api_url
+        self.username = username
+        self.password = password
+
+    def run(self):
+        try:
+            api = MediaWikiApi(self.api_url, self.username, self.password)
+            if api.login():
+                self.success.emit(api)
+            else:
+                self.failure.emit('Invalid credentials.')
+        except Exception as e:
+            self.failure.emit(str(e))
 
 class MainWindow(QMainWindow):
     COLS = ['Filename', 'Title', 'Date', 'Description (all)', 'Status']
@@ -592,17 +626,27 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             return
         api_url, username, password = dlg.get_credentials()
-        api = MediaWikiApi(api_url, username, password)
-        try:
-            if api.login():
-                self.api = api
-                self.login_label.setText(f'✓ Logged in as {username}')
-                self.login_label.setStyleSheet('color: green')
-                self.status_bar.showMessage(f'Logged in as {username}')
-            else:
-                QMessageBox.warning(self, 'Login failed', 'Invalid credentials.')
-        except Exception as e:
-            QMessageBox.critical(self, 'Login error', str(e))
+        self.login_btn.setEnabled(False)
+        self.login_label.setText('Logging in…')
+        self.login_label.setStyleSheet('color: orange')
+        # Run in background thread to avoid UI freeze
+        self._login_worker = LoginWorker(api_url, username, password)
+        self._login_worker.success.connect(lambda api: self._on_login_success(api, username))
+        self._login_worker.failure.connect(self._on_login_failure)
+        self._login_worker.start()
+
+    def _on_login_success(self, api, username):
+        self.api = api
+        self.login_btn.setEnabled(True)
+        self.login_label.setText(f'✓ Logged in as {username}')
+        self.login_label.setStyleSheet('color: green')
+        self.status_bar.showMessage(f'Logged in as {username}')
+
+    def _on_login_failure(self, error_msg):
+        self.login_btn.setEnabled(True)
+        self.login_label.setText('Not logged in')
+        self.login_label.setStyleSheet('color: red')
+        QMessageBox.critical(self, 'Login error', error_msg)
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -686,9 +730,10 @@ class MainWindow(QMainWindow):
             base = self.base_text_edit.toPlainText().strip()
             combined = (base + '\n' + per_file_desc).strip() if base else per_file_desc
 
+            title = self.table.item(r, self.COL_TITLE).text() if self.table.item(r, self.COL_TITLE) else filename
             rows.append({
                 'filepath': filepath,
-                'filename': filename,
+                'filename': title if title else filename,
                 'date': date,
                 'description_all': combined,
                 'author': self.author_edit.text(),
