@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-CommonsSDC v0.2.0 - Batch upload tool for Wikimedia Commons (debugging build)
+CommonsSDC v0.3.0 - Batch upload tool for Wikimedia Commons
 
 Ersetzt VicunaUploader mit Structured-Data-Unterstützung (caption_*, creator,
-depicts, etc.). Diese Version legt den Schwerpunkt auf die FEHLERSUCHE:
+depicts, etc.).
 
+Neu in 0.3.0:
+  * Frei waehlbarer Ziel-Dateiname auf Commons (Spalte „Ziel-Dateiname"),
+    mit automatischer Endungs-Ergaenzung und Pruefung auf unzulaessige Zeichen.
+
+Aus 0.2.0 (Debugging-Schwerpunkt):
   * Durchgaengiges Logging (Datei + Live-Log-Tab + Konsole), Zugangsdaten/Token
     werden im Log maskiert.
   * Jeder API-Aufruf laeuft ueber zentrale Helfer, die HTTP-Status, Nicht-JSON-
@@ -14,9 +19,6 @@ depicts, etc.). Diese Version legt den Schwerpunkt auf die FEHLERSUCHE:
   * badtoken-Retry (ein erneuter Versuch mit frischem CSRF-Token).
   * Konfigurierbarer HTTP-Timeout.
   * "Verbindung testen" (whoami), um den Login-Zustand zu pruefen.
-
-Die Upload-/SDC-/Galerie-Logik ist gegenueber v0.1.1 funktional unveraendert;
-alle Aenderungen sind additiv.
 
 Requirements: pip install PyQt5 requests Pillow
 License: CC0
