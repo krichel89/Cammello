@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
 """
-CommonsSDC v0.4.0 - Batch upload tool for Wikimedia Commons
+Cammello v0.5.0 - Batch upload tool for Wikimedia Commons
 
-Ersetzt VicunaUploader mit Structured-Data-Unterstützung (caption_*, creator,
+Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
 
-Neu in 0.4.0 (Tabellen-UI):
-  * Thumbnail-Vorschau je Datei (links), effizient verkleinert geladen
-    (QImageReader) inkl. EXIF-Ausrichtung.
-  * Breitere Quelldatei-Spalte; Spaltenbreiten frei anpassbar.
-  * Endung im Ziel-Dateinamen ist fest (aus der Quelldatei) und nicht aenderbar.
+New in 0.5.0:
+  * Renamed from CommonsSDC to Cammello.
+  * Fully English user interface, comments and log messages.
 
-Aus 0.3.0:
-  * Frei waehlbarer Ziel-Dateiname auf Commons (Spalte „Ziel-Dateiname"),
-    mit automatischer Endungs-Ergaenzung und Pruefung auf unzulaessige Zeichen.
+From 0.4.0 (table UI):
+  * Per-file thumbnail preview (left column), loaded efficiently downscaled
+    (QImageReader) with EXIF orientation applied.
+  * Wider source-file column; column widths freely adjustable.
+  * The extension in the target filename is fixed (taken from the source file)
+    and cannot be changed.
 
-Aus 0.2.0 (Debugging-Schwerpunkt):
-  * Durchgaengiges Logging (Datei + Live-Log-Tab + Konsole), Zugangsdaten/Token
-    werden im Log maskiert.
-  * Jeder API-Aufruf laeuft ueber zentrale Helfer, die HTTP-Status, Nicht-JSON-
-    Antworten und Netzwerkfehler sauber abfangen -- es gibt keine "leeren" Fehler
-    mehr.
-  * Vollstaendiger Wikitext und SDC-Payload werden pro Datei ins Log geschrieben.
-  * badtoken-Retry (ein erneuter Versuch mit frischem CSRF-Token).
-  * Konfigurierbarer HTTP-Timeout.
-  * "Verbindung testen" (whoami), um den Login-Zustand zu pruefen.
+From 0.3.0:
+  * Freely chosen target filename on Commons ("Target filename" column), with
+    automatic extension handling and rejection of invalid characters.
+
+From 0.2.0 (debugging focus):
+  * Consistent logging (file + live log tab + console); credentials/tokens are
+    masked in the log.
+  * Every API call goes through central helpers that cleanly handle HTTP status,
+    non-JSON responses and network errors -- there are no more "empty" errors.
+  * The full wikitext and SDC payload are written to the log per file.
+  * badtoken retry (one more attempt with a fresh CSRF token).
+  * Configurable HTTP timeout.
+  * "Test connection" (whoami) to verify the login state.
 
 Requirements: pip install PyQt5 requests Pillow
 License: CC0
@@ -60,28 +64,29 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.4.0'
+__version__ = '0.5.0'
+APP_NAME = 'Cammello'
 
-# ── Logging-Infrastruktur ───────────────────────────────────────────────────────
+# ── Logging infrastructure ──────────────────────────────────────────────────────
 
 REDACT_KEYS = {'password', 'lgpassword', 'token', 'lgtoken', 'logintoken'}
 
 
 def get_log_path():
-    """Ermittelt einen beschreibbaren Pfad fuer die Logdatei."""
-    base = os.path.join(os.path.expanduser('~'), 'CommonsSDC')
+    """Return a writable path for the log file."""
+    base = os.path.join(os.path.expanduser('~'), APP_NAME)
     try:
         os.makedirs(base, exist_ok=True)
-        return os.path.join(base, 'commonssdc_debug.log')
+        return os.path.join(base, 'cammello_debug.log')
     except Exception:
-        return os.path.join(tempfile.gettempdir(), 'commonssdc_debug.log')
+        return os.path.join(tempfile.gettempdir(), 'cammello_debug.log')
 
 
 class LogEmitter(QObject):
-    """Bruecke zwischen dem (thread-fremden) Logging und der GUI.
+    """Bridge between the (thread-foreign) logging and the GUI.
 
-    pyqtSignal sorgt fuer eine queued connection, wenn aus dem Worker-Thread
-    emittiert wird -- daher thread-sicher fuer die Aktualisierung des Log-Views.
+    pyqtSignal provides a queued connection when emitted from the worker
+    thread -- therefore thread-safe for updating the log view.
     """
     log_record = pyqtSignal(str)
 
@@ -99,19 +104,19 @@ class QtLogHandler(logging.Handler):
 
 
 def setup_logging():
-    """Richtet Datei-, GUI- und Konsolen-Logging ein.
+    """Set up file, GUI and console logging.
 
-    Rueckgabe: (logger, emitter, gui_handler, log_path)
+    Returns: (logger, emitter, gui_handler, log_path)
     """
     log_path = get_log_path()
-    logger = logging.getLogger('CommonsSDC')
+    logger = logging.getLogger(APP_NAME)
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
 
     fmt = logging.Formatter('%(asctime)s %(levelname)-7s %(message)s',
                             '%Y-%m-%d %H:%M:%S')
 
-    # Datei-Handler: immer volles Detail (DEBUG), damit nichts verloren geht.
+    # File handler: always full detail (DEBUG) so nothing is lost.
     try:
         fh = RotatingFileHandler(log_path, maxBytes=2_000_000,
                                  backupCount=3, encoding='utf-8')
@@ -119,26 +124,26 @@ def setup_logging():
         fh.setFormatter(fmt)
         logger.addHandler(fh)
     except Exception:
-        pass  # Notfalls ohne Datei-Log weiterarbeiten.
+        pass  # Continue without a file log if necessary.
 
-    # GUI-Handler: standardmaessig INFO, per Verbose-Checkbox auf DEBUG.
+    # GUI handler: INFO by default, DEBUG via the verbose checkbox.
     emitter = LogEmitter()
     gui_handler = QtLogHandler(emitter)
     gui_handler.setLevel(logging.INFO)
     gui_handler.setFormatter(fmt)
     logger.addHandler(gui_handler)
 
-    # Konsolen-Handler (z. B. beim Start aus dem Terminal).
+    # Console handler (e.g. when started from a terminal).
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    logger.info('CommonsSDC %s gestartet. Logdatei: %s', __version__, log_path)
+    logger.info('%s %s started. Log file: %s', APP_NAME, __version__, log_path)
     return logger, emitter, gui_handler, log_path
 
 
-# ── Structured Data extraction (unveraendert ggü. v0.1.1) ───────────────────────
+# ── Structured data extraction (logic unchanged since v0.1.1) ───────────────────
 
 SD_KEYS = [
     'creator', 'copyright', 'license', 'depicts', 'gallery_suffix',
@@ -212,34 +217,33 @@ def read_exif_date(filepath, log=None):
         return ''
     except Exception as e:
         if log:
-            log.debug('EXIF-Datum konnte fuer %s nicht gelesen werden: %s',
-                      filepath, e)
+            log.debug('Could not read EXIF date for %s: %s', filepath, e)
         return ''
 
 
-# ── Ziel-Dateiname auf Commons ──────────────────────────────────────────────────
+# ── Target filename on Commons ──────────────────────────────────────────────────
 
-# Endungen, die als gueltige Datei-Endung akzeptiert werden.
+# Extensions accepted as a valid file extension.
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.svg', '.webp'}
 
-# In MediaWiki-Seitentiteln unzulaessige Zeichen.
+# Characters that are not allowed in MediaWiki page titles.
 FORBIDDEN_TITLE_CHARS = set('#<>[]|{}')
 
 
 def normalize_commons_filename(target, source_path):
-    """Bildet den Ziel-Dateinamen fuer den Upload auf Commons.
+    """Build the target filename for the upload to Commons.
 
-    - entfernt ein vorangestelltes 'File:'/'Datei:'
-    - stellt sicher, dass eine (Bild-)Endung vorhanden ist; fehlt sie,
-      wird die Endung der Quelldatei angehaengt
-    - lehnt leere Namen, zu lange Namen und unzulaessige Zeichen mit
-      ValueError ab (wird vom Worker als sprechender Fehler gemeldet)
+    - strips a leading 'File:'/'Datei:' prefix
+    - ensures an (image) extension is present; if missing, the source file's
+      extension is appended
+    - rejects empty names, overly long names and invalid characters with a
+      ValueError (reported by the worker as a meaningful error)
 
-    Rueckgabe: bereinigter Dateiname (ohne 'File:'-Praefix).
+    Returns: the cleaned filename (without 'File:' prefix).
     """
     name = (target or '').strip()
 
-    # Namespace-Praefix entfernen (case-insensitive).
+    # Remove namespace prefix (case-insensitive).
     for prefix in ('file:', 'datei:'):
         if name.lower().startswith(prefix):
             name = name[len(prefix):].strip()
@@ -248,27 +252,27 @@ def normalize_commons_filename(target, source_path):
     if not name:
         name = os.path.basename(source_path).strip()
     if not name:
-        raise ValueError('Leerer Ziel-Dateiname.')
+        raise ValueError('Empty target filename.')
 
-    # Endung sicherstellen.
+    # Ensure the extension.
     src_ext = os.path.splitext(source_path)[1]
     _, ext = os.path.splitext(name)
     if ext.lower() not in IMAGE_EXTS:
         if not src_ext:
-            raise ValueError('Quelldatei hat keine Endung; bitte Endung '
-                             'im Ziel-Dateinamen angeben.')
+            raise ValueError('Source file has no extension; please specify an '
+                             'extension in the target filename.')
         name = name + src_ext
 
     bad = sorted({c for c in name if c in FORBIDDEN_TITLE_CHARS or ord(c) < 32})
     if bad:
         raise ValueError(
-            'Unzulaessige Zeichen im Ziel-Dateinamen: '
+            'Invalid characters in target filename: '
             + ' '.join(repr(b) for b in bad)
-            + ' (nicht erlaubt: # < > [ ] | { } sowie Steuerzeichen).'
+            + ' (not allowed: # < > [ ] | { } and control characters).'
         )
 
     if len(name.encode('utf-8')) > 240:
-        raise ValueError('Ziel-Dateiname zu lang (max. ~240 Bytes).')
+        raise ValueError('Target filename too long (max. ~240 bytes).')
 
     return name
 
@@ -279,17 +283,17 @@ class MediaWikiApi:
     def __init__(self, api_url, username, password, timeout=120, logger=None):
         self.api_url = api_url
         self.timeout = timeout
-        self.log = logger or logging.getLogger('CommonsSDC')
+        self.log = logger or logging.getLogger(APP_NAME)
         self.session = requests.Session()
         self.session.headers['User-Agent'] = (
-            f'CommonsSDC/{__version__} '
+            f'{APP_NAME}/{__version__} '
             f'(Python {sys.version_info.major}.{sys.version_info.minor}; PyQt5)'
         )
         self.csrf_token = None
         self.username = username
         self.password = password
 
-    # ── zentrale Helfer ──────────────────────────────────────────────────────
+    # ── central helpers ──────────────────────────────────────────────────────
 
     @staticmethod
     def _redact(params):
@@ -305,10 +309,10 @@ class MediaWikiApi:
         if text is None:
             return ''
         text = str(text)
-        return text if len(text) <= n else text[:n] + f'… [{len(text)} Zeichen]'
+        return text if len(text) <= n else text[:n] + f'… [{len(text)} chars]'
 
     def _request(self, method, desc, **kwargs):
-        """Fuehrt einen HTTP-Request aus und protokolliert ihn vollstaendig."""
+        """Perform an HTTP request and log it fully."""
         url = kwargs.pop('url', self.api_url)
         kwargs.setdefault('timeout', self.timeout)
 
@@ -328,47 +332,47 @@ class MediaWikiApi:
         try:
             r = self.session.request(method, url, **kwargs)
         except requests.exceptions.RequestException as e:
-            self.log.error('✗ Netzwerkfehler bei %s: %s', desc, e, exc_info=True)
-            raise Exception(f'Netzwerkfehler bei {desc}: {e}') from e
+            self.log.error('✗ Network error during %s: %s', desc, e, exc_info=True)
+            raise Exception(f'Network error during {desc}: {e}') from e
 
-        self.log.debug('← [%s] HTTP %s, %s Bytes',
+        self.log.debug('← [%s] HTTP %s, %s bytes',
                        desc, r.status_code, len(r.content or b''))
         return r
 
     def _json(self, r, desc):
-        """Parst die Antwort als JSON; liefert sonst eine sprechende Exception."""
+        """Parse the response as JSON; otherwise raise a meaningful exception."""
         if r.status_code != 200:
             body = self._trunc(r.text)
-            self.log.error('✗ HTTP %s bei %s. Antwort: %s',
+            self.log.error('✗ HTTP %s during %s. Response: %s',
                            r.status_code, desc, body)
-            raise Exception(f'HTTP {r.status_code} bei {desc}. Antwort: {body}')
+            raise Exception(f'HTTP {r.status_code} during {desc}. Response: {body}')
         try:
             return r.json()
         except ValueError:
             body = self._trunc(r.text)
-            self.log.error('✗ Keine JSON-Antwort bei %s. Antwort: %s', desc, body)
+            self.log.error('✗ Non-JSON response during %s. Response: %s', desc, body)
             raise Exception(
-                f'Keine JSON-Antwort bei {desc} (evtl. Rate-Limit, Wartung oder '
-                f'zu grosse Datei). Antwort: {body}'
+                f'Non-JSON response during {desc} (possibly rate limit, '
+                f'maintenance or file too large). Response: {body}'
             )
 
     def _check_error(self, data, desc):
-        """Gibt (code, info) zurueck, falls die Antwort ein API-error enthaelt."""
+        """Return (code, info) if the response contains an API error."""
         if isinstance(data, dict) and 'error' in data:
             err = data['error']
             code = err.get('code', 'unknown')
             info = err.get('info') or json.dumps(err, ensure_ascii=False)
-            self.log.error('✗ API-Fehler bei %s: [%s] %s', desc, code, info)
+            self.log.error('✗ API error during %s: [%s] %s', desc, code, info)
             return code, info
         return None, None
 
-    # ── Login / Session ──────────────────────────────────────────────────────
+    # ── Login / session ──────────────────────────────────────────────────────
 
     def login(self):
         if not self.api_url.startswith('https://'):
-            raise Exception('Sicherheitsfehler: API-URL muss HTTPS verwenden, nicht HTTP.')
+            raise Exception('Security error: API URL must use HTTPS, not HTTP.')
 
-        self.log.info('Login als „%s" …', self.username)
+        self.log.info('Logging in as "%s" …', self.username)
 
         r = self._request('GET', 'login-token', params={
             'action': 'query', 'meta': 'tokens', 'type': 'login', 'format': 'json'
@@ -377,10 +381,10 @@ class MediaWikiApi:
         try:
             login_token = j['query']['tokens']['logintoken']
         except (KeyError, TypeError):
-            raise Exception('Login-Token nicht erhalten. Antwort: '
+            raise Exception('Login token not received. Response: '
                             + self._trunc(json.dumps(j, ensure_ascii=False)))
 
-        # 1) clientlogin (normales Benutzerkonto)
+        # 1) clientlogin (normal user account)
         r = self._request('POST', 'clientlogin', data={
             'action': 'clientlogin',
             'loginreturnurl': 'https://commons.wikimedia.org',
@@ -390,12 +394,12 @@ class MediaWikiApi:
         result = self._json(r, 'clientlogin')
         cl = result.get('clientlogin', {})
         if cl.get('status') == 'PASS':
-            self.log.info('clientlogin erfolgreich.')
+            self.log.info('clientlogin succeeded.')
             return True
         cl_msg = cl.get('message') or cl.get('messagecode') or cl.get('status')
-        self.log.warning('clientlogin nicht erfolgreich: %s', cl_msg)
+        self.log.warning('clientlogin not successful: %s', cl_msg)
 
-        # 2) Bot-Login (BotPasswords)
+        # 2) bot login (BotPasswords)
         r = self._request('POST', 'bot-login', data={
             'action': 'login', 'lgname': self.username,
             'lgpassword': self.password, 'lgtoken': login_token, 'format': 'json'
@@ -403,15 +407,15 @@ class MediaWikiApi:
         result = self._json(r, 'bot-login')
         login = result.get('login', {})
         if login.get('result') == 'Success':
-            self.log.info('Bot-Login erfolgreich.')
+            self.log.info('Bot login succeeded.')
             return True
 
-        reason = login.get('reason') or login.get('result') or cl_msg or 'unbekannt'
-        self.log.error('Login fehlgeschlagen: %s', reason)
-        raise Exception(f'Login fehlgeschlagen: {reason}')
+        reason = login.get('reason') or login.get('result') or cl_msg or 'unknown'
+        self.log.error('Login failed: %s', reason)
+        raise Exception(f'Login failed: {reason}')
 
     def whoami(self):
-        """Liefert die userinfo der aktuellen Session (fuer „Verbindung testen")."""
+        """Return the userinfo of the current session (for "Test connection")."""
         r = self._request('GET', 'userinfo', params={
             'action': 'query', 'meta': 'userinfo', 'format': 'json'
         })
@@ -428,7 +432,7 @@ class MediaWikiApi:
         try:
             self.csrf_token = j['query']['tokens']['csrftoken']
         except (KeyError, TypeError):
-            raise Exception('CSRF-Token nicht erhalten. Antwort: '
+            raise Exception('CSRF token not received. Response: '
                             + self._trunc(json.dumps(j, ensure_ascii=False)))
         return self.csrf_token
 
@@ -439,11 +443,11 @@ class MediaWikiApi:
 
     def upload(self, filename, filepath, wikitext, comment, ignore_warnings=False):
         size = os.path.getsize(filepath) if os.path.exists(filepath) else -1
-        self.log.info('Upload „%s" (%.1f MB)…',
+        self.log.info('Uploading "%s" (%.1f MB)…',
                       filename, size / 1e6 if size > 0 else 0.0)
-        self.log.debug('Wikitext fuer „%s":\n%s', filename, wikitext)
+        self.log.debug('Wikitext for "%s":\n%s', filename, wikitext)
 
-        for attempt in (1, 2):  # ein Retry bei badtoken
+        for attempt in (1, 2):  # one retry on badtoken
             token = self.get_csrf_token()
             with open(filepath, 'rb') as f:
                 data = {
@@ -460,34 +464,34 @@ class MediaWikiApi:
             code, info = self._check_error(result, f'upload {filename}')
             if code:
                 if code == 'badtoken' and attempt == 1:
-                    self.log.warning('badtoken – hole neuen Token, versuche erneut.')
+                    self.log.warning('badtoken – fetching new token, retrying.')
                     self.clear_token()
                     continue
                 raise Exception(f'[{code}] {info}')
 
             upload = result.get('upload', {})
             res = upload.get('result')
-            self.log.debug('upload result=%s fuer „%s"', res, filename)
+            self.log.debug('upload result=%s for "%s"', res, filename)
 
             if res == 'Success':
-                self.log.info('✓ Hochgeladen: „%s"', filename)
+                self.log.info('✓ Uploaded: "%s"', filename)
                 return True
 
             warnings = upload.get('warnings', {})
             if warnings:
                 if 'exists' in warnings and ignore_warnings:
-                    self.log.info('Datei existiert – ueberschreibe „%s".', filename)
+                    self.log.info('File exists – overwriting "%s".', filename)
                     return True
                 detail = ', '.join(f'{k}={v}' for k, v in warnings.items())
-                raise Exception(f'Warnungen: {detail}')
+                raise Exception(f'Warnings: {detail}')
 
-            # Unerwartete Struktur: NICHT als Erfolg durchwinken.
+            # Unexpected structure: do NOT treat as success.
             raise Exception(
-                f'Upload fehlgeschlagen (result={res!r}). Antwort: '
+                f'Upload failed (result={res!r}). Response: '
                 + self._trunc(json.dumps(result, ensure_ascii=False))
             )
 
-        raise Exception('Upload nach badtoken-Retry fehlgeschlagen.')
+        raise Exception('Upload failed after badtoken retry.')
 
     def get_page_id(self, filename):
         r = self._request('GET', 'page-id', params={
@@ -496,11 +500,11 @@ class MediaWikiApi:
         j = self._json(r, 'page-id')
         pages = j.get('query', {}).get('pages', {})
         if not pages:
-            self.log.warning('Keine Seiten-ID fuer „%s" gefunden.', filename)
+            self.log.warning('No page id found for "%s".', filename)
             return None
         page = next(iter(pages.values()))
         pid = page.get('pageid')
-        self.log.debug('pageid fuer „%s" = %s', filename, pid)
+        self.log.debug('pageid for "%s" = %s', filename, pid)
         return pid
 
     def set_structured_data(self, page_id, labels, claims):
@@ -512,7 +516,7 @@ class MediaWikiApi:
         for prop, qid in claims:
             m = re.match(r'^Q(\d+)$', qid)
             if not m:
-                self.log.warning('Ungueltige QID fuer %s uebersprungen: %r', prop, qid)
+                self.log.warning('Invalid QID for %s skipped: %r', prop, qid)
                 continue
             numeric_id = int(m.group(1))
             claims_data.append({
@@ -530,7 +534,7 @@ class MediaWikiApi:
             })
 
         if not labels_data and not claims_data:
-            self.log.debug('Keine SDC-Daten fuer M%s.', page_id)
+            self.log.debug('No SDC data for M%s.', page_id)
             return
 
         data = {}
@@ -539,7 +543,7 @@ class MediaWikiApi:
         if claims_data:
             data['claims'] = claims_data
 
-        self.log.debug('SDC-Payload fuer M%s: %s',
+        self.log.debug('SDC payload for M%s: %s',
                        page_id, self._trunc(json.dumps(data, ensure_ascii=False)))
 
         for attempt in (1, 2):
@@ -553,16 +557,16 @@ class MediaWikiApi:
             code, info = self._check_error(result, f'wbeditentity M{page_id}')
             if code:
                 if code in ('badtoken', 'invalid-csrf-token') and attempt == 1:
-                    self.log.warning('SDC badtoken – neuer Token, erneuter Versuch.')
+                    self.log.warning('SDC badtoken – new token, retrying.')
                     self.clear_token()
                     continue
                 raise Exception(f'[{code}] {info}')
-            self.log.info('✓ Structured Data gesetzt fuer M%s.', page_id)
+            self.log.info('✓ Structured data set for M%s.', page_id)
             return
 
-        raise Exception('wbeditentity nach badtoken-Retry fehlgeschlagen.')
+        raise Exception('wbeditentity failed after badtoken retry.')
 
-    # ── Galerie ──────────────────────────────────────────────────────────────
+    # ── Gallery ──────────────────────────────────────────────────────────────
 
     def get_page_content(self, page_title):
         """Get raw wikitext of a page."""
@@ -572,9 +576,9 @@ class MediaWikiApi:
         if r.status_code == 200:
             return r.text
         if r.status_code == 404:
-            self.log.debug('Galerie-Seite „%s" existiert noch nicht.', page_title)
+            self.log.debug('Gallery page "%s" does not exist yet.', page_title)
             return None
-        self.log.warning('Galerie-Seite „%s": HTTP %s', page_title, r.status_code)
+        self.log.warning('Gallery page "%s": HTTP %s', page_title, r.status_code)
         return None
 
     def set_page_content(self, page_title, content, comment):
@@ -592,18 +596,18 @@ class MediaWikiApi:
                     self.clear_token()
                     continue
                 raise Exception(f'[{code}] {info}')
-            self.log.info('✓ Galerie „%s" aktualisiert.', page_title)
+            self.log.info('✓ Gallery "%s" updated.', page_title)
             return
 
-        raise Exception('Galerie-Edit nach badtoken-Retry fehlgeschlagen.')
+        raise Exception('Gallery edit failed after badtoken retry.')
 
     def update_gallery(self, gallery_page, file_entries):
         """Append file entries to gallery page."""
         gallery_open = '<gallery mode="packed-hover" heights="240">'
         gallery_close = '</gallery>'
-        comment = 'Uploaded with CommonsSDC'
+        comment = f'Uploaded with {APP_NAME}'
 
-        self.log.info('Aktualisiere Galerie „%s" (%d Eintraege)…',
+        self.log.info('Updating gallery "%s" (%d entries)…',
                       gallery_page, len(file_entries))
 
         new_entries = ''
@@ -628,7 +632,7 @@ class MediaWikiApi:
         self.set_page_content(gallery_page, new_content, comment)
 
 
-# ── Upload Worker Thread ───────────────────────────────────────────────────────
+# ── Upload worker thread ───────────────────────────────────────────────────────
 
 class UploadWorker(QThread):
     progress = pyqtSignal(int, str)   # row, status
@@ -648,31 +652,31 @@ class UploadWorker(QThread):
         gallery_entries = {}   # gallery_page -> list of (filename, caption)
         success_count = 0
 
-        self.log.info('=== Upload-Lauf gestartet: %d Datei(en) ===', len(self.rows))
+        self.log.info('=== Upload run started: %d file(s) ===', len(self.rows))
 
         for i, row in enumerate(self.rows):
             fname = (row.get('target_name')
                      or os.path.basename(row.get('filepath', ''))
                      or f'#{i}')
             try:
-                self.progress.emit(i, 'Lade hoch…')
+                self.progress.emit(i, 'Uploading…')
 
-                # Ziel-Dateinamen normalisieren: Endung sicherstellen,
-                # „File:"-Präfix entfernen, unzulässige Zeichen ablehnen.
+                # Normalize the target filename: ensure extension, strip a
+                # "File:" prefix, reject invalid characters.
                 filename = normalize_commons_filename(
                     row.get('target_name', ''), row['filepath'])
                 fname = filename
                 if filename != row.get('source_name'):
-                    self.log.info('Ziel-Dateiname: „%s" → „%s"',
+                    self.log.info('Target filename: "%s" → "%s"',
                                   row.get('source_name'), filename)
 
                 sd, clean_desc = extract_structured_data(row['description_all'])
-                self.log.debug('Datei „%s": extrahierte SD=%s', fname, sd)
+                self.log.debug('File "%s": extracted SD=%s', fname, sd)
 
                 other_templates = row.get('other_templates', '')
                 license_text = row.get('license_text', '')
 
-                # Kategorien (dedupliziert) aus Beschreibung ziehen
+                # Collect categories (deduplicated) from the description.
                 cats_seen = set()
                 cats = []
                 for cat in re.findall(r'\[\[Category:[^\]]+\]\]', clean_desc):
@@ -682,7 +686,7 @@ class UploadWorker(QThread):
                 clean_desc = re.sub(r'\[\[Category:[^\]]+\]\]\n?', '',
                                     clean_desc).strip()
 
-                # {{Information}}-Block
+                # {{Information}} block
                 info = f"{{{{{row.get('template', 'Information')}\n"
                 info += f"|description={clean_desc}\n"
                 if row.get('date'):
@@ -711,10 +715,10 @@ class UploadWorker(QThread):
                 # Upload
                 self.api.upload(
                     filename, row['filepath'], wikitext,
-                    'Uploaded with CommonsSDC', self.ignore_warnings
+                    f'Uploaded with {APP_NAME}', self.ignore_warnings
                 )
 
-                # Structured Data
+                # Structured data
                 labels = {}
                 claims = []
                 for key, val in sd.items():
@@ -737,10 +741,9 @@ class UploadWorker(QThread):
                     if page_id:
                         self.api.set_structured_data(page_id, labels, claims)
                     else:
-                        self.log.warning('SDC uebersprungen: keine pageid fuer „%s".',
-                                         fname)
+                        self.log.warning('SDC skipped: no pageid for "%s".', fname)
 
-                # Galerie sammeln
+                # Collect gallery entry
                 gallery_suffix = sd.get('gallery_suffix', '').strip()
                 if self.gallery_prefix:
                     if gallery_suffix:
@@ -748,9 +751,9 @@ class UploadWorker(QThread):
                     else:
                         gallery_page = self.gallery_prefix
                 elif gallery_suffix:
-                    gallery_page = None  # kein Prefix gesetzt -> Galerie ueberspringen
-                    self.log.warning('gallery_suffix gesetzt, aber kein Gallery-Prefix '
-                                     '-> Galerie fuer „%s" uebersprungen.', fname)
+                    gallery_page = None  # no prefix set -> skip gallery
+                    self.log.warning('gallery_suffix set but no gallery prefix '
+                                     '-> gallery skipped for "%s".', fname)
                 else:
                     gallery_page = self.gallery_prefix or None
 
@@ -759,35 +762,35 @@ class UploadWorker(QThread):
                     (filename, caption)
                 )
 
-                self.progress.emit(i, '✓ Fertig')
+                self.progress.emit(i, '✓ Done')
                 success_count += 1
 
             except Exception as e:
-                # Volltext + Traceback ins Log, kompakte Meldung in die Tabelle
-                self.log.error('✗ Fehler bei „%s": %s', fname, e, exc_info=True)
-                msg = str(e) or f'{type(e).__name__} (ohne Meldung)'
+                # Full text + traceback to the log, compact message to the table.
+                self.log.error('✗ Error for "%s": %s', fname, e, exc_info=True)
+                msg = str(e) or f'{type(e).__name__} (no message)'
                 self.error.emit(i, msg)
-                self.progress.emit(i, '✗ Fehler')
+                self.progress.emit(i, '✗ Error')
 
-        # Galerien aktualisieren
+        # Update galleries
         for gallery_page, entries in gallery_entries.items():
             if not gallery_page:
                 continue
             try:
                 self.api.update_gallery(gallery_page, entries)
             except Exception as e:
-                self.log.error('✗ Galerie-Fehler (%s): %s',
+                self.log.error('✗ Gallery error (%s): %s',
                                gallery_page, e, exc_info=True)
-                self.error.emit(-1, f'Galerie-Fehler ({gallery_page}): {e}')
+                self.error.emit(-1, f'Gallery error ({gallery_page}): {e}')
 
-        self.log.info('=== Upload-Lauf beendet: %d/%d erfolgreich ===',
+        self.log.info('=== Upload run finished: %d/%d succeeded ===',
                       success_count, len(self.rows))
         self.finished.emit(
-            f'Fertig: {success_count}/{len(self.rows)} Datei(en) hochgeladen.'
+            f'Done: {success_count}/{len(self.rows)} file(s) uploaded.'
         )
 
 
-# ── Login / Test Worker ────────────────────────────────────────────────────────
+# ── Login / test worker ────────────────────────────────────────────────────────
 
 class LoginWorker(QThread):
     success = pyqtSignal(object)   # MediaWikiApi instance
@@ -808,10 +811,10 @@ class LoginWorker(QThread):
             if api.login():
                 self.success.emit(api)
             else:
-                self.failure.emit('Ungueltige Zugangsdaten.')
+                self.failure.emit('Invalid credentials.')
         except Exception as e:
-            self.logger.error('Login-Fehler: %s', e, exc_info=True)
-            self.failure.emit(str(e) or f'{type(e).__name__} (ohne Meldung)')
+            self.logger.error('Login error: %s', e, exc_info=True)
+            self.failure.emit(str(e) or f'{type(e).__name__} (no message)')
 
 
 class TestWorker(QThread):
@@ -828,19 +831,19 @@ class TestWorker(QThread):
             name = info.get('name', '?')
             uid = info.get('id', '?')
             groups = ', '.join(info.get('groups', [])) or '–'
-            self.done.emit(f'{name} (id {uid}); Gruppen: {groups}')
+            self.done.emit(f'{name} (id {uid}); groups: {groups}')
         except Exception as e:
-            self.fail.emit(str(e) or f'{type(e).__name__} (ohne Meldung)')
+            self.fail.emit(str(e) or f'{type(e).__name__} (no message)')
 
 
-# ── Delegate: Ziel-Dateiname mit fester Endung ──────────────────────────────────
+# ── Delegate: target filename with a fixed extension ────────────────────────────
 
 class FilenameDelegate(QStyledItemDelegate):
-    """Editor fuer die Ziel-Dateiname-Spalte.
+    """Editor for the target-filename column.
 
-    Beim Bearbeiten wird nur der Basisname (ohne Endung) angezeigt; die
-    Endung der Quelldatei wird beim Speichern fest wieder angehaengt und ist
-    damit nicht aenderbar.
+    While editing, only the base name (without extension) is shown; the source
+    file's extension is firmly re-appended on commit and therefore cannot be
+    changed.
     """
 
     def __init__(self, ext_for_row, parent=None):
@@ -861,19 +864,19 @@ class FilenameDelegate(QStyledItemDelegate):
     def setModelData(self, editor, model, index):
         base = self._strip_image_ext(editor.text().strip())
         if not base:
-            return  # leerer Name -> bisherigen Wert behalten
+            return  # empty name -> keep the previous value
         ext = self.ext_for_row(index.row()) or ''
         model.setData(index, base + ext)
 
 
-# ── Login Dialog ───────────────────────────────────────────────────────────────
+# ── Login dialog ───────────────────────────────────────────────────────────────
 
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Login – Wikimedia Commons')
         self.setMinimumWidth(420)
-        self.settings = QSettings('CommonsSDC', 'Login')
+        self.settings = QSettings(APP_NAME, 'Login')
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -885,12 +888,12 @@ class LoginDialog(QDialog):
         self.pass_edit.setEchoMode(QLineEdit.Password)
 
         form.addRow('API URL:', self.url_edit)
-        form.addRow('Benutzername:', self.user_edit)
-        form.addRow('Passwort:', self.pass_edit)
+        form.addRow('Username:', self.user_edit)
+        form.addRow('Password:', self.pass_edit)
         layout.addLayout(form)
 
-        hint = QLabel('Tipp: Fuer Bot-Logins ein BotPassword '
-                      '(Spezial:BotPasswords) verwenden.')
+        hint = QLabel('Tip: For bot logins, use a BotPassword '
+                      '(Special:BotPasswords).')
         hint.setStyleSheet('color: gray; font-size: 11px;')
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -906,10 +909,11 @@ class LoginDialog(QDialog):
         return self.url_edit.text(), self.user_edit.text(), self.pass_edit.text()
 
 
-# ── Main Window ────────────────────────────────────────────────────────────────
+# ── Main window ────────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
-    COLS = ['', 'Quelldatei', 'Ziel-Dateiname (Commons)', 'Datum', 'Description (all)', 'Status']
+    COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
+            'Description (all)', 'Status']
     COL_THUMB = 0
     COL_FILENAME = 1
     COL_TITLE = 2
@@ -924,29 +928,29 @@ class MainWindow(QMainWindow):
         self.gui_handler = gui_handler
         self.log_path = log_path
 
-        self.setWindowTitle(f'CommonsSDC v{__version__}')
+        self.setWindowTitle(f'{APP_NAME} v{__version__}')
         self.setMinimumSize(1150, 740)
         self.api = None
-        self.settings = QSettings('CommonsSDC', 'Main')
+        self.settings = QSettings(APP_NAME, 'Main')
 
         self._build_ui()
         self._restore_settings()
 
-        # Live-Log in die GUI spiegeln
+        # Mirror the live log into the GUI.
         self.emitter.log_record.connect(self._append_log)
 
-    # ── UI-Aufbau ────────────────────────────────────────────────────────────
+    # ── UI construction ──────────────────────────────────────────────────────
 
     def _build_ui(self):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
         self.tabs.addTab(self._build_upload_tab(), '⬆ Upload')
-        self.tabs.addTab(self._build_log_tab(), '🐞 Protokoll')
+        self.tabs.addTab(self._build_log_tab(), '🐞 Log')
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage('Bereit. Bitte zuerst einloggen.')
+        self.status_bar.showMessage('Ready. Please log in first.')
 
     def _build_upload_tab(self):
         page = QWidget()
@@ -957,26 +961,26 @@ class MainWindow(QMainWindow):
         self.login_btn = QPushButton('🔐 Login')
         self.login_btn.clicked.connect(self.do_login)
 
-        self.test_btn = QPushButton('🔎 Verbindung testen')
+        self.test_btn = QPushButton('🔎 Test connection')
         self.test_btn.clicked.connect(self.test_connection)
         self.test_btn.setEnabled(False)
 
-        self.login_label = QLabel('Nicht eingeloggt')
+        self.login_label = QLabel('Not logged in')
         self.login_label.setStyleSheet('color: red')
 
-        add_btn = QPushButton('➕ Dateien hinzufügen')
+        add_btn = QPushButton('➕ Add files')
         add_btn.clicked.connect(self.add_files)
-        remove_btn = QPushButton('➖ Auswahl entfernen')
+        remove_btn = QPushButton('➖ Remove selected')
         remove_btn.clicked.connect(self.remove_selected)
-        clear_btn = QPushButton('🗑 Alle entfernen')
+        clear_btn = QPushButton('🗑 Clear all')
         clear_btn.clicked.connect(self.clear_all)
 
-        self.upload_btn = QPushButton('🚀 Alle hochladen')
+        self.upload_btn = QPushButton('🚀 Upload all')
         self.upload_btn.clicked.connect(self.start_upload)
         self.upload_btn.setStyleSheet(
             'font-weight: bold; background: #2a7; color: white; padding: 4px 12px;')
 
-        self.ignore_warnings_cb = QCheckBox('Warnungen ignorieren (überschreiben)')
+        self.ignore_warnings_cb = QCheckBox('Ignore warnings (overwrite)')
 
         toolbar.addWidget(self.login_btn)
         toolbar.addWidget(self.test_btn)
@@ -995,25 +999,25 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
-        # Thumbnails links: Icon-Größe und Zeilenhöhe.
+        # Thumbnails on the left: icon size and row height.
         self.table.setIconSize(QSize(96, 64))
         self.table.verticalHeader().setDefaultSectionSize(70)
         self.table.verticalHeader().setVisible(False)
-        # Feste Endung im Ziel-Dateinamen (per Delegate).
+        # Fixed extension in the target filename (via delegate).
         self.table.setItemDelegateForColumn(
             self.COL_TITLE, FilenameDelegate(self._ext_for_row, self.table))
 
         ht = self.table.horizontalHeaderItem(self.COL_TITLE)
         if ht:
-            ht.setToolTip('Name, unter dem die Datei auf Commons gespeichert wird '
-                          '(ohne „File:"). Die Endung stammt fest aus der '
-                          'Quelldatei und ist nicht änderbar. Leer = Quell-Dateiname.')
+            ht.setToolTip('Name under which the file is stored on Commons '
+                          '(without "File:"). The extension is taken from the '
+                          'source file and cannot be changed. Empty = source filename.')
         hs = self.table.horizontalHeaderItem(self.COL_FILENAME)
         if hs:
-            hs.setToolTip('Lokale Quelldatei (wird nicht verändert).')
+            hs.setToolTip('Local source file (not modified).')
         htb = self.table.horizontalHeaderItem(self.COL_THUMB)
         if htb:
-            htb.setToolTip('Vorschau')
+            htb.setToolTip('Preview')
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(self.COL_THUMB, QHeaderView.Fixed)
@@ -1035,7 +1039,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right.setMinimumWidth(330)
 
-        settings_group = QGroupBox('Upload-Einstellungen')
+        settings_group = QGroupBox('Upload settings')
         settings_form = QFormLayout(settings_group)
         self.author_edit = QLineEdit()
         self.source_edit = QLineEdit('{{own}}')
@@ -1044,9 +1048,9 @@ class MainWindow(QMainWindow):
         self.other_templates_edit = QLineEdit()
         self.other_fields_edit = QLineEdit()
         self.other_fields_edit.setPlaceholderText(
-            'z. B. {{Credit line|Author=Harald Krichel|Other=WikiPortraits}}')
+            'e.g. {{Credit line|Author=Harald Krichel|Other=WikiPortraits}}')
         self.gallery_prefix_edit = QLineEdit()
-        self.gallery_prefix_edit.setPlaceholderText('z. B. User:Harald Krichel')
+        self.gallery_prefix_edit.setPlaceholderText('e.g. User:Harald Krichel')
         self.timeout_edit = QLineEdit('120')
         self.timeout_edit.setMaximumWidth(80)
 
@@ -1057,10 +1061,10 @@ class MainWindow(QMainWindow):
         settings_form.addRow('Other templates:', self.other_templates_edit)
         settings_form.addRow('Other fields:', self.other_fields_edit)
         settings_form.addRow('Gallery prefix:', self.gallery_prefix_edit)
-        settings_form.addRow('HTTP-Timeout (s):', self.timeout_edit)
+        settings_form.addRow('HTTP timeout (s):', self.timeout_edit)
         right_layout.addWidget(settings_group)
 
-        base_group = QGroupBox('Basis-description_all (für alle Dateien)')
+        base_group = QGroupBox('Base description_all (for all files)')
         base_layout = QVBoxLayout(base_group)
         self.base_text_edit = QTextEdit()
         self.base_text_edit.setPlaceholderText(
@@ -1070,7 +1074,7 @@ class MainWindow(QMainWindow):
         base_layout.addWidget(self.base_text_edit)
         right_layout.addWidget(base_group)
 
-        file_group = QGroupBox('Ausgewählte Datei – description_all')
+        file_group = QGroupBox('Selected file – description_all')
         file_layout = QVBoxLayout(file_group)
         self.file_desc_edit = QTextEdit()
         self.file_desc_edit.setPlaceholderText(
@@ -1101,15 +1105,15 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         top = QHBoxLayout()
-        self.verbose_cb = QCheckBox('Ausführliches Protokoll (verbose)')
+        self.verbose_cb = QCheckBox('Verbose logging')
         self.verbose_cb.stateChanged.connect(self._toggle_verbose)
-        clear_log_btn = QPushButton('Leeren')
+        clear_log_btn = QPushButton('Clear')
         clear_log_btn.clicked.connect(lambda: self.log_view.clear())
-        copy_log_btn = QPushButton('Kopieren')
+        copy_log_btn = QPushButton('Copy')
         copy_log_btn.clicked.connect(self._copy_log)
-        open_file_btn = QPushButton('Logdatei öffnen')
+        open_file_btn = QPushButton('Open log file')
         open_file_btn.clicked.connect(self._open_log_file)
-        open_dir_btn = QPushButton('Ordner öffnen')
+        open_dir_btn = QPushButton('Open folder')
         open_dir_btn.clicked.connect(self._open_log_folder)
 
         top.addWidget(self.verbose_cb)
@@ -1127,14 +1131,14 @@ class MainWindow(QMainWindow):
         self.log_view.document().setMaximumBlockCount(5000)
         layout.addWidget(self.log_view)
 
-        path_label = QLabel(f'Logdatei: {self.log_path}')
+        path_label = QLabel(f'Log file: {self.log_path}')
         path_label.setStyleSheet('color: gray; font-size: 11px;')
         path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(path_label)
 
         return page
 
-    # ── Log-Hilfsfunktionen ──────────────────────────────────────────────────
+    # ── Log helpers ──────────────────────────────────────────────────────────
 
     def _append_log(self, msg):
         self.log_view.appendPlainText(msg)
@@ -1144,11 +1148,11 @@ class MainWindow(QMainWindow):
     def _toggle_verbose(self, state):
         verbose = bool(state)
         self.gui_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
-        self.logger.info('Verbose-Protokoll %s.', 'aktiviert' if verbose else 'deaktiviert')
+        self.logger.info('Verbose logging %s.', 'enabled' if verbose else 'disabled')
 
     def _copy_log(self):
         QApplication.clipboard().setText(self.log_view.toPlainText())
-        self.status_bar.showMessage('Protokoll in die Zwischenablage kopiert.', 3000)
+        self.status_bar.showMessage('Log copied to clipboard.', 3000)
 
     def _open_log_file(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.log_path))
@@ -1183,7 +1187,7 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             return 120
 
-    # ── Login / Test ─────────────────────────────────────────────────────────
+    # ── Login / test ─────────────────────────────────────────────────────────
 
     def do_login(self):
         dlg = LoginDialog(self)
@@ -1192,7 +1196,7 @@ class MainWindow(QMainWindow):
         api_url, username, password = dlg.get_credentials()
 
         self.login_btn.setEnabled(False)
-        self.login_label.setText('Anmeldung läuft…')
+        self.login_label.setText('Logging in…')
         self.login_label.setStyleSheet('color: orange')
 
         self._login_worker = LoginWorker(
@@ -1206,21 +1210,21 @@ class MainWindow(QMainWindow):
         self.api = api
         self.login_btn.setEnabled(True)
         self.test_btn.setEnabled(True)
-        self.login_label.setText(f'✓ Eingeloggt als {username}')
+        self.login_label.setText(f'✓ Logged in as {username}')
         self.login_label.setStyleSheet('color: green')
-        self.status_bar.showMessage(f'Eingeloggt als {username}')
+        self.status_bar.showMessage(f'Logged in as {username}')
 
     def _on_login_failure(self, error_msg):
         self.login_btn.setEnabled(True)
-        self.login_label.setText('Nicht eingeloggt')
+        self.login_label.setText('Not logged in')
         self.login_label.setStyleSheet('color: red')
-        QMessageBox.critical(self, 'Login-Fehler', error_msg)
+        QMessageBox.critical(self, 'Login error', error_msg)
 
     def test_connection(self):
         if not self.api:
             return
         self.test_btn.setEnabled(False)
-        self.status_bar.showMessage('Teste Verbindung…')
+        self.status_bar.showMessage('Testing connection…')
         self._test_worker = TestWorker(self.api)
         self._test_worker.done.connect(self._on_test_done)
         self._test_worker.fail.connect(self._on_test_fail)
@@ -1228,39 +1232,38 @@ class MainWindow(QMainWindow):
 
     def _on_test_done(self, info):
         self.test_btn.setEnabled(True)
-        self.logger.info('Verbindung OK: %s', info)
-        self.status_bar.showMessage(f'Verbindung OK: {info}', 8000)
-        QMessageBox.information(self, 'Verbindung OK',
-                                f'Angemeldet als:\n{info}')
+        self.logger.info('Connection OK: %s', info)
+        self.status_bar.showMessage(f'Connection OK: {info}', 8000)
+        QMessageBox.information(self, 'Connection OK', f'Logged in as:\n{info}')
 
     def _on_test_fail(self, msg):
         self.test_btn.setEnabled(True)
-        self.logger.error('Verbindungstest fehlgeschlagen: %s', msg)
-        QMessageBox.warning(self, 'Verbindungsproblem', msg)
+        self.logger.error('Connection test failed: %s', msg)
+        QMessageBox.warning(self, 'Connection problem', msg)
 
-    # ── Tabelle ──────────────────────────────────────────────────────────────
+    # ── Table ────────────────────────────────────────────────────────────────
 
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
-            self, 'Bilddateien auswählen', '',
-            'Bilder (*.jpg *.jpeg *.png *.gif *.tif *.tiff *.svg *.webp)'
+            self, 'Select image files', '',
+            'Images (*.jpg *.jpeg *.png *.gif *.tif *.tiff *.svg *.webp)'
         )
         for filepath in files:
             self._add_row(filepath)
         if files:
-            self.logger.debug('%d Datei(en) zur Tabelle hinzugefuegt.', len(files))
+            self.logger.debug('%d file(s) added to the table.', len(files))
 
     def _ext_for_row(self, row):
-        """Liefert die (feste) Endung der Quelldatei einer Zeile, z. B. '.jpg'."""
+        """Return the (fixed) extension of a row's source file, e.g. '.jpg'."""
         item = self.table.item(row, self.COL_FILENAME)
         fp = item.data(Qt.UserRole) if item else None
         return os.path.splitext(fp)[1] if fp else ''
 
     def _make_thumbnail(self, filepath, w=96, h=64):
-        """Erzeugt effizient ein verkleinertes Vorschaubild (ohne Vollauflösung)."""
+        """Create a downscaled preview efficiently (without full resolution)."""
         try:
             reader = QImageReader(filepath)
-            reader.setAutoTransform(True)  # EXIF-Ausrichtung berücksichtigen
+            reader.setAutoTransform(True)  # apply EXIF orientation
             size = reader.size()
             if size.isValid() and (size.width() > w or size.height() > h):
                 reader.setScaledSize(size.scaled(w, h, Qt.KeepAspectRatio))
@@ -1268,7 +1271,7 @@ class MainWindow(QMainWindow):
             if not img.isNull():
                 return QPixmap.fromImage(img)
         except Exception as e:
-            self.logger.debug('Thumbnail fehlgeschlagen für %s: %s', filepath, e)
+            self.logger.debug('Thumbnail failed for %s: %s', filepath, e)
         return None
 
     def _add_row(self, filepath):
@@ -1277,7 +1280,7 @@ class MainWindow(QMainWindow):
         filename = os.path.basename(filepath)
         date = read_exif_date(filepath, self.logger)
 
-        # Thumbnail (Spalte links)
+        # Thumbnail (left column)
         thumb_item = QTableWidgetItem()
         thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemIsEditable)
         thumb_item.setTextAlignment(Qt.AlignCenter)
@@ -1288,13 +1291,13 @@ class MainWindow(QMainWindow):
             thumb_item.setText('—')
         self.table.setItem(row, self.COL_THUMB, thumb_item)
 
-        # Quelldatei (nicht editierbar)
+        # Source file (not editable)
         src_item = QTableWidgetItem(filename)
         src_item.setFlags(src_item.flags() & ~Qt.ItemIsEditable)
         src_item.setData(Qt.UserRole, filepath)
         self.table.setItem(row, self.COL_FILENAME, src_item)
 
-        # Ziel-Dateiname auf Commons; Standard = Quell-Dateiname inkl. Endung.
+        # Target filename on Commons; default = source filename incl. extension.
         self.table.setItem(row, self.COL_TITLE, QTableWidgetItem(filename))
         self.table.setItem(row, self.COL_DATE, QTableWidgetItem(date))
         self.table.setItem(row, self.COL_DESC, QTableWidgetItem(''))
@@ -1314,7 +1317,7 @@ class MainWindow(QMainWindow):
         rows = list(set(i.row() for i in self.table.selectedItems()))
         if len(rows) != 1:
             self.file_desc_edit.setPlaceholderText(
-                'Einzelne Datei auswählen, um ihre Beschreibung zu bearbeiten.')
+                'Select a single file to edit its description.')
             return
         row = rows[0]
         desc = self.table.item(row, self.COL_DESC)
@@ -1340,14 +1343,14 @@ class MainWindow(QMainWindow):
 
     def start_upload(self):
         if not self.api:
-            QMessageBox.warning(self, 'Nicht eingeloggt', 'Bitte zuerst einloggen.')
+            QMessageBox.warning(self, 'Not logged in', 'Please log in first.')
             return
         if self.table.rowCount() == 0:
-            QMessageBox.warning(self, 'Keine Dateien', 'Bitte zuerst Dateien hinzufügen.')
+            QMessageBox.warning(self, 'No files', 'Please add files first.')
             return
 
         self._save_settings()
-        # Timeout der aktiven Session anpassen, falls der Wert geaendert wurde.
+        # Apply the timeout to the active session in case it was changed.
         self.api.timeout = self._get_timeout()
 
         rows = []
@@ -1360,8 +1363,8 @@ class MainWindow(QMainWindow):
             base = self.base_text_edit.toPlainText().strip()
             combined = (base + '\n' + per_file_desc).strip() if base else per_file_desc
 
-            # Ziel-Dateiname auf Commons (kann vom Quellnamen abweichen);
-            # leer -> Quell-Dateiname. Endung wird im Worker sichergestellt.
+            # Target filename on Commons (may differ from the source name);
+            # empty -> source filename. The extension is ensured in the worker.
             target_item = self.table.item(r, self.COL_TITLE)
             target_name = target_item.text().strip() if target_item else ''
             if not target_name:
@@ -1403,11 +1406,11 @@ class MainWindow(QMainWindow):
         if item:
             item.setText(status)
         self.progress_bar.setValue(row + 1)
-        self.status_bar.showMessage(f'Lade hoch {row + 1}/{self.table.rowCount()}…')
+        self.status_bar.showMessage(f'Uploading {row + 1}/{self.table.rowCount()}…')
 
     def on_error(self, row, msg):
         if row < 0:
-            # Galerie-/globale Fehler nur im Log/Status anzeigen
+            # Gallery/global errors are shown only in the log/status bar.
             self.status_bar.showMessage(msg, 8000)
             return
         item = self.table.item(row, self.COL_STATUS)
@@ -1419,22 +1422,22 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.upload_btn.setEnabled(True)
         self.status_bar.showMessage(summary)
-        QMessageBox.information(self, 'Upload abgeschlossen',
-                                summary + '\n\nDetails im Protokoll-Tab.')
+        QMessageBox.information(self, 'Upload complete',
+                                summary + '\n\nDetails in the Log tab.')
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName('CommonsSDC')
-    app.setOrganizationName('CommonsSDC')
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(APP_NAME)
 
     logger, emitter, gui_handler, log_path = setup_logging()
 
-    # Unbehandelte Ausnahmen ebenfalls ins Log schreiben.
+    # Write unhandled exceptions to the log as well.
     def excepthook(exc_type, exc_value, exc_tb):
-        logger.critical('Unbehandelte Ausnahme:\n%s',
+        logger.critical('Unhandled exception:\n%s',
                         ''.join(traceback.format_exception(exc_type, exc_value, exc_tb)))
         sys.__excepthook__(exc_type, exc_value, exc_tb)
     sys.excepthook = excepthook
