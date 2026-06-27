@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-CommonsSDC v0.3.0 - Batch upload tool for Wikimedia Commons
+CommonsSDC v0.4.0 - Batch upload tool for Wikimedia Commons
 
 Ersetzt VicunaUploader mit Structured-Data-Unterstützung (caption_*, creator,
 depicts, etc.).
 
-Neu in 0.3.0:
+Neu in 0.4.0 (Tabellen-UI):
+  * Thumbnail-Vorschau je Datei (links), effizient verkleinert geladen
+    (QImageReader) inkl. EXIF-Ausrichtung.
+  * Breitere Quelldatei-Spalte; Spaltenbreiten frei anpassbar.
+  * Endung im Ziel-Dateinamen ist fest (aus der Quelldatei) und nicht aenderbar.
+
+Aus 0.3.0:
   * Frei waehlbarer Ziel-Dateiname auf Commons (Spalte „Ziel-Dateiname"),
     mit automatischer Endungs-Ergaenzung und Pruefung auf unzulaessige Zeichen.
 
@@ -41,10 +47,11 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QPushButton, QLabel, QLineEdit,
     QTextEdit, QFileDialog, QMessageBox, QProgressBar, QSplitter,
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
-    QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit
+    QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit,
+    QStyledItemDelegate
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QObject, QUrl
-from PyQt5.QtGui import QPixmap, QFont, QDesktopServices
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QObject, QUrl, QSize
+from PyQt5.QtGui import QPixmap, QFont, QDesktopServices, QIcon, QImageReader
 
 try:
     from PIL import Image
@@ -53,7 +60,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.3.0'
+__version__ = '0.4.0'
 
 # ── Logging-Infrastruktur ───────────────────────────────────────────────────────
 
@@ -826,6 +833,39 @@ class TestWorker(QThread):
             self.fail.emit(str(e) or f'{type(e).__name__} (ohne Meldung)')
 
 
+# ── Delegate: Ziel-Dateiname mit fester Endung ──────────────────────────────────
+
+class FilenameDelegate(QStyledItemDelegate):
+    """Editor fuer die Ziel-Dateiname-Spalte.
+
+    Beim Bearbeiten wird nur der Basisname (ohne Endung) angezeigt; die
+    Endung der Quelldatei wird beim Speichern fest wieder angehaengt und ist
+    damit nicht aenderbar.
+    """
+
+    def __init__(self, ext_for_row, parent=None):
+        super().__init__(parent)
+        self.ext_for_row = ext_for_row  # callable(row) -> '.jpg'
+
+    @staticmethod
+    def _strip_image_ext(text):
+        root, ext = os.path.splitext(text)
+        return root if ext.lower() in IMAGE_EXTS else text
+
+    def createEditor(self, parent, option, index):
+        return QLineEdit(parent)
+
+    def setEditorData(self, editor, index):
+        editor.setText(self._strip_image_ext(index.data() or ''))
+
+    def setModelData(self, editor, model, index):
+        base = self._strip_image_ext(editor.text().strip())
+        if not base:
+            return  # leerer Name -> bisherigen Wert behalten
+        ext = self.ext_for_row(index.row()) or ''
+        model.setData(index, base + ext)
+
+
 # ── Login Dialog ───────────────────────────────────────────────────────────────
 
 class LoginDialog(QDialog):
@@ -869,12 +909,13 @@ class LoginDialog(QDialog):
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
-    COLS = ['Quelldatei', 'Ziel-Dateiname (Commons)', 'Datum', 'Description (all)', 'Status']
-    COL_FILENAME = 0
-    COL_TITLE = 1
-    COL_DATE = 2
-    COL_DESC = 3
-    COL_STATUS = 4
+    COLS = ['', 'Quelldatei', 'Ziel-Dateiname (Commons)', 'Datum', 'Description (all)', 'Status']
+    COL_THUMB = 0
+    COL_FILENAME = 1
+    COL_TITLE = 2
+    COL_DATE = 3
+    COL_DESC = 4
+    COL_STATUS = 5
 
     def __init__(self, logger, emitter, gui_handler, log_path):
         super().__init__()
@@ -954,18 +995,37 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
+        # Thumbnails links: Icon-Größe und Zeilenhöhe.
+        self.table.setIconSize(QSize(96, 64))
+        self.table.verticalHeader().setDefaultSectionSize(70)
+        self.table.verticalHeader().setVisible(False)
+        # Feste Endung im Ziel-Dateinamen (per Delegate).
+        self.table.setItemDelegateForColumn(
+            self.COL_TITLE, FilenameDelegate(self._ext_for_row, self.table))
+
         ht = self.table.horizontalHeaderItem(self.COL_TITLE)
         if ht:
             ht.setToolTip('Name, unter dem die Datei auf Commons gespeichert wird '
-                          '(ohne „File:"). Endung wird automatisch ergänzt, falls '
-                          'sie fehlt. Leer = Quell-Dateiname.')
+                          '(ohne „File:"). Die Endung stammt fest aus der '
+                          'Quelldatei und ist nicht änderbar. Leer = Quell-Dateiname.')
         hs = self.table.horizontalHeaderItem(self.COL_FILENAME)
         if hs:
             hs.setToolTip('Lokale Quelldatei (wird nicht verändert).')
-        self.table.horizontalHeader().setSectionResizeMode(
-            self.COL_DESC, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(
-            self.COL_FILENAME, QHeaderView.ResizeToContents)
+        htb = self.table.horizontalHeaderItem(self.COL_THUMB)
+        if htb:
+            htb.setToolTip('Vorschau')
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(self.COL_THUMB, QHeaderView.Fixed)
+        self.table.setColumnWidth(self.COL_THUMB, 104)
+        header.setSectionResizeMode(self.COL_FILENAME, QHeaderView.Interactive)
+        self.table.setColumnWidth(self.COL_FILENAME, 250)
+        header.setSectionResizeMode(self.COL_TITLE, QHeaderView.Interactive)
+        self.table.setColumnWidth(self.COL_TITLE, 240)
+        header.setSectionResizeMode(self.COL_DESC, QHeaderView.Stretch)
+        header.setSectionResizeMode(self.COL_STATUS, QHeaderView.Interactive)
+        self.table.setColumnWidth(self.COL_STATUS, 150)
+
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.itemSelectionChanged.connect(self.on_row_selected)
@@ -1190,13 +1250,50 @@ class MainWindow(QMainWindow):
         if files:
             self.logger.debug('%d Datei(en) zur Tabelle hinzugefuegt.', len(files))
 
+    def _ext_for_row(self, row):
+        """Liefert die (feste) Endung der Quelldatei einer Zeile, z. B. '.jpg'."""
+        item = self.table.item(row, self.COL_FILENAME)
+        fp = item.data(Qt.UserRole) if item else None
+        return os.path.splitext(fp)[1] if fp else ''
+
+    def _make_thumbnail(self, filepath, w=96, h=64):
+        """Erzeugt effizient ein verkleinertes Vorschaubild (ohne Vollauflösung)."""
+        try:
+            reader = QImageReader(filepath)
+            reader.setAutoTransform(True)  # EXIF-Ausrichtung berücksichtigen
+            size = reader.size()
+            if size.isValid() and (size.width() > w or size.height() > h):
+                reader.setScaledSize(size.scaled(w, h, Qt.KeepAspectRatio))
+            img = reader.read()
+            if not img.isNull():
+                return QPixmap.fromImage(img)
+        except Exception as e:
+            self.logger.debug('Thumbnail fehlgeschlagen für %s: %s', filepath, e)
+        return None
+
     def _add_row(self, filepath):
         row = self.table.rowCount()
         self.table.insertRow(row)
         filename = os.path.basename(filepath)
         date = read_exif_date(filepath, self.logger)
 
-        self.table.setItem(row, self.COL_FILENAME, QTableWidgetItem(filename))
+        # Thumbnail (Spalte links)
+        thumb_item = QTableWidgetItem()
+        thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemIsEditable)
+        thumb_item.setTextAlignment(Qt.AlignCenter)
+        pix = self._make_thumbnail(filepath)
+        if pix is not None:
+            thumb_item.setIcon(QIcon(pix))
+        else:
+            thumb_item.setText('—')
+        self.table.setItem(row, self.COL_THUMB, thumb_item)
+
+        # Quelldatei (nicht editierbar)
+        src_item = QTableWidgetItem(filename)
+        src_item.setFlags(src_item.flags() & ~Qt.ItemIsEditable)
+        src_item.setData(Qt.UserRole, filepath)
+        self.table.setItem(row, self.COL_FILENAME, src_item)
+
         # Ziel-Dateiname auf Commons; Standard = Quell-Dateiname inkl. Endung.
         self.table.setItem(row, self.COL_TITLE, QTableWidgetItem(filename))
         self.table.setItem(row, self.COL_DATE, QTableWidgetItem(date))
@@ -1204,8 +1301,6 @@ class MainWindow(QMainWindow):
         status_item = QTableWidgetItem('—')
         status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(row, self.COL_STATUS, status_item)
-
-        self.table.item(row, self.COL_FILENAME).setData(Qt.UserRole, filepath)
 
     def remove_selected(self):
         rows = sorted(set(i.row() for i in self.table.selectedItems()), reverse=True)
