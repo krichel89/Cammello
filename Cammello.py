@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-Cammello v0.5.0 - Batch upload tool for Wikimedia Commons
+Cammello v0.5.1 - Batch upload tool for Wikimedia Commons
 
 Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
+
+New in 0.5.1:
+  * BotPassword-first login (action=login for "User@bot" names), post-login
+    session verification, and automatic re-login on a lost session.
+  * Fixed EXIF capture-date reading (DateTimeOriginal lives in the EXIF sub-IFD).
+  * Automatic maintenance category [[Category:Uploaded with Cammello]].
+  * Save upload settings and the base description (button + on close); both are
+    restored on the next start.
 
 New in 0.5.0:
   * Renamed from CommonsSDC to Cammello.
@@ -64,8 +72,12 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.5.0'
+__version__ = '0.5.1'
 APP_NAME = 'Cammello'
+
+# Maintenance category added to every uploaded file.
+TRACKING_CATEGORY = f'Uploaded with {APP_NAME}'
+TRACKING_CATEGORY_WIKITEXT = f'[[Category:{TRACKING_CATEGORY}]]'
 
 # ── Logging infrastructure ──────────────────────────────────────────────────────
 
@@ -201,19 +213,33 @@ def extract_name_from_caption(caption):
 
 
 def read_exif_date(filepath, log=None):
-    """Read date from EXIF data."""
+    """Read the capture date from EXIF data.
+
+    DateTimeOriginal (36867) and DateTimeDigitized (36868) live in the EXIF
+    sub-IFD (0x8769); DateTime (306) is in the base IFD. img.getexif() only
+    exposes the base IFD directly, so the sub-IFD must be read explicitly.
+    """
     if not HAS_PIL:
         return ''
     try:
         img = Image.open(filepath)
-        exif_data = img.getexif() if hasattr(img, 'getexif') else img._getexif()
-        if exif_data is None:
+        exif = img.getexif()
+        if not exif:
             return ''
-        for tag_id, value in exif_data.items():
-            tag = TAGS.get(tag_id, tag_id)
-            if tag == 'DateTimeOriginal':
+
+        candidates = []
+        try:
+            sub = exif.get_ifd(0x8769)  # EXIF sub-IFD
+            candidates.append(sub.get(36867))  # DateTimeOriginal
+            candidates.append(sub.get(36868))  # DateTimeDigitized
+        except Exception:
+            pass
+        candidates.append(exif.get(306))       # DateTime (base IFD)
+
+        for value in candidates:
+            if value:
                 # "2025:01:15 14:30:00" -> "2025-01-15 14:30:00"
-                return value.replace(':', '-', 2)
+                return str(value).replace(':', '-', 2).strip()
         return ''
     except Exception as e:
         if log:
@@ -368,51 +394,88 @@ class MediaWikiApi:
 
     # ── Login / session ──────────────────────────────────────────────────────
 
-    def login(self):
-        if not self.api_url.startswith('https://'):
-            raise Exception('Security error: API URL must use HTTPS, not HTTP.')
-
-        self.log.info('Logging in as "%s" …', self.username)
-
+    def _get_login_token(self):
         r = self._request('GET', 'login-token', params={
             'action': 'query', 'meta': 'tokens', 'type': 'login', 'format': 'json'
         })
         j = self._json(r, 'login-token')
         try:
-            login_token = j['query']['tokens']['logintoken']
+            return j['query']['tokens']['logintoken']
         except (KeyError, TypeError):
             raise Exception('Login token not received. Response: '
                             + self._trunc(json.dumps(j, ensure_ascii=False)))
 
-        # 1) clientlogin (normal user account)
+    def _client_login(self):
+        """AuthManager-based login for normal accounts. Returns True on success."""
+        token = self._get_login_token()
         r = self._request('POST', 'clientlogin', data={
             'action': 'clientlogin',
             'loginreturnurl': 'https://commons.wikimedia.org',
             'username': self.username, 'password': self.password,
-            'logintoken': login_token, 'format': 'json'
+            'logintoken': token, 'format': 'json'
         })
         result = self._json(r, 'clientlogin')
         cl = result.get('clientlogin', {})
-        if cl.get('status') == 'PASS':
+        status = cl.get('status')
+        if status == 'PASS':
             self.log.info('clientlogin succeeded.')
             return True
-        cl_msg = cl.get('message') or cl.get('messagecode') or cl.get('status')
-        self.log.warning('clientlogin not successful: %s', cl_msg)
+        cl_msg = cl.get('message') or cl.get('messagecode') or status
+        if status in ('UI', 'REDIRECT'):
+            self.log.warning(
+                'clientlogin needs an extra step (status=%s) – usually 2FA, '
+                'OAuth or email confirmation, so a normal-account login cannot '
+                'complete through this form.', status)
+        else:
+            self.log.warning('clientlogin not successful (status=%s): %s',
+                             status, cl_msg)
+        self._last_login_msg = cl_msg
+        return False
 
-        # 2) bot login (BotPasswords)
+    def _bot_login(self):
+        """action=login, the documented method for BotPasswords (User@bot)."""
+        token = self._get_login_token()
         r = self._request('POST', 'bot-login', data={
             'action': 'login', 'lgname': self.username,
-            'lgpassword': self.password, 'lgtoken': login_token, 'format': 'json'
+            'lgpassword': self.password, 'lgtoken': token, 'format': 'json'
         })
         result = self._json(r, 'bot-login')
         login = result.get('login', {})
         if login.get('result') == 'Success':
             self.log.info('Bot login succeeded.')
             return True
+        self._last_login_msg = login.get('reason') or login.get('result') or 'unknown'
+        self.log.warning('Bot login not successful: %s', self._last_login_msg)
+        return False
 
-        reason = login.get('reason') or login.get('result') or cl_msg or 'unknown'
-        self.log.error('Login failed: %s', reason)
-        raise Exception(f'Login failed: {reason}')
+    def login(self):
+        if not self.api_url.startswith('https://'):
+            raise Exception('Security error: API URL must use HTTPS, not HTTP.')
+
+        self.log.info('Logging in as "%s" …', self.username)
+        self._last_login_msg = None
+
+        # BotPassword usernames contain '@' (e.g. "Seewolf@Cammello"). For those,
+        # action=login is the documented and reliable method, so try it first;
+        # clientlogin/AuthManager can report success for a BotPassword without
+        # actually establishing a write-capable session.
+        if '@' in self.username:
+            methods = [self._bot_login, self._client_login]
+        else:
+            methods = [self._client_login, self._bot_login]
+
+        for method in methods:
+            if method():
+                self._verify_session()  # raises if the session is anonymous
+                return True
+
+        msg = self._last_login_msg or 'unknown'
+        self.log.error('Login failed: %s', msg)
+        raise Exception(
+            f'Login failed: {msg}. For API uploads to Commons, use a BotPassword '
+            f'(Special:BotPasswords) with the "Upload new files" and "Edit '
+            f'existing pages" grants.'
+        )
 
     def whoami(self):
         """Return the userinfo of the current session (for "Test connection")."""
@@ -439,6 +502,29 @@ class MediaWikiApi:
     def clear_token(self):
         self.csrf_token = None
 
+    def _verify_session(self):
+        """Confirm the session is actually authenticated after login.
+
+        clientlogin/login can report success while the server still treats the
+        request as anonymous (e.g. missing BotPassword grants). Catch that here
+        instead of failing later with assertuserfailed during the upload.
+        """
+        info = self.whoami()
+        if not info or 'anon' in info or not info.get('id'):
+            raise Exception(
+                'Login reported success, but the session is anonymous '
+                '(server does not see a logged-in user). Check the account / '
+                'password, or the grants of the BotPassword.'
+            )
+        self.log.info('Session verified as user "%s" (id %s).',
+                      info.get('name'), info.get('id'))
+
+    def _relogin(self):
+        """Re-authenticate after a lost session (assertuserfailed)."""
+        self.log.warning('Session lost – re-authenticating…')
+        self.clear_token()
+        self.login()
+
     # ── Upload ───────────────────────────────────────────────────────────────
 
     def upload(self, filename, filepath, wikitext, comment, ignore_warnings=False):
@@ -447,7 +533,7 @@ class MediaWikiApi:
                       filename, size / 1e6 if size > 0 else 0.0)
         self.log.debug('Wikitext for "%s":\n%s', filename, wikitext)
 
-        for attempt in (1, 2):  # one retry on badtoken
+        for attempt in (1, 2):  # one retry on badtoken or lost session
             token = self.get_csrf_token()
             with open(filepath, 'rb') as f:
                 data = {
@@ -466,6 +552,9 @@ class MediaWikiApi:
                 if code == 'badtoken' and attempt == 1:
                     self.log.warning('badtoken – fetching new token, retrying.')
                     self.clear_token()
+                    continue
+                if code in ('assertuserfailed', 'mustbeloggedin') and attempt == 1:
+                    self._relogin()
                     continue
                 raise Exception(f'[{code}] {info}')
 
@@ -491,7 +580,7 @@ class MediaWikiApi:
                 + self._trunc(json.dumps(result, ensure_ascii=False))
             )
 
-        raise Exception('Upload failed after badtoken retry.')
+        raise Exception('Upload failed after retry (badtoken or lost session).')
 
     def get_page_id(self, filename):
         r = self._request('GET', 'page-id', params={
@@ -560,6 +649,9 @@ class MediaWikiApi:
                     self.log.warning('SDC badtoken – new token, retrying.')
                     self.clear_token()
                     continue
+                if code in ('assertuserfailed', 'mustbeloggedin') and attempt == 1:
+                    self._relogin()
+                    continue
                 raise Exception(f'[{code}] {info}')
             self.log.info('✓ Structured data set for M%s.', page_id)
             return
@@ -594,6 +686,9 @@ class MediaWikiApi:
             if code:
                 if code in ('badtoken', 'invalid-csrf-token') and attempt == 1:
                     self.clear_token()
+                    continue
+                if code in ('assertuserfailed', 'mustbeloggedin') and attempt == 1:
+                    self._relogin()
                     continue
                 raise Exception(f'[{code}] {info}')
             self.log.info('✓ Gallery "%s" updated.', page_title)
@@ -685,6 +780,11 @@ class UploadWorker(QThread):
                         cats_seen.add(cat)
                 clean_desc = re.sub(r'\[\[Category:[^\]]+\]\]\n?', '',
                                     clean_desc).strip()
+
+                # Always add the maintenance category (deduplicated).
+                if TRACKING_CATEGORY_WIKITEXT not in cats_seen:
+                    cats.append(TRACKING_CATEGORY_WIKITEXT)
+                    cats_seen.add(TRACKING_CATEGORY_WIKITEXT)
 
                 # {{Information}} block
                 info = f"{{{{{row.get('template', 'Information')}\n"
@@ -1074,6 +1174,12 @@ class MainWindow(QMainWindow):
         base_layout.addWidget(self.base_text_edit)
         right_layout.addWidget(base_group)
 
+        save_settings_btn = QPushButton('💾 Save settings')
+        save_settings_btn.setToolTip('Save the upload settings and the base '
+                                     'description so they are restored next time.')
+        save_settings_btn.clicked.connect(self._on_save_settings)
+        right_layout.addWidget(save_settings_btn)
+
         file_group = QGroupBox('Selected file – description_all')
         file_layout = QVBoxLayout(file_group)
         self.file_desc_edit = QTextEdit()
@@ -1165,20 +1271,35 @@ class MainWindow(QMainWindow):
     def _restore_settings(self):
         self.author_edit.setText(self.settings.value('author', ''))
         self.source_edit.setText(self.settings.value('source', '{{own}}'))
+        self.permission_edit.setText(self.settings.value('permission', ''))
         self.license_edit.setText(self.settings.value('license', '{{Cc-by-sa-4.0}}'))
         self.other_templates_edit.setText(self.settings.value('other_templates', ''))
         self.other_fields_edit.setText(self.settings.value('other_fields', ''))
         self.gallery_prefix_edit.setText(self.settings.value('gallery_prefix', ''))
         self.timeout_edit.setText(self.settings.value('timeout', '120'))
+        self.base_text_edit.setPlainText(self.settings.value('base_description', ''))
 
     def _save_settings(self):
         self.settings.setValue('author', self.author_edit.text())
         self.settings.setValue('source', self.source_edit.text())
+        self.settings.setValue('permission', self.permission_edit.text())
         self.settings.setValue('license', self.license_edit.text())
         self.settings.setValue('other_templates', self.other_templates_edit.text())
         self.settings.setValue('other_fields', self.other_fields_edit.text())
         self.settings.setValue('gallery_prefix', self.gallery_prefix_edit.text())
         self.settings.setValue('timeout', self.timeout_edit.text())
+        self.settings.setValue('base_description', self.base_text_edit.toPlainText())
+
+    def _on_save_settings(self):
+        """Explicitly persist the current settings (button + on close)."""
+        self._save_settings()
+        self.settings.sync()
+        self.status_bar.showMessage('Settings saved.', 3000)
+
+    def closeEvent(self, event):
+        # Persist settings when the window is closed.
+        self._save_settings()
+        super().closeEvent(event)
 
     def _get_timeout(self):
         try:
