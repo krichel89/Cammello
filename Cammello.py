@@ -173,33 +173,78 @@ NAME_SEPARATORS = [' at ', ' bei ', ' à ', ' al ', ' auf ', ' sur ', ' on ', ' 
 
 def extract_structured_data(text):
     """Extract key=value lines from description_all text.
-    Lines starting with # are treated as comments and removed."""
+    Lines starting with # are treated as comments and removed.
+    Keys are matched case-insensitively (license= and LICENSE= are equivalent)."""
     sd = {}
     # Remove comment lines (starting with #)
     text = re.sub(r'^#[^\n]*\n?', '', text, flags=re.MULTILINE)
     result = text
 
     # Dynamically extract all caption_XX= lines (any language code)
-    for m in re.finditer(r'(?:^|\n)caption_([a-z]{2,3})=([^\n]+)', result):
-        lang = m.group(1)
+    for m in re.finditer(r'(?:^|\n)caption_([a-z]{2,3})=([^\n]+)',
+                         result, flags=re.IGNORECASE):
+        lang = m.group(1).lower()
         val = m.group(2).strip()
         sd['caption_' + lang] = val
     # Remove all matched caption_XX= lines from result
-    result = re.sub(r'\ncaption_[a-z]{2,3}=[^\n]+', '', result)
-    result = re.sub(r'^caption_[a-z]{2,3}=[^\n]+\n?', '', result, flags=re.MULTILINE)
+    result = re.sub(r'\ncaption_[a-z]{2,3}=[^\n]+', '', result, flags=re.IGNORECASE)
+    result = re.sub(r'^caption_[a-z]{2,3}=[^\n]+\n?', '', result,
+                    flags=re.MULTILINE | re.IGNORECASE)
 
     for key in SD_KEYS:
         # Match at start of string
-        m = re.match(rf'^{key}=([^\n]+)', result)
+        m = re.match(rf'^{key}=([^\n]+)', result, flags=re.IGNORECASE)
         if not m:
             # Match after newline
-            m = re.search(rf'\n{key}=([^\n]+)', result)
+            m = re.search(rf'\n{key}=([^\n]+)', result, flags=re.IGNORECASE)
         if m:
             sd[key] = m.group(1).strip()
-            result = re.sub(rf'\n{key}=[^\n]+', '', result)
-            result = re.sub(rf'^{key}=[^\n]+\n?', '', result, flags=re.MULTILINE)
+            result = re.sub(rf'\n{key}=[^\n]+', '', result, flags=re.IGNORECASE)
+            result = re.sub(rf'^{key}=[^\n]+\n?', '', result,
+                            flags=re.MULTILINE | re.IGNORECASE)
 
     return sd, result.strip()
+
+
+# Keys that look like a structured-data tag when they appear at the start of a line.
+_LINT_KEYS_RE = r'(?:creator|copyright|license|depicts|gallery_suffix|caption_[a-z]{2,3})'
+
+
+def find_description_issues(text):
+    """Scan description_all for likely typos and return human-readable warnings.
+
+    Catches things that would otherwise be silently turned into broken wikitext:
+    a key with the wrong separator (creator_Q… instead of creator=Q…), a
+    misspelled [[Category:]] link, or a duplicated "Category:" prefix. This only
+    reports problems; it does not change the text.
+    """
+    issues = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        low = line.lower()
+        # 1) known key followed by '_' or ':' instead of '='
+        m = re.match(rf'^({_LINT_KEYS_RE})[_:]', low)
+        if m:
+            issues.append(
+                f'"{line[:60]}" looks like a "{m.group(1)}=value" tag but uses '
+                f'"_"/":" instead of "=". It will be treated as plain text, and '
+                f'no structured data will be set for it.')
+            continue
+        # 2) misspelled category link ([[Cate… but not [[Category:)
+        if re.match(r'^\[\[\s*cate', low) and not low.startswith('[[category:'):
+            issues.append(
+                f'"{line[:60]}" looks like a misspelled category ("[[Category:" '
+                f'expected); it will NOT be added as a category.')
+            continue
+        # 3) duplicated Category: prefix
+        if re.match(r'^\[\[\s*category:\s*category:', low):
+            issues.append(
+                f'"{line[:60]}" has a duplicated "Category:" prefix; the resulting '
+                f'category name will be wrong.')
+            continue
+    return issues
 
 
 def extract_name_from_caption(caption):
@@ -603,11 +648,13 @@ class MediaWikiApi:
 
         claims_data = []
         for prop, qid in claims:
-            m = re.match(r'^Q(\d+)$', qid)
+            qid = (qid or '').strip()
+            m = re.match(r'^Q(\d+)$', qid, flags=re.IGNORECASE)
             if not m:
                 self.log.warning('Invalid QID for %s skipped: %r', prop, qid)
                 continue
             numeric_id = int(m.group(1))
+            qid = f'Q{numeric_id}'  # normalize (e.g. "q123" -> "Q123")
             claims_data.append({
                 'mainsnak': {
                     'snaktype': 'value',
@@ -767,6 +814,9 @@ class UploadWorker(QThread):
 
                 sd, clean_desc = extract_structured_data(row['description_all'])
                 self.log.debug('File "%s": extracted SD=%s', fname, sd)
+                for issue in find_description_issues(row['description_all']):
+                    self.log.warning('Possible issue in description for "%s": %s',
+                                     fname, issue)
 
                 other_templates = row.get('other_templates', '')
                 license_text = row.get('license_text', '')
