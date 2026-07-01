@@ -2,6 +2,7 @@ name: Build Mac App
 on:
   release:
     types: [published]
+    workflow_dispatch: # Ermöglicht den manuellen Start im Browser
 
 jobs:
   build-mac:
