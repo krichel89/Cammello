@@ -1,118 +1,97 @@
 # Cammello
 
-A Python/PyQt5 batch upload tool for [Wikimedia Commons](https://commons.wikimedia.org), replacing VicunaUploader with full structured data (SDC) support.
+Batch upload tool for Wikimedia Commons with full Structured Data on Commons
+(SDC) support: captions, creator (P170), copyright status (P6216), license
+(P275), depicts (P180), and created-during (P10408).
 
-> Formerly named *CommonsSDC*.
+Cammello is a single-file PyQt5 desktop application aimed at photographers
+who upload many related files at once (e.g. a full press-photography session
+from a film festival) and want SDC statements set consistently on every file
+without post-processing each one on the wiki.
 
-## Features
+## Highlights
 
-- **Batch upload** with a table view (thumbnail, source file, target filename, date, description per file)
-- **Per-file thumbnail preview** (loaded downscaled, with EXIF orientation applied)
-- **Custom target filename** on Commons per file — the extension is taken from the source file and cannot be changed
-- **Automatic EXIF date** reading from image files
-- **Shared base text** for all files (creator, copyright, license, templates)
-- **Per-file `description_all`** field with `key=value` structured data tags
-- **Structured Data on Commons** (captions, creator, depicts, license, copyright) set in a single `wbeditentity` API call
-- **Gallery update** – appends uploaded files to an existing Commons gallery page
-- **Name extraction** from captions for gallery labels (everything before "at", "bei", "à", etc.)
-- **Automatic maintenance category** `[[Category:Uploaded with Cammello]]` on every file
-- Login with Wikimedia account credentials (bot or main account), plus a **Test connection** button
-- **Detailed logging** (file + live log tab) and a configurable HTTP timeout for easier troubleshooting
-- **Saved settings** – the upload settings and the base description are persisted and restored on the next start
-- Overwrite mode (ignore warnings)
-- English user interface
+- **Upload settings** hold the metadata that applies to every file in the
+  batch: author + creator (P170), source, permission, license text +
+  license (P275), copyright (P6216), other templates and fields, gallery
+  prefix. The Wikidata QID fields are highlighted in light blue and only
+  accept `Q` followed by digits; copyright defaults to Q73566113 (CC-
+  licensed) and license to Q18199165 (CC BY-SA 4.0).
+- **Base description** shared by every file in the batch: depicts (P180),
+  created-during (P10408), categories, gallery suffix, and any extra
+  wikitext or templates.
+- **Per-file description** for anything that varies from file to file:
+  captions in any languages, per-file depicts, per-file categories, extra
+  wikitext.
+- **Two editing modes**: structured single-line fields (default) or raw
+  `description_all` text (expert mode).
+- **Drag and drop** image files (or a folder of image files) onto the
+  table; multiple files at once are supported, and unsupported entries in
+  a mixed drop are silently skipped instead of aborting the whole drop.
+- **Settings** (upload defaults, base description, optionally the current
+  file's description) can be exported to and imported from a plain text
+  file.
 
 ## Installation
 
+Requires Python 3.11 or 3.12.
+
 ```
-pip install -r requirements.txt
+pip install PyQt5 requests Pillow
 python Cammello.py
 ```
 
-Tested with Python 3.11+ on Windows, macOS, and Linux.
-
-## Usage
-
-### Login
-
-Enter your Wikimedia Commons credentials (same account as for the browser). For bot logins, use a BotPassword (`Special:BotPasswords`). After logging in, use **Test connection** to verify the session.
-
-### Upload Settings (right panel)
-
-- **Author** – e.g. `[[User:Harald Krichel|Harald Krichel]]`
-- **Source** – e.g. `{{own}}`
-- **License** – e.g. `{{Cc-by-sa-4.0}}`
-- **Other templates** – e.g. `{{WikiPortraits Cannes Film Festival 2025}}`
-- **Gallery prefix** – e.g. `User:Harald Krichel` or `User:Harald Krichel/Berlinale 2025`
-- **HTTP timeout (s)** – default 120
-
-Use the **Save settings** button to persist these settings together with the base description; they are also saved automatically when you close the window and restored on the next start.
-
-### Target filename
-
-Each row has a **Target filename** column (the name the file gets on Commons). Edit it freely; leave it empty to use the source filename. The file extension is fixed (taken from the source file) and cannot be changed.
-
-### Base description_all
-
-Text that applies to **all** files in the batch. Typically contains shared structured data:
+To build a standalone executable:
 
 ```
+python -m PyInstaller --onefile --windowed --name Cammello Cammello.py
+```
+
+## Login
+
+Cammello uses a MediaWiki BotPassword. Create one at
+[Special:BotPasswords](https://commons.wikimedia.org/wiki/Special:BotPasswords)
+with the grants required for uploads and structured-data edits (High-volume
+editing, Upload new files, Edit existing pages, Edit Wikibase). The username
+in the login dialog has the form `YourName@BotName`.
+
+## The `description_all` format
+
+Each row in the table has a per-file description. When the batch is uploaded,
+its content is prepended with the base description (which applies to every
+file), plus the `creator=…`, `copyright=…`, `license=…` lines taken from
+the corresponding Wikidata QID fields in Upload settings. The resulting text
+is a mix of `key=value` lines (which drive SDC statements) and free
+wikitext:
+
+```
+caption_en=Harald Krichel at the Berlinale 2026
+caption_de=Harald Krichel auf der Berlinale 2026
 creator=Q640
 copyright=Q73566113
 license=Q18199165
-{{Berlinale 2025|type=red carpet}}
-```
-
-### Per-file description_all
-
-Individual text per file. Supports the following `key=value` tags:
-
-| Key              | Description                                                |
-| ---------------- | ---------------------------------------------------------- |
-| `caption_XX`     | Caption in language `XX` (any language code), set as SDC label |
-| `creator`        | Wikidata QID for creator (P170)                            |
-| `copyright`      | Wikidata QID for copyright status (P6216)                  |
-| `license`        | Wikidata QID for license (P275)                            |
-| `depicts`        | Wikidata QID(s) for depicted items (P180), comma-separated |
-| `gallery_suffix` | Appended to gallery prefix, e.g. `Berlinale 2025`          |
-
-Language codes for captions are detected dynamically, e.g. `caption_en`, `caption_de`, `caption_fr`, `caption_it`, `caption_es`, `caption_nl`, `caption_pl`, `caption_ru`, `caption_zh`.
-
-All `key=value` lines are **removed** from the wikitext before upload and sent via the Wikibase API instead. Lines starting with `#` are treated as comments.
-
-### Example description_all
-
-```
-caption_de=Chloé Zhao bei der Berlinale 2026
-caption_en=Chloé Zhao at the 2026 Berlin International Film Festival
-caption_fr=Chloé Zhao à la Berlinale 2026
-creator=Q640
-depicts=Q220647
-copyright=Q73566113
-license=Q18199165
+depicts=Q42; Q64
+created_during=Q124692383
 gallery_suffix=Berlinale 2026
 
-{{en|1=[[:en:Chloé Zhao|Chloé Zhao]] at the photo call at the 2026 Berlin International Film Festival}}
-{{de|1=[[:de:Chloé Zhao|Chloé Zhao]] beim Photocall bei der Berlinale 2026}}
-[[Category:Chloé Zhao]]
-[[Category:Photographs by Harald Krichel from 2026]]
+{{en|1=Harald Krichel at the Berlinale 2026}}
+[[Category:Harald Krichel]]
 ```
 
-### Log / troubleshooting
+- `caption_XX=…` sets the SDC caption in language `XX`.
+- `creator`, `copyright`, `license`, `depicts`, `created_during` become
+  Wikidata-item SDC statements (P170, P6216, P275, P180, P10408). `depicts`
+  accepts a semicolon-separated list; `,` is still tolerated for older data.
+- `gallery_suffix` is appended to the base gallery path (if any) so that all
+  files with the same suffix land in the same gallery page.
+- Lines starting with `#` are treated as comments and stripped before upload.
+- Everything else (templates, category links, plain wikitext) is passed
+  through unchanged into the file's wiki page.
 
-The **Log** tab shows a live log; the full log (including the assembled wikitext and SDC payload per file) is also written to `~/Cammello/cammello_debug.log`. Enable **Verbose logging** for more detail. Credentials and tokens are masked in the log.
-
-## Building a standalone executable
-
-A Windows `.exe` or macOS `.app` can be built with [PyInstaller](https://pyinstaller.org/):
-
-```
-pip install pyinstaller
-pyinstaller --onefile --windowed --name Cammello Cammello.py
-```
-
-PyInstaller cannot cross-compile, so each platform must be built on that platform. A GitHub Actions workflow (`.github/workflows/build.yml`) builds the Windows and macOS versions in the cloud and attaches them to the release.
+The per-file editor only offers the fields that legitimately vary from file
+to file: captions, depicts, categories, and extra wikitext. Everything else
+lives in the base description or in Upload settings.
 
 ## License
 
-CC0
+CC0.

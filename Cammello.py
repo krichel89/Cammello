@@ -1,15 +1,41 @@
 #!/usr/bin/env python3
 """
-<<<<<<< HEAD
-Cammello v0.7.1 - Batch upload tool for Wikimedia Commons
-=======
-Cammello v0.5.1 - Batch upload tool for Wikimedia Commons
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
+Cammello v0.7.4 - Batch upload tool for Wikimedia Commons
 
 Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
 
-<<<<<<< HEAD
+New in 0.7.4:
+  * Fix: dragging several files at once loaded only a single file. The extra
+    viewport().setAcceptDrops() call added in 0.7.3 let Qt's built-in
+    item-view drop handling intercept the drop and reduce it to one item.
+    The drop-receiving setup is back to the 0.7.2 behaviour (widget-level
+    acceptDrops only), so a multi-file drop again adds every valid file.
+
+New in 0.7.3:
+  * Creator (P170), Copyright (P6216) and License (P275) are now direct fields
+    in the "Upload settings" section, positioned next to their {{Information}}
+    counterparts (creator under Author; license and copyright under the
+    license text). Copyright defaults to Q73566113, license to Q18199165.
+  * All Wikidata QID fields have a light-blue background and a validator that
+    only accepts Q followed by digits (depicts accepts a semicolon-separated
+    list). No more grey example hints next to the fields.
+  * Drag-and-drop no longer aborts when the drop contains a mix of supported
+    and unsupported files: each URL and each file is handled individually,
+    invalid entries are logged and skipped.
+
+New in 0.7.2:
+  * Creator (P170), Copyright (P6216), License (P275) and Created during
+    (P10408) are now shown only in the base editor: they apply to every file,
+    the per-file editor keeps only captions, depicts, categories and extra
+    text.
+  * Copyright and license are preset in the base editor (Q73566113 /
+    Q18199165) instead of appearing as empty example placeholders.
+  * License is an editable dropdown with the two most common choices
+    (Cc-by-sa-4.0 / Q18199165, Cc-zero / Q6938433); any other QID can still
+    be typed in.
+  * Drag-and-drop of multiple files at once onto the file table is supported.
+
 New in 0.7.1:
   * New structured field "Created during (P10408)" for the event a file was
     created during (e.g. Q124692383, 81st Venice International Film Festival).
@@ -50,15 +76,6 @@ New in 0.5.1:
   * BotPassword-first login, session verification, automatic re-login.
   * Fixed EXIF capture-date reading; validation warnings for description typos.
   * Automatic maintenance category; saved settings and base description.
-=======
-New in 0.5.1:
-  * BotPassword-first login (action=login for "User@bot" names), post-login
-    session verification, and automatic re-login on a lost session.
-  * Fixed EXIF capture-date reading (DateTimeOriginal lives in the EXIF sub-IFD).
-  * Automatic maintenance category [[Category:Uploaded with Cammello]].
-  * Save upload settings and the base description (button + on close); both are
-    restored on the next start.
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
 New in 0.5.0:
   * Renamed from CommonsSDC to Cammello.
@@ -107,14 +124,10 @@ from PyQt5.QtWidgets import (
     QTextEdit, QFileDialog, QMessageBox, QProgressBar, QSplitter,
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
     QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit,
-<<<<<<< HEAD
     QStyledItemDelegate, QComboBox, QScrollArea
-=======
-    QStyledItemDelegate
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QObject, QUrl, QSize
-from PyQt5.QtGui import QPixmap, QFont, QDesktopServices, QIcon, QImageReader
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QObject, QUrl, QSize, QRegExp
+from PyQt5.QtGui import QPixmap, QFont, QDesktopServices, QIcon, QImageReader, QRegExpValidator
 
 try:
     from PIL import Image
@@ -123,11 +136,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-<<<<<<< HEAD
-__version__ = '0.7.1'
-=======
-__version__ = '0.5.1'
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
+__version__ = '0.7.4'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -213,12 +222,8 @@ def setup_logging():
 # ── Structured data extraction (logic unchanged since v0.1.1) ───────────────────
 
 SD_KEYS = [
-<<<<<<< HEAD
     'creator', 'copyright', 'license', 'depicts', 'created_during',
     'gallery_suffix',
-=======
-    'creator', 'copyright', 'license', 'depicts', 'gallery_suffix',
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 ]
 
 PROPERTY_MAP = {
@@ -226,7 +231,6 @@ PROPERTY_MAP = {
     'copyright': 'P6216',
     'license': 'P275',
     'depicts': 'P180',
-<<<<<<< HEAD
     'created_during': 'P10408',
 }
 
@@ -238,10 +242,43 @@ WD_FIELD_WIDTH = 220
 # Accepted image extensions (used by the file dialog and by drag-and-drop).
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.svg', '.webp')
 
-=======
-}
+# Wikidata fields (P170 creator, P6216 copyright, P275 license, P10408
+# created-during, P180 depicts) get a light-blue background and a validator
+# that only accepts QIDs (Q followed by digits). Single-value fields accept
+# one QID; the depicts field accepts a semicolon-separated list of QIDs.
+WD_BG = '#e6f2ff'
+_WD_SINGLE_RE = QRegExp(r'^(Q\d+)?$')
+_WD_LIST_RE = QRegExp(r'^\s*(Q\d+(\s*[;,]\s*Q\d+)*\s*[;,]?\s*)?$')
 
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
+def _style_wd_field(edit, multi=False):
+    """Apply the Wikidata look-and-feel: light-blue bg + QID-only validator."""
+    edit.setStyleSheet(f'QLineEdit {{ background: {WD_BG}; }}')
+    edit.setValidator(QRegExpValidator(_WD_LIST_RE if multi else _WD_SINGLE_RE,
+                                       edit))
+    if not multi:
+        edit.setMaximumWidth(WD_FIELD_WIDTH)
+
+
+_SD_LINE_RE = re.compile(r'^\s*([a-z_]+)\s*=\s*')
+
+def _strip_sd_lines(text, keys):
+    """Remove `key = value` lines matching any of the given keys.
+
+    Used by the settings restore to migrate creator/copyright/license out of
+    an older base_description into the dedicated upload-settings fields.
+    """
+    keys = set(keys)
+    out = []
+    for line in (text or '').splitlines():
+        m = _SD_LINE_RE.match(line)
+        if m and m.group(1) in keys:
+            continue
+        out.append(line)
+    # Strip any leading empty lines the removal may leave behind.
+    while out and not out[0].strip():
+        out.pop(0)
+    return '\n'.join(out)
+
 NAME_SEPARATORS = [' at ', ' bei ', ' à ', ' al ', ' auf ', ' sur ', ' on ', ' sul ']
 
 
@@ -281,12 +318,8 @@ def extract_structured_data(text):
 
 
 # Keys that look like a structured-data tag when they appear at the start of a line.
-<<<<<<< HEAD
 _LINT_KEYS_RE = (r'(?:creator|copyright|license|depicts|created_during|'
                  r'gallery_suffix|caption_[a-z]{2,3})')
-=======
-_LINT_KEYS_RE = r'(?:creator|copyright|license|depicts|gallery_suffix|caption_[a-z]{2,3})'
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
 
 def find_description_issues(text):
@@ -957,13 +990,9 @@ class UploadWorker(QThread):
                     elif key in PROPERTY_MAP:
                         prop = PROPERTY_MAP[key]
                         if key == 'depicts':
-<<<<<<< HEAD
                             # Separator is ";"; "," is still tolerated so that
                             # older comma-separated values keep working.
                             for qid in re.split(r'[;,]', val):
-=======
-                            for qid in val.split(','):
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
                                 qid = qid.strip()
                                 if qid:
                                     claims.append((prop, qid))
@@ -1118,25 +1147,16 @@ class LoginDialog(QDialog):
 
         self.url_edit = QLineEdit(self.settings.value(
             'api_url', 'https://commons.wikimedia.org/w/api.php'))
-<<<<<<< HEAD
         self.url_edit.setVisible(False)  # hidden; always Commons by default
         self.user_edit = QLineEdit(self.settings.value('username', ''))
         self.user_edit.setPlaceholderText('e.g. Seewolf@Cammello')
         self.pass_edit = QLineEdit()
         self.pass_edit.setEchoMode(QLineEdit.Password)
 
-=======
-        self.user_edit = QLineEdit(self.settings.value('username', ''))
-        self.pass_edit = QLineEdit()
-        self.pass_edit.setEchoMode(QLineEdit.Password)
-
-        form.addRow('API URL:', self.url_edit)
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         form.addRow('Username:', self.user_edit)
         form.addRow('Password:', self.pass_edit)
         layout.addLayout(form)
 
-<<<<<<< HEAD
         hint = QLabel(
             'Use a <b>BotPassword</b>: create one at '
             '<a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">'
@@ -1153,12 +1173,6 @@ class LoginDialog(QDialog):
         hint.setWordWrap(True)
         hint.setOpenExternalLinks(True)
         hint.setTextInteractionFlags(Qt.TextBrowserInteraction)
-=======
-        hint = QLabel('Tip: For bot logins, use a BotPassword '
-                      '(Special:BotPasswords).')
-        hint.setStyleSheet('color: gray; font-size: 11px;')
-        hint.setWordWrap(True)
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         layout.addWidget(hint)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1172,7 +1186,6 @@ class LoginDialog(QDialog):
         return self.url_edit.text(), self.user_edit.text(), self.pass_edit.text()
 
 
-<<<<<<< HEAD
 # ── Structured editor: language list, example, captions editor ──────────────────
 
 # Curated language list for the caption dropdown (code, display name).
@@ -1193,6 +1206,17 @@ EXAMPLE_DESCRIPTION_ALL = (
     'depicts=Q42; Q64\n'
     '# created_during=Q124692383  (e.g. 81st Venice Film Festival)\n'
     'gallery_suffix=Berlinale 2026\n'
+    '\n'
+    '{{en|1=Harald Krichel at the Berlinale 2026}}\n'
+    '[[Category:Harald Krichel]]'
+)
+
+# Per-file placeholder: creator / copyright / license / created_during and
+# gallery suffix live in the base description and are intentionally omitted.
+EXAMPLE_FILE_DESCRIPTION = (
+    'caption_en=Harald Krichel at the Berlinale 2026\n'
+    'caption_de=Harald Krichel auf der Berlinale 2026\n'
+    'depicts=Q640\n'
     '\n'
     '{{en|1=Harald Krichel at the Berlinale 2026}}\n'
     '[[Category:Harald Krichel]]'
@@ -1362,19 +1386,24 @@ class _VGrip(QWidget):
 
 class StructuredDescriptionEditor(QWidget):
     """Structured single-line editor for a description_all value: multilingual
-    captions plus creator/copyright/license/depicts (and, for the base only, a
-    gallery suffix), a dedicated categories field and a resizable free-text area
-    for extra wikitext and comments. Used for both the per-file and the base
-    description when expert mode is off.
+    captions plus depicts (P180), created-during (P10408), a categories field
+    and a resizable free-text area for extra wikitext and comments. Used for
+    both the per-file and the base description when expert mode is off.
 
-    show_gallery_suffix: only the base editor offers the gallery suffix.
+    Creator, copyright and license (P170/P6216/P275) are edited in the
+    "Upload settings" section (they apply to every file in the batch) and are
+    intentionally NOT part of this widget.
+
+    is_base: created-during and the gallery suffix are only shown in the
+    base editor (they apply to every file), so the per-file editor keeps
+    only captions, depicts, categories and the extra text.
     """
 
     changed = pyqtSignal()
 
-    def __init__(self, parent=None, show_gallery_suffix=True):
+    def __init__(self, parent=None, is_base=True):
         super().__init__(parent)
-        self.show_gallery_suffix = show_gallery_suffix
+        self.is_base = is_base
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -1384,50 +1413,41 @@ class StructuredDescriptionEditor(QWidget):
         layout.addWidget(self.captions_editor)
 
         form = QFormLayout()
-        self.creator = QLineEdit()
-        self.creator.setPlaceholderText('e.g. Q640')
-        self.copyright = QLineEdit()
-        self.license = QLineEdit()
+
+        # Depicts (P180) — multi-value Wikidata field, semicolon-separated.
         self.depicts = QLineEdit()
         self.depicts.setPlaceholderText('e.g. Q42; Q64')
-        self.created_during = QLineEdit()
-        self.created_during.setPlaceholderText('e.g. Q124692383')
+        _style_wd_field(self.depicts, multi=True)
+
+        # Categories — plain text (not a Wikidata field).
         self.categories = QLineEdit()
         self.categories.setPlaceholderText('e.g. Berlinale 2026; Portraits')
 
-        # Single-value Wikidata QID fields get a standard width instead of
-        # stretching across the whole panel.
-        for w in (self.creator, self.copyright, self.license,
-                  self.created_during):
-            w.setMaximumWidth(WD_FIELD_WIDTH)
+        # Base-only fields.
+        if self.is_base:
+            self.created_during = QLineEdit()
+            self.created_during.setPlaceholderText('e.g. Q124692383')
+            _style_wd_field(self.created_during)
 
-        self.gallery_suffix = QLineEdit()
-        self.gallery_suffix.setPlaceholderText('e.g. Berlinale 2026')
+            self.gallery_suffix = QLineEdit()
+            self.gallery_suffix.setPlaceholderText('e.g. Berlinale 2026')
+        else:
+            self.created_during = None
+            self.gallery_suffix = None
 
-        fields = [self.creator, self.copyright, self.license,
-                  self.depicts, self.created_during, self.categories]
-        if self.show_gallery_suffix:
-            fields.append(self.gallery_suffix)
-        for w in fields:
+        # Signals.
+        watched = [self.depicts, self.categories]
+        if self.is_base:
+            watched += [self.created_during, self.gallery_suffix]
+        for w in watched:
             w.textChanged.connect(lambda *_: self.changed.emit())
 
-        # Each Wikidata/category field carries a grey explanatory hint to its right.
-        form.addRow('Creator (P170):',
-                    self._with_hint(self.creator, 'e.g. Q640 (Harald Krichel)'))
-        form.addRow('Copyright (P6216):',
-                    self._with_hint(self.copyright, 'Q73566113 (CC-licensed)'))
-        form.addRow('License (P275):',
-                    self._with_hint(self.license, 'Q18199165 (CC BY-SA 4.0)'))
-        form.addRow('Depicts (P180):',
-                    self._with_hint(self.depicts, 'semicolon-separated', wide=True))
-        form.addRow('Created during (P10408):',
-                    self._with_hint(self.created_during,
-                                    'e.g. Q124692383 (81st Venice Film Festival)'))
-        form.addRow('Categories:',
-                    self._with_hint(self.categories,
-                                    'semicolon-separated, without [[Category:]]',
-                                    wide=True))
-        if self.show_gallery_suffix:
+        # Rows.
+        form.addRow('Depicts (P180):', self.depicts)
+        if self.is_base:
+            form.addRow('Created during (P10408):', self.created_during)
+        form.addRow('Categories:', self.categories)
+        if self.is_base:
             form.addRow('Gallery suffix:', self.gallery_suffix)
         layout.addLayout(form)
 
@@ -1443,38 +1463,14 @@ class StructuredDescriptionEditor(QWidget):
         layout.addWidget(self.extra)
         layout.addWidget(_VGrip(self.extra, two_lines))
 
-    @staticmethod
-    def _with_hint(edit, hint, wide=False):
-        """Wrap a line edit and a grey hint label into one row widget.
-
-        wide=True lets the edit stretch to fill the row (used for the
-        semicolon-separated list fields). Otherwise the edit keeps its
-        standard width and the row is left-aligned with the hint beside it.
-        """
-        w = QWidget()
-        h = QHBoxLayout(w)
-        h.setContentsMargins(0, 0, 0, 0)
-        if wide:
-            h.addWidget(edit, 1)
-            h.addWidget(lbl := QLabel(hint))
-        else:
-            h.addWidget(edit)
-            h.addWidget(lbl := QLabel(hint))
-            h.addStretch(1)
-        lbl.setStyleSheet('color:#888;')
-        return w
-
     def load(self, text):
         sd, _ = extract_structured_data(text)
         caps = {k[len('caption_'):]: v for k, v in sd.items()
                 if k.startswith('caption_')}
         self.captions_editor.set_captions(caps)
-        self.creator.setText(sd.get('creator', ''))
-        self.copyright.setText(sd.get('copyright', ''))
-        self.license.setText(sd.get('license', ''))
         self.depicts.setText(sd.get('depicts', ''))
-        self.created_during.setText(sd.get('created_during', ''))
-        if self.show_gallery_suffix:
+        if self.is_base:
+            self.created_during.setText(sd.get('created_during', ''))
             self.gallery_suffix.setText(sd.get('gallery_suffix', ''))
         # Split category links out of the leftover text into the categories field.
         cats, extra = split_categories(leftover_text(text))
@@ -1484,15 +1480,15 @@ class StructuredDescriptionEditor(QWidget):
     def assemble(self):
         lines = [f'caption_{lang}={val}'
                  for lang, val in self.captions_editor.get_captions().items()]
-        pairs = [('creator', self.creator), ('copyright', self.copyright),
-                 ('license', self.license), ('depicts', self.depicts),
-                 ('created_during', self.created_during)]
-        if self.show_gallery_suffix:
-            pairs.append(('gallery_suffix', self.gallery_suffix))
-        for key, w in pairs:
-            val = w.text().strip()
-            if val:
-                lines.append(f'{key}={val}')
+        depicts = self.depicts.text().strip()
+        if depicts:
+            lines.append(f'depicts={depicts}')
+        if self.is_base:
+            for key, w in (('created_during', self.created_during),
+                           ('gallery_suffix', self.gallery_suffix)):
+                val = w.text().strip()
+                if val:
+                    lines.append(f'{key}={val}')
         body = '\n'.join(lines)
 
         extra = self.extra.toPlainText().strip()
@@ -1513,30 +1509,63 @@ class FileDropTableWidget(QTableWidget):
 
     Dropped files with a known image extension (and immediate image files
     inside a dropped folder) are passed to on_files_dropped as a list of
-    absolute paths. Everything else is ignored.
+    absolute paths. Files with unsupported extensions, non-existent paths
+    and per-URL exceptions are skipped so a single bad entry does not abort
+    the whole drop.
     """
 
-    def __init__(self, rows, cols, on_files_dropped=None, parent=None):
+    def __init__(self, rows, cols, on_files_dropped=None, logger=None,
+                 parent=None):
         super().__init__(rows, cols, parent)
         self._on_files_dropped = on_files_dropped
+        self._logger = logger
+        # IMPORTANT: only accept drops on the widget itself. This is exactly
+        # the configuration that worked in 0.7.2. Do NOT additionally call
+        # viewport().setAcceptDrops(True) or setDragDropMode(...): doing so
+        # lets QAbstractItemView's built-in item-drop handling intercept the
+        # drop and collapse a multi-file drop down to a single item.
         self.setAcceptDrops(True)
 
-    @staticmethod
-    def _collect(urls):
+    def _collect(self, urls):
         paths = []
+        skipped = 0
         for url in urls:
-            path = url.toLocalFile()
-            if not path:
-                continue
-            if os.path.isdir(path):
-                # Immediate image files inside a dropped folder (not recursive).
-                for name in sorted(os.listdir(path)):
-                    full = os.path.join(path, name)
-                    if (os.path.isfile(full)
-                            and os.path.splitext(name)[1].lower() in IMAGE_EXTS):
-                        paths.append(full)
-            elif os.path.splitext(path)[1].lower() in IMAGE_EXTS:
-                paths.append(path)
+            try:
+                path = url.toLocalFile()
+                if not path:
+                    skipped += 1
+                    continue
+                if os.path.isdir(path):
+                    # Immediate image files inside a dropped folder (not recursive).
+                    try:
+                        entries = sorted(os.listdir(path))
+                    except OSError as e:
+                        if self._logger:
+                            self._logger.warning(
+                                'Could not list dropped folder %r: %s', path, e)
+                        continue
+                    for name in entries:
+                        full = os.path.join(path, name)
+                        try:
+                            if (os.path.isfile(full)
+                                    and os.path.splitext(name)[1].lower()
+                                        in IMAGE_EXTS):
+                                paths.append(full)
+                        except OSError:
+                            pass
+                elif (os.path.isfile(path)
+                        and os.path.splitext(path)[1].lower() in IMAGE_EXTS):
+                    paths.append(path)
+                else:
+                    skipped += 1
+            except Exception as e:
+                skipped += 1
+                if self._logger:
+                    self._logger.warning(
+                        'Skipping dropped URL %r: %s', url, e)
+        if skipped and self._logger:
+            self._logger.debug(
+                '%d dropped item(s) skipped (unsupported / not a file).', skipped)
         return paths
 
     def dragEnterEvent(self, event):
@@ -1561,10 +1590,6 @@ class FileDropTableWidget(QTableWidget):
             super().dropEvent(event)
 
 
-=======
-# ── Main window ────────────────────────────────────────────────────────────────
-
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 class MainWindow(QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
             'Description (all)', 'Status']
@@ -1586,10 +1611,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1150, 740)
         self.api = None
         self.settings = QSettings(APP_NAME, 'Main')
-<<<<<<< HEAD
         self._loading_desc = False  # guard against feedback loops while loading
-=======
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
         self._build_ui()
         self._restore_settings()
@@ -1655,12 +1677,10 @@ class MainWindow(QMainWindow):
         # ── Splitter ──
         splitter = QSplitter(Qt.Horizontal)
 
-<<<<<<< HEAD
         self.table = FileDropTableWidget(
-            0, len(self.COLS), on_files_dropped=self._add_dropped_files)
-=======
-        self.table = QTableWidget(0, len(self.COLS))
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
+            0, len(self.COLS),
+            on_files_dropped=self._add_dropped_files,
+            logger=self.logger)
         self.table.setHorizontalHeaderLabels(self.COLS)
         # Thumbnails on the left: icon size and row height.
         self.table.setIconSize(QSize(96, 64))
@@ -1700,55 +1720,49 @@ class MainWindow(QMainWindow):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-<<<<<<< HEAD
         right.setMinimumWidth(360)
-=======
-        right.setMinimumWidth(330)
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
         settings_group = QGroupBox('Upload settings')
         settings_form = QFormLayout(settings_group)
         self.author_edit = QLineEdit()
-<<<<<<< HEAD
         self.author_edit.setPlaceholderText('e.g. [[User:Seewolf|Harald Krichel]]')
+        self.creator_edit = QLineEdit()
+        self.creator_edit.setPlaceholderText('e.g. Q640')
+        _style_wd_field(self.creator_edit)
         self.source_edit = QLineEdit('{{own}}')
         self.source_edit.setPlaceholderText('e.g. {{own}}')
         self.permission_edit = QLineEdit()
         self.permission_edit.setPlaceholderText('e.g. (leave empty unless needed)')
         self.license_edit = QLineEdit('{{Cc-by-sa-4.0}}')
         self.license_edit.setPlaceholderText('e.g. {{Cc-by-sa-4.0}}')
+        self.license_sdc_edit = QLineEdit('Q18199165')
+        _style_wd_field(self.license_sdc_edit)
+        self.copyright_sdc_edit = QLineEdit('Q73566113')
+        _style_wd_field(self.copyright_sdc_edit)
         self.other_templates_edit = QLineEdit()
         self.other_templates_edit.setPlaceholderText(
             'e.g. {{WikiPortraits at Berlinale 2026}}')
-=======
-        self.source_edit = QLineEdit('{{own}}')
-        self.permission_edit = QLineEdit()
-        self.license_edit = QLineEdit('{{Cc-by-sa-4.0}}')
-        self.other_templates_edit = QLineEdit()
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         self.other_fields_edit = QLineEdit()
         self.other_fields_edit.setPlaceholderText(
             'e.g. {{Credit line|Author=Harald Krichel|Other=WikiPortraits}}')
         self.gallery_prefix_edit = QLineEdit()
-<<<<<<< HEAD
         self.gallery_prefix_edit.setPlaceholderText('e.g. User:Seewolf')
-=======
-        self.gallery_prefix_edit.setPlaceholderText('e.g. User:Harald Krichel')
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         self.timeout_edit = QLineEdit('120')
         self.timeout_edit.setMaximumWidth(80)
 
         settings_form.addRow('Author:', self.author_edit)
+        settings_form.addRow('Creator (P170):', self.creator_edit)
         settings_form.addRow('Source:', self.source_edit)
         settings_form.addRow('Permission:', self.permission_edit)
         settings_form.addRow('License:', self.license_edit)
+        settings_form.addRow('License (P275):', self.license_sdc_edit)
+        settings_form.addRow('Copyright (P6216):', self.copyright_sdc_edit)
         settings_form.addRow('Other templates:', self.other_templates_edit)
         settings_form.addRow('Other fields:', self.other_fields_edit)
         settings_form.addRow('Gallery prefix:', self.gallery_prefix_edit)
         settings_form.addRow('HTTP timeout (s):', self.timeout_edit)
         right_layout.addWidget(settings_group)
 
-<<<<<<< HEAD
         # Mode toggle: expert mode shows the raw description_all text; when it is
         # off (the default), the structured fields are shown.
         self.expert_cb = QCheckBox('🧑\u200d💻 Expert mode (raw description_all text)')
@@ -1764,24 +1778,18 @@ class MainWindow(QMainWindow):
         self.base_text_edit = QTextEdit()
         self.base_text_edit.setPlaceholderText(
             'Shared lines for every file, e.g.\n'
-            'creator=Q640\ncopyright=Q73566113\nlicense=Q18199165')
+            'depicts=Q42; Q64\n'
+            'gallery_suffix=Berlinale 2026\n'
+            '\n'
+            '{{en|1=…}}\n'
+            '[[Category:…]]')
         self.base_text_edit.setMinimumHeight(110)
         self.base_text_edit.textChanged.connect(self._on_base_text_changed)
         base_layout.addWidget(self.base_text_edit)
-        self.base_struct = StructuredDescriptionEditor(show_gallery_suffix=True)
+        self.base_struct = StructuredDescriptionEditor(is_base=True)
         self.base_struct.changed.connect(self._on_base_struct_changed)
         self.base_struct.setVisible(False)
         base_layout.addWidget(self.base_struct)
-=======
-        base_group = QGroupBox('Base description_all (for all files)')
-        base_layout = QVBoxLayout(base_group)
-        self.base_text_edit = QTextEdit()
-        self.base_text_edit.setPlaceholderText(
-            'creator=Q640\ncopyright=Q73566113\nlicense=Q18199165\n'
-            '{{Berlinale 2025|type=red carpet}}')
-        self.base_text_edit.setMaximumHeight(150)
-        base_layout.addWidget(self.base_text_edit)
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         right_layout.addWidget(base_group)
 
         save_settings_btn = QPushButton('💾 Save settings')
@@ -1790,7 +1798,6 @@ class MainWindow(QMainWindow):
         save_settings_btn.clicked.connect(self._on_save_settings)
         right_layout.addWidget(save_settings_btn)
 
-<<<<<<< HEAD
         # Settings import/export to a plain text file (optionally incl. the
         # selected file's description).
         file_io = QHBoxLayout()
@@ -1813,29 +1820,18 @@ class MainWindow(QMainWindow):
         file_group = QGroupBox('Selected file – description')
         file_layout = QVBoxLayout(file_group)
         self.file_desc_edit = QTextEdit()
-        self.file_desc_edit.setPlaceholderText(EXAMPLE_DESCRIPTION_ALL)
+        self.file_desc_edit.setPlaceholderText(EXAMPLE_FILE_DESCRIPTION)
         self.file_desc_edit.setMinimumHeight(150)
         self.file_desc_edit.textChanged.connect(self.on_file_desc_changed)
         file_layout.addWidget(self.file_desc_edit)
-        self.file_struct = StructuredDescriptionEditor(show_gallery_suffix=False)
+        self.file_struct = StructuredDescriptionEditor(is_base=False)
         self.file_struct.changed.connect(self._on_file_struct_changed)
         self.file_struct.setVisible(False)
         file_layout.addWidget(self.file_struct)
-=======
-        file_group = QGroupBox('Selected file – description_all')
-        file_layout = QVBoxLayout(file_group)
-        self.file_desc_edit = QTextEdit()
-        self.file_desc_edit.setPlaceholderText(
-            'caption_en=Name at the Event\ncaption_de=Name beim Event\n'
-            'depicts=Q12345\n\n{{en|1=Description}}')
-        self.file_desc_edit.textChanged.connect(self.on_file_desc_changed)
-        file_layout.addWidget(self.file_desc_edit)
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         right_layout.addWidget(file_group)
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-<<<<<<< HEAD
         self.preview_label.setMinimumHeight(140)
         self.preview_label.setStyleSheet('background: #111; border-radius: 4px;')
         right_layout.addWidget(self.preview_label)
@@ -1850,14 +1846,6 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(right_scroll)
         splitter.setSizes([720, 420])
-=======
-        self.preview_label.setMinimumHeight(120)
-        self.preview_label.setStyleSheet('background: #111; border-radius: 4px;')
-        right_layout.addWidget(self.preview_label)
-
-        splitter.addWidget(right)
-        splitter.setSizes([720, 400])
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         main_layout.addWidget(splitter)
 
         self.progress_bar = QProgressBar()
@@ -1937,9 +1925,29 @@ class MainWindow(QMainWindow):
         self.other_fields_edit.setText(self.settings.value('other_fields', ''))
         self.gallery_prefix_edit.setText(self.settings.value('gallery_prefix', ''))
         self.timeout_edit.setText(self.settings.value('timeout', '120'))
-<<<<<<< HEAD
-        self.base_text_edit.setPlainText(self.settings.value(
-            'base_description', 'copyright=Q73566113\nlicense=Q18199165'))
+
+        # SDC fields moved out of base_description into upload settings in 0.7.3.
+        # If they were never saved but the old base_description carries them,
+        # migrate the values across on this first run.
+        creator = self.settings.value('creator_sdc', None)
+        copyright_ = self.settings.value('copyright_sdc', None)
+        license_ = self.settings.value('license_sdc', None)
+        base_default = ''  # empty by default; previous default was copyright+license lines
+        base_txt = self.settings.value('base_description', base_default)
+        if creator is None or copyright_ is None or license_ is None:
+            sd, _ = extract_structured_data(base_txt)
+            if creator is None:
+                creator = sd.get('creator', '')
+            if copyright_ is None:
+                copyright_ = sd.get('copyright', 'Q73566113')
+            if license_ is None:
+                license_ = sd.get('license', 'Q18199165')
+            base_txt = _strip_sd_lines(base_txt,
+                                       ('creator', 'copyright', 'license'))
+        self.creator_edit.setText(creator or '')
+        self.copyright_sdc_edit.setText(copyright_ or 'Q73566113')
+        self.license_sdc_edit.setText(license_ or 'Q18199165')
+        self.base_text_edit.setPlainText(base_txt)
         # Expert mode is OFF by default (structured fields shown); honour a saved
         # choice. (The old 'beginner_mode' key, if present, is the inverse.)
         expert = self.settings.value('expert_mode', None)
@@ -1952,24 +1960,21 @@ class MainWindow(QMainWindow):
         self.expert_cb.setChecked(bool(expert))
         self.expert_cb.blockSignals(False)
         self._apply_mode()
-=======
-        self.base_text_edit.setPlainText(self.settings.value('base_description', ''))
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
     def _save_settings(self):
         self.settings.setValue('author', self.author_edit.text())
+        self.settings.setValue('creator_sdc', self.creator_edit.text())
         self.settings.setValue('source', self.source_edit.text())
         self.settings.setValue('permission', self.permission_edit.text())
         self.settings.setValue('license', self.license_edit.text())
+        self.settings.setValue('license_sdc', self.license_sdc_edit.text())
+        self.settings.setValue('copyright_sdc', self.copyright_sdc_edit.text())
         self.settings.setValue('other_templates', self.other_templates_edit.text())
         self.settings.setValue('other_fields', self.other_fields_edit.text())
         self.settings.setValue('gallery_prefix', self.gallery_prefix_edit.text())
         self.settings.setValue('timeout', self.timeout_edit.text())
         self.settings.setValue('base_description', self.base_text_edit.toPlainText())
-<<<<<<< HEAD
         self.settings.setValue('expert_mode', self.expert_cb.isChecked())
-=======
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
     def _on_save_settings(self):
         """Explicitly persist the current settings (button + on close)."""
@@ -1977,7 +1982,6 @@ class MainWindow(QMainWindow):
         self.settings.sync()
         self.status_bar.showMessage('Settings saved.', 3000)
 
-<<<<<<< HEAD
     # ── Settings import/export as a plain text file ──────────────────────────
 
     # Section markers used in the exported text file.
@@ -1986,7 +1990,8 @@ class MainWindow(QMainWindow):
     _BLOCK_FILE_BEGIN = '=== file_description ==='
     _BLOCK_FILE_END = '=== end file_description ==='
     # Single-line keys written as "key = value".
-    _FILE_KEYS = ('author', 'source', 'permission', 'license', 'other_templates',
+    _FILE_KEYS = ('author', 'creator_sdc', 'source', 'permission', 'license',
+                  'license_sdc', 'copyright_sdc', 'other_templates',
                   'other_fields', 'gallery_prefix', 'timeout', 'expert_mode')
 
     def _save_settings_to_file(self):
@@ -1999,9 +2004,12 @@ class MainWindow(QMainWindow):
 
         values = {
             'author': self.author_edit.text(),
+            'creator_sdc': self.creator_edit.text(),
             'source': self.source_edit.text(),
             'permission': self.permission_edit.text(),
             'license': self.license_edit.text(),
+            'license_sdc': self.license_sdc_edit.text(),
+            'copyright_sdc': self.copyright_sdc_edit.text(),
             'other_templates': self.other_templates_edit.text(),
             'other_fields': self.other_fields_edit.text(),
             'gallery_prefix': self.gallery_prefix_edit.text(),
@@ -2097,9 +2105,12 @@ class MainWindow(QMainWindow):
 
         setters = {
             'author': self.author_edit.setText,
+            'creator_sdc': self.creator_edit.setText,
             'source': self.source_edit.setText,
             'permission': self.permission_edit.setText,
             'license': self.license_edit.setText,
+            'license_sdc': self.license_sdc_edit.setText,
+            'copyright_sdc': self.copyright_sdc_edit.setText,
             'other_templates': self.other_templates_edit.setText,
             'other_fields': self.other_fields_edit.setText,
             'gallery_prefix': self.gallery_prefix_edit.setText,
@@ -2132,8 +2143,6 @@ class MainWindow(QMainWindow):
         self.logger.info('Settings loaded from %s%s', path, note)
         self.status_bar.showMessage(f'Settings loaded from {path}.{note}', 6000)
 
-=======
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
     def closeEvent(self, event):
         # Persist settings when the window is closed.
         self._save_settings()
@@ -2203,31 +2212,47 @@ class MainWindow(QMainWindow):
     # ── Table ────────────────────────────────────────────────────────────────
 
     def add_files(self):
-<<<<<<< HEAD
         pattern = ' '.join('*' + ext for ext in IMAGE_EXTS)
         files, _ = QFileDialog.getOpenFileNames(
             self, 'Select image files', '', f'Images ({pattern})'
-=======
-        files, _ = QFileDialog.getOpenFileNames(
-            self, 'Select image files', '',
-            'Images (*.jpg *.jpeg *.png *.gif *.tif *.tiff *.svg *.webp)'
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
         )
+        added, failed = 0, 0
         for filepath in files:
-            self._add_row(filepath)
-        if files:
-            self.logger.debug('%d file(s) added to the table.', len(files))
+            try:
+                self._add_row(filepath)
+                added += 1
+            except Exception as e:
+                failed += 1
+                self.logger.warning(
+                    'Failed to add file %r: %s', filepath, e)
+        if added:
+            self.logger.debug('%d file(s) added to the table.', added)
+        if failed:
+            self.status_bar.showMessage(
+                f'{added} file(s) added, {failed} skipped (see log).', 6000)
 
-<<<<<<< HEAD
     def _add_dropped_files(self, paths):
-        """Add image files dropped onto the table."""
-        for filepath in paths:
-            self._add_row(filepath)
-        if paths:
-            self.logger.debug('%d file(s) added via drag-and-drop.', len(paths))
+        """Add image files dropped onto the table.
 
-=======
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
+        Each file is processed independently: a failure on one file (bad
+        image, permission error, unreadable EXIF) is logged and skipped so
+        the rest of the drop still succeeds.
+        """
+        added, failed = 0, 0
+        for filepath in paths:
+            try:
+                self._add_row(filepath)
+                added += 1
+            except Exception as e:
+                failed += 1
+                self.logger.warning(
+                    'Failed to add dropped file %r: %s', filepath, e)
+        if added:
+            self.logger.debug('%d file(s) added via drag-and-drop.', added)
+        if failed:
+            self.status_bar.showMessage(
+                f'{added} file(s) added, {failed} skipped (see log).', 6000)
+
     def _ext_for_row(self, row):
         """Return the (fixed) extension of a row's source file, e.g. '.jpg'."""
         item = self.table.item(row, self.COL_FILENAME)
@@ -2288,7 +2313,6 @@ class MainWindow(QMainWindow):
     def clear_all(self):
         self.table.setRowCount(0)
 
-<<<<<<< HEAD
     def _selected_row(self):
         rows = list(set(i.row() for i in self.table.selectedItems()))
         return rows[0] if len(rows) == 1 else None
@@ -2301,19 +2325,6 @@ class MainWindow(QMainWindow):
             return
 
         self._load_selected_desc()
-=======
-    def on_row_selected(self):
-        rows = list(set(i.row() for i in self.table.selectedItems()))
-        if len(rows) != 1:
-            self.file_desc_edit.setPlaceholderText(
-                'Select a single file to edit its description.')
-            return
-        row = rows[0]
-        desc = self.table.item(row, self.COL_DESC)
-        self.file_desc_edit.blockSignals(True)
-        self.file_desc_edit.setPlainText(desc.text() if desc else '')
-        self.file_desc_edit.blockSignals(False)
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
 
         filepath = self.table.item(row, self.COL_FILENAME).data(Qt.UserRole)
         if filepath and os.path.exists(filepath):
@@ -2322,7 +2333,6 @@ class MainWindow(QMainWindow):
                 self.preview_label.setPixmap(
                     pix.scaled(300, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
-<<<<<<< HEAD
     def _load_selected_desc(self):
         """Load the selected row's description into the active per-file editor."""
         row = self._selected_row()
@@ -2395,15 +2405,6 @@ class MainWindow(QMainWindow):
         finally:
             self._loading_desc = False
 
-=======
-    def on_file_desc_changed(self):
-        rows = list(set(i.row() for i in self.table.selectedItems()))
-        if len(rows) != 1:
-            return
-        row = rows[0]
-        self.table.item(row, self.COL_DESC).setText(self.file_desc_edit.toPlainText())
-
->>>>>>> 5102451ca8b0c14c50b280d9f63bd837eff8c5a1
     # ── Upload ───────────────────────────────────────────────────────────────
 
     def start_upload(self):
@@ -2455,9 +2456,22 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.upload_btn.setEnabled(False)
 
+        # creator / copyright / license live in the upload settings; prepend
+        # them to the base description so the worker's SDC extractor picks
+        # them up alongside the user-authored base text.
+        base_lines = []
+        for key, val in (('creator',   self.creator_edit.text().strip()),
+                         ('copyright', self.copyright_sdc_edit.text().strip()),
+                         ('license',   self.license_sdc_edit.text().strip())):
+            if val:
+                base_lines.append(f'{key}={val}')
+        base_text = self.base_text_edit.toPlainText()
+        if base_lines:
+            base_text = '\n'.join(base_lines) + '\n' + base_text
+
         self.worker = UploadWorker(
             self.api, rows,
-            self.base_text_edit.toPlainText(),
+            base_text,
             self.gallery_prefix_edit.text(),
             self.ignore_warnings_cb.isChecked()
         )
