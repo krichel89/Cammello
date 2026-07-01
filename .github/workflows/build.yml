@@ -1,8 +1,7 @@
-name: Build Mac App
 on:
   release:
     types: [published]
-    workflow_dispatch: # Ermöglicht den manuellen Start im Browser
+  workflow_dispatch:
 
 jobs:
   build-mac:
@@ -14,7 +13,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install Dependencies
         run: |
@@ -31,5 +30,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Cammello_Mac.zip
+          tag_name: v0.7.4
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}'
