@@ -4,6 +4,50 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.6] - 2026-07-02
+
+### Added
+- New read-only table column "Effective (base + file)" that shows, per row, the
+  combined description as it will be uploaded: creator/copyright/license (from
+  Upload settings) + the base description + the per-file description. It updates
+  live when any of those change, making the effect of the base description on
+  each file visible in the table.
+
+## [0.8.5] - 2026-07-02
+
+### Changed
+- The three section headings (Upload settings, Base description, Selected file)
+  are highlighted with a bold, colored title badge.
+
+## [0.8.4] - 2026-07-02
+
+### Fixed
+- The per-file editor writes to the table's Description column live on every
+  edit again (as before 0.8.2). The 0.8.2 "update on field switch only"
+  trigger depended on GUI focus events (editingFinished / focus-out) that did
+  not fire reliably in every environment, which could make edits appear not to
+  be saved. Live sync uses textChanged and does not depend on focus events.
+  The robust item-based commit target from 0.8.3 is kept, so edits still land
+  on the correct file after sorting or row removal.
+
+## [0.8.3] - 2026-07-02
+
+### Fixed
+- Per-file edits could be written to the wrong row (or appear to go missing)
+  after the table was sorted or a row was removed, because the editor tracked a
+  fixed row number that then pointed at a different file. The editor is now
+  bound to the file's table item, so a commit always targets the correct file
+  regardless of sorting or removal; a removed item is detected and skipped.
+  The description is committed to the table on field switch and on row change.
+
+## [0.8.2] - 2026-07-02
+
+### Changed
+- The per-file editor writes its changes into the table's Description column on
+  field switch (a field losing focus / editing finished) rather than on every
+  keystroke. Row switching, expert-mode toggle, upload start, bulk edit and
+  save-to-file each flush the current edit first, so no edit is lost.
+
 ## [0.8.1] - 2026-07-02
 
 ### Changed

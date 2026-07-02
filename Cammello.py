@@ -1,9 +1,43 @@
 #!/usr/bin/env python3
 """
-Cammello v0.8.1 - Batch upload tool for Wikimedia Commons
+Cammello v0.8.6 - Batch upload tool for Wikimedia Commons
 
 Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
+
+New in 0.8.6:
+  * New read-only table column "Effective (base + file)" shows, per row, the
+    combined description as it will be uploaded: the creator/copyright/license
+    from Upload settings, the base description, and the per-file description.
+    It updates live when any of those change, so the effect of the base
+    description on each file is visible in the table.
+
+New in 0.8.5:
+  * The three section headings (Upload settings, Base description, Selected
+    file) are highlighted with a bold, colored title badge.
+
+New in 0.8.4:
+  * Fix: the per-file editor now writes to the table's Description column live
+    on every edit again (as before 0.8.2). The 0.8.2 "field switch only"
+    trigger relied on focus events that did not fire reliably in every
+    environment, which could make edits appear unsaved. The robust item-based
+    commit target from 0.8.3 is kept, so live edits still land on the correct
+    file after sorting or row removal.
+
+New in 0.8.3:
+  * Fix: per-file edits could land on the wrong row (or appear to vanish) after
+    sorting or removing rows, because the editor remembered a fixed row number.
+    The editor is now bound to the file's table item, so the commit always
+    targets the correct file even after the table is re-sorted or a row is
+    removed. The per-file description is written to the table on field switch
+    and on row change.
+
+New in 0.8.2:
+  * The per-file editor now writes its changes to the table's Description
+    column on field switch (when a field loses focus / editing finishes),
+    instead of on every keystroke. Switching rows, toggling expert mode,
+    starting an upload, bulk editing and saving settings to file all flush the
+    current edit first, so nothing is lost.
 
 New in 0.8.1:
   * The Wikidata suggestion list is larger and more readable (bigger font,
@@ -152,7 +186,7 @@ from PyQt5.QtWidgets import (
     QStyledItemDelegate, QComboBox, QScrollArea, QCompleter
 )
 from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
-                          QSize, QRegExp, QTimer, QStringListModel)
+                          QSize, QRegExp, QTimer, QStringListModel, QEvent)
 from PyQt5.QtGui import QPixmap, QFont, QDesktopServices, QIcon, QImageReader, QRegExpValidator
 
 try:
@@ -162,7 +196,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.8.1'
+__version__ = '0.8.6'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -267,6 +301,28 @@ WD_FIELD_WIDTH = 220
 
 # Accepted image extensions (used by the file dialog and by drag-and-drop).
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.svg', '.webp')
+
+# Highlighted style for the main section headings (Upload settings, Base
+# description, Selected file): a bold, colored title badge on the group box.
+GROUP_TITLE_STYLE = (
+    'QGroupBox {'
+    ' font-weight: bold;'
+    ' border: 1px solid #b9c6d6;'
+    ' border-radius: 6px;'
+    ' margin-top: 12px;'
+    ' padding-top: 8px;'
+    ' }'
+    'QGroupBox::title {'
+    ' subcontrol-origin: margin;'
+    ' subcontrol-position: top left;'
+    ' left: 10px;'
+    ' padding: 2px 10px;'
+    ' color: white;'
+    ' background: #2a6db0;'
+    ' border-radius: 4px;'
+    ' font-size: 11pt;'
+    ' }'
+)
 
 # Wikidata fields (P170 creator, P6216 copyright, P275 license, P10408
 # created-during, P180 depicts) get a light-blue background and a validator
@@ -1491,12 +1547,27 @@ def split_categories(text):
     return cats, rest
 
 
+class FocusOutTextEdit(QTextEdit):
+    """QTextEdit that emits editingFinished when it loses focus.
+
+    QTextEdit has no built-in editingFinished (unlike QLineEdit); this lets the
+    raw description editor commit to the table on field switch instead of per
+    keystroke.
+    """
+    editingFinished = pyqtSignal()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.editingFinished.emit()
+
+
 class CaptionsEditor(QWidget):
     """A small editor for multilingual captions: one row per language with a
     language dropdown, a text field and a remove button, plus an "Add language"
     button. Always keeps at least one row."""
 
     changed = pyqtSignal()
+    committed = pyqtSignal()   # fires on field switch (editing finished), not per keystroke
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1512,7 +1583,8 @@ class CaptionsEditor(QWidget):
         outer.addLayout(self._rows_box)
 
         add_btn = QPushButton('➕ Add language')
-        add_btn.clicked.connect(lambda: (self.add_row(), self.changed.emit()))
+        add_btn.clicked.connect(
+            lambda: (self.add_row(), self.changed.emit(), self.committed.emit()))
         outer.addWidget(add_btn)
 
         self.add_row()  # start with one empty row
@@ -1547,7 +1619,9 @@ class CaptionsEditor(QWidget):
         entry = {'widget': row_widget, 'combo': combo, 'edit': edit}
         self._rows.append(entry)
         combo.currentIndexChanged.connect(lambda *_: self.changed.emit())
+        combo.currentIndexChanged.connect(lambda *_: self.committed.emit())
         edit.textChanged.connect(lambda *_: self.changed.emit())
+        edit.editingFinished.connect(self.committed)
         remove.clicked.connect(lambda: self._remove(entry))
 
     def _remove(self, entry):
@@ -1556,6 +1630,7 @@ class CaptionsEditor(QWidget):
         if not self._rows:
             self.add_row()  # always keep at least one row
         self.changed.emit()
+        self.committed.emit()
 
     def get_captions(self):
         """Return {lang: value} for all non-empty caption rows."""
@@ -1636,6 +1711,7 @@ class StructuredDescriptionEditor(QWidget):
     """
 
     changed = pyqtSignal()
+    committed = pyqtSignal()   # fires on field switch, not per keystroke
 
     def __init__(self, parent=None, is_base=True):
         super().__init__(parent)
@@ -1646,6 +1722,7 @@ class StructuredDescriptionEditor(QWidget):
         layout.addWidget(QLabel('Captions:'))
         self.captions_editor = CaptionsEditor()
         self.captions_editor.changed.connect(self.changed)
+        self.captions_editor.committed.connect(self.committed)
         layout.addWidget(self.captions_editor)
 
         form = QFormLayout()
@@ -1673,12 +1750,15 @@ class StructuredDescriptionEditor(QWidget):
             self.created_during = None
             self.gallery_suffix = None
 
-        # Signals.
+        # Signals: changed = per keystroke (used by the base live sync);
+        # committed = on field switch / editing finished (used by the per-file
+        # table sync so the table updates when you leave a field, not per char).
         watched = [self.depicts, self.categories]
         if self.is_base:
             watched += [self.created_during, self.gallery_suffix]
         for w in watched:
             w.textChanged.connect(lambda *_: self.changed.emit())
+            w.editingFinished.connect(self.committed)
 
         # Rows.
         form.addRow('Depicts (P180):', self.depicts)
@@ -1698,8 +1778,15 @@ class StructuredDescriptionEditor(QWidget):
         two_lines = self.extra.fontMetrics().lineSpacing() * 2 + 12
         self.extra.setFixedHeight(two_lines)
         self.extra.textChanged.connect(lambda: self.changed.emit())
+        # The extra box is a QTextEdit (no editingFinished); commit on focus out.
+        self.extra.installEventFilter(self)
         layout.addWidget(self.extra)
         layout.addWidget(_VGrip(self.extra, two_lines))
+
+    def eventFilter(self, obj, event):
+        if obj is self.extra and event.type() == QEvent.FocusOut:
+            self.committed.emit()
+        return super().eventFilter(obj, event)
 
     def load(self, text):
         sd, _ = extract_structured_data(text)
@@ -1900,13 +1987,14 @@ class BulkEditDialog(QDialog):
 
 class MainWindow(QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
-            'Description (all)', 'Status']
+            'Description (file)', 'Effective (base + file)', 'Status']
     COL_THUMB = 0
     COL_FILENAME = 1
     COL_TITLE = 2
     COL_DATE = 3
     COL_DESC = 4
-    COL_STATUS = 5
+    COL_EFFECTIVE = 5
+    COL_STATUS = 6
 
     def __init__(self, logger, emitter, gui_handler, log_path):
         super().__init__()
@@ -1920,6 +2008,9 @@ class MainWindow(QMainWindow):
         self.api = None
         self.settings = QSettings(APP_NAME, 'Main')
         self._loading_desc = False  # guard against feedback loops while loading
+        self._editor_item = None     # COL_FILENAME item of the row loaded in the
+        #                              per-file editor; item.row() stays correct
+        #                              even after sorting or row removal.
 
         self._build_ui()
         self._restore_settings()
@@ -2020,7 +2111,9 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(self.COL_FILENAME, 250)
         header.setSectionResizeMode(self.COL_TITLE, QHeaderView.Interactive)
         self.table.setColumnWidth(self.COL_TITLE, 240)
-        header.setSectionResizeMode(self.COL_DESC, QHeaderView.Stretch)
+        header.setSectionResizeMode(self.COL_DESC, QHeaderView.Interactive)
+        self.table.setColumnWidth(self.COL_DESC, 220)
+        header.setSectionResizeMode(self.COL_EFFECTIVE, QHeaderView.Stretch)
         header.setSectionResizeMode(self.COL_STATUS, QHeaderView.Interactive)
         self.table.setColumnWidth(self.COL_STATUS, 150)
 
@@ -2039,6 +2132,7 @@ class MainWindow(QMainWindow):
         right.setMinimumWidth(360)
 
         settings_group = QGroupBox('Upload settings')
+        settings_group.setStyleSheet(GROUP_TITLE_STYLE)
         settings_form = QFormLayout(settings_group)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText('e.g. [[User:Seewolf|Harald Krichel]]')
@@ -2056,6 +2150,10 @@ class MainWindow(QMainWindow):
         _style_wd_field(self.license_sdc_edit)
         self.copyright_sdc_edit = QLineEdit('Q73566113')
         _style_wd_field(self.copyright_sdc_edit)
+        # These SDC values are prepended to every file at upload; keep the
+        # per-row "Effective" preview in sync when they change.
+        for _e in (self.creator_edit, self.license_sdc_edit, self.copyright_sdc_edit):
+            _e.textChanged.connect(lambda *_: self._refresh_all_effective())
         self.other_templates_edit = QLineEdit()
         self.other_templates_edit.setPlaceholderText(
             'e.g. {{WikiPortraits at Berlinale 2026}}')
@@ -2091,6 +2189,7 @@ class MainWindow(QMainWindow):
 
         # ── Base description (for all files) ──
         base_group = QGroupBox('Base description (for all files)')
+        base_group.setStyleSheet(GROUP_TITLE_STYLE)
         base_layout = QVBoxLayout(base_group)
         self.base_text_edit = QTextEdit()
         self.base_text_edit.setPlaceholderText(
@@ -2135,14 +2234,19 @@ class MainWindow(QMainWindow):
 
         # ── Selected file description ──
         file_group = QGroupBox('Selected file – description')
+        file_group.setStyleSheet(GROUP_TITLE_STYLE)
         file_layout = QVBoxLayout(file_group)
-        self.file_desc_edit = QTextEdit()
+        self.file_desc_edit = FocusOutTextEdit()
         self.file_desc_edit.setPlaceholderText(EXAMPLE_FILE_DESCRIPTION)
         self.file_desc_edit.setMinimumHeight(150)
-        self.file_desc_edit.textChanged.connect(self.on_file_desc_changed)
+        # Live sync to the table on every edit (does not depend on focus
+        # events); editingFinished stays connected as a harmless safety net.
+        self.file_desc_edit.textChanged.connect(self._commit_editor)
+        self.file_desc_edit.editingFinished.connect(self._commit_editor)
         file_layout.addWidget(self.file_desc_edit)
         self.file_struct = StructuredDescriptionEditor(is_base=False)
-        self.file_struct.changed.connect(self._on_file_struct_changed)
+        self.file_struct.changed.connect(self._commit_editor)
+        self.file_struct.committed.connect(self._commit_editor)
         self.file_struct.setVisible(False)
         file_layout.addWidget(self.file_struct)
         right_layout.addWidget(file_group)
@@ -2319,6 +2423,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
+        # Make sure the selected file's description is up to date in the table.
+        self._commit_editor()
         values = {
             'author': self.author_edit.text(),
             'creator_sdc': self.creator_edit.text(),
@@ -2670,13 +2776,63 @@ class MainWindow(QMainWindow):
         self.table.setItem(row, self.COL_TITLE, QTableWidgetItem(filename))
         self.table.setItem(row, self.COL_DATE, QTableWidgetItem(date))
         self.table.setItem(row, self.COL_DESC, QTableWidgetItem(''))
+
+        # Effective (base + file) preview, read-only.
+        eff_item = QTableWidgetItem('')
+        eff_item.setFlags(eff_item.flags() & ~Qt.ItemIsEditable)
+        self.table.setItem(row, self.COL_EFFECTIVE, eff_item)
+
         status_item = QTableWidgetItem('—')
         status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(row, self.COL_STATUS, status_item)
 
+        self._refresh_effective(row)
+
         if seen is not None:
             seen.add(norm)
         return True
+
+    def _base_sdc_lines(self):
+        """The creator/copyright/license SDC lines from Upload settings that are
+        prepended to every file's base description at upload time."""
+        lines = []
+        for key, edit in (('creator', self.creator_edit),
+                          ('copyright', self.copyright_sdc_edit),
+                          ('license', self.license_sdc_edit)):
+            val = edit.text().strip()
+            if val:
+                lines.append(f'{key}={val}')
+        return lines
+
+    def _effective_text(self, per_file_text):
+        """The combined description_all for one file, as it will be uploaded:
+        creator/copyright/license (from Upload settings) + base description +
+        the per-file description."""
+        parts = []
+        sdc = self._base_sdc_lines()
+        if sdc:
+            parts.append('\n'.join(sdc))
+        base = self.base_text_edit.toPlainText().strip()
+        if base:
+            parts.append(base)
+        pf = (per_file_text or '').strip()
+        if pf:
+            parts.append(pf)
+        return '\n'.join(parts)
+
+    def _refresh_effective(self, row):
+        if row < 0 or row >= self.table.rowCount():
+            return
+        eff = self.table.item(row, self.COL_EFFECTIVE)
+        if eff is None:
+            return
+        desc_item = self.table.item(row, self.COL_DESC)
+        per_file = desc_item.text() if desc_item else ''
+        eff.setText(self._effective_text(per_file))
+
+    def _refresh_all_effective(self):
+        for r in range(self.table.rowCount()):
+            self._refresh_effective(r)
 
     def remove_selected(self):
         rows = sorted(set(i.row() for i in self.table.selectedItems()), reverse=True)
@@ -2684,6 +2840,8 @@ class MainWindow(QMainWindow):
             self.table.removeRow(row)
 
     def bulk_edit_selected(self):
+        # Commit any pending per-file edit before touching the rows.
+        self._commit_editor()
         rows = sorted(set(i.row() for i in self.table.selectedItems()))
         if not rows:
             QMessageBox.information(
@@ -2702,10 +2860,14 @@ class MainWindow(QMainWindow):
         try:
             for row in rows:
                 self._apply_bulk_field(row, key, value)
+                self._refresh_effective(row)
         finally:
             self.table.setSortingEnabled(was_sorting)
 
-        # Refresh the per-file editor in case the shown row was changed.
+        # Refresh the per-file editor from the (now-updated) table. Clear the
+        # tracked editor row first so the reload does not flush the stale
+        # editor content back over the bulk change.
+        self._editor_item = None
         self.on_row_selected()
         self.status_bar.showMessage(
             f'Applied "{key}" to {len(rows)} file(s).', 6000)
@@ -2755,8 +2917,12 @@ class MainWindow(QMainWindow):
         return rows[0] if len(rows) == 1 else None
 
     def on_row_selected(self):
+        # Flush the row currently in the editor before switching away from it.
+        self._commit_editor()
+
         row = self._selected_row()
         if row is None:
+            self._editor_item = None
             self.file_desc_edit.setPlaceholderText(
                 'Select a single file to edit its description.')
             return
@@ -2785,27 +2951,51 @@ class MainWindow(QMainWindow):
                 self.file_struct.load(text)
         finally:
             self._loading_desc = False
+        # Bind to the file item (not a fixed index) so the commit target stays
+        # correct after sorting or row removal.
+        self._editor_item = (self.table.item(row, self.COL_FILENAME)
+                             if row is not None else None)
 
-    def on_file_desc_changed(self):
+    def _commit_editor(self, expert=None):
+        """Write the per-file editor's current content to the row it was loaded
+        from.
+
+        Called on field switch (a field losing focus / editing finished), on
+        row change, and as a safety flush before reads (upload, bulk edit,
+        save-to-file). The target row is resolved live from the loaded file
+        item (self._editor_item.row()), so it stays correct after sorting or
+        row removal; a removed item reports row() == -1 and is skipped.
+
+        expert: which editor to read; defaults to the current mode. The mode
+        switch passes the OLD mode explicitly (the checkbox is already flipped
+        when its handler runs).
+        """
         if self._loading_desc:
             return
-        row = self._selected_row()
-        if row is None:
+        if self._editor_item is None:
             return
-        self.table.item(row, self.COL_DESC).setText(self.file_desc_edit.toPlainText())
-
-    def _on_file_struct_changed(self):
-        if self._loading_desc:
+        row = self._editor_item.row()
+        if row < 0:
+            return  # the row was removed from the table
+        item = self.table.item(row, self.COL_DESC)
+        if item is None:
             return
-        row = self._selected_row()
-        if row is None:
-            return
-        self.table.item(row, self.COL_DESC).setText(self.file_struct.assemble())
+        if expert is None:
+            expert = self.expert_cb.isChecked()
+        if expert:
+            item.setText(self.file_desc_edit.toPlainText())
+        else:
+            item.setText(self.file_struct.assemble())
+        self._refresh_effective(row)
 
     # ── Expert mode ──────────────────────────────────────────────────────────
 
     def _toggle_expert(self, state):
-        self.settings.setValue('expert_mode', bool(state))
+        new_expert = bool(state)
+        # Flush the currently visible (old-mode) editor before switching, so
+        # edits not yet committed by a field switch are not lost on reload.
+        self._commit_editor(expert=not new_expert)
+        self.settings.setValue('expert_mode', new_expert)
         self._apply_mode()
 
     def _apply_mode(self):
@@ -2830,8 +3020,10 @@ class MainWindow(QMainWindow):
     # base_struct is a synced structured view of it.
     def _on_base_text_changed(self):
         if self._loading_desc:
+            # base_struct -> base_text write; _on_base_struct_changed refreshes.
             return
-        # nothing else to mirror; base_struct is reloaded on toggle/start
+        # User edited the raw base text directly (expert mode).
+        self._refresh_all_effective()
 
     def _on_base_struct_changed(self):
         if self._loading_desc:
@@ -2841,6 +3033,7 @@ class MainWindow(QMainWindow):
             self.base_text_edit.setPlainText(self.base_struct.assemble())
         finally:
             self._loading_desc = False
+        self._refresh_all_effective()
 
     # ── Upload ───────────────────────────────────────────────────────────────
 
@@ -2886,6 +3079,10 @@ class MainWindow(QMainWindow):
         if self.table.rowCount() == 0:
             QMessageBox.warning(self, 'No files', 'Please add files first.')
             return
+
+        # Flush any not-yet-committed edit in the per-file editor to the table
+        # before reading the descriptions.
+        self._commit_editor()
 
         problems = self._qid_problems()
         if problems:
