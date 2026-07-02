@@ -4,6 +4,52 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-07-02
+
+### Changed
+- The Wikidata suggestion list is larger and more readable: bigger font, wider
+  popup and more visible rows.
+
+### Note
+- No change was needed for the maintenance category — every upload already
+  adds `[[Category:Uploaded with Cammello]]` (present since the early
+  "automatic maintenance category" feature). This was verified, not added.
+
+## [0.8.0] - 2026-07-02
+
+### Added
+- Wikidata name search on the Creator, Depicts and Created-during fields: type
+  a name (e.g. "Harald Krichel") to get a live suggestion list showing label,
+  description and QID (Wikidata `wbsearchentities` API). Selecting an entry
+  inserts the QID; for the multi-value Depicts field only the current token is
+  replaced. These fields now accept free text while typing.
+- Pre-upload validation: before uploading, all Wikidata fields (creator,
+  copyright, license, depicts, created-during — in the upload settings, the
+  base description and every per-file description) are checked to contain valid
+  QIDs. If not, the upload is blocked with a list of the offending fields.
+- Bulk edit: select several rows (Ctrl/Shift-click) and set one field for all
+  of them at once via a dialog — Depicts (with Wikidata search), Categories,
+  Caption (en/de) or Date. An empty value clears the field.
+
+### Changed
+- The strict "Q + digits only" validator is kept on the Copyright and License
+  fields but removed from the now-searchable Creator, Depicts and
+  Created-during fields (they are validated before upload instead).
+
+### Note
+- The live Wikidata search requires network access to www.wikidata.org.
+
+## [0.7.5] - 2026-07-02
+
+### Added
+- Duplicate check when adding files: a file already in the table (matched by
+  its normalized absolute source path) is skipped rather than added a second
+  time. Works for both drag-and-drop and the file dialog; the status bar
+  reports the number of duplicates skipped.
+- The file table is sortable by clicking a column header (e.g. "Source file"
+  or "Target filename"). Sorting is temporarily disabled while files are being
+  inserted so rows are not reshuffled while only partially populated.
+
 ## [0.7.4] - 2026-07-02
 
 ### Fixed

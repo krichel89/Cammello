@@ -1,9 +1,34 @@
 #!/usr/bin/env python3
 """
-Cammello v0.7.4 - Batch upload tool for Wikimedia Commons
+Cammello v0.8.1 - Batch upload tool for Wikimedia Commons
 
 Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
+
+New in 0.8.1:
+  * The Wikidata suggestion list is larger and more readable (bigger font,
+    wider popup, more visible rows).
+  * (No change needed for the maintenance category: every upload already
+    receives [[Category:Uploaded with Cammello]].)
+
+New in 0.8.0:
+  * Wikidata name search on the Creator, Depicts and Created-during fields:
+    type a name (e.g. "Harald Krichel") and pick from a live suggestion list
+    that shows label, description and QID (via the wbsearchentities API).
+    Selecting an entry inserts the QID. These fields now accept free text
+    while typing; their values are checked to be valid QIDs before upload.
+  * Bulk edit: select several rows (Ctrl/Shift-click) and set one field
+    (Depicts, Categories, Caption en/de, or Date) for all of them at once via
+    a small dialog.
+
+New in 0.7.5:
+  * Duplicate check when adding files: a file already in the table (matched by
+    its absolute source path) is skipped instead of added twice. Applies to
+    both drag-and-drop and the file dialog; the status bar reports how many
+    duplicates were skipped.
+  * The file table is sortable — click the "Source file" or "Target filename"
+    header (or any other column header) to sort. Sorting is switched off while
+    files are being inserted so rows are not reshuffled mid-population.
 
 New in 0.7.4:
   * Fix: dragging several files at once loaded only a single file. The extra
@@ -124,9 +149,10 @@ from PyQt5.QtWidgets import (
     QTextEdit, QFileDialog, QMessageBox, QProgressBar, QSplitter,
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
     QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit,
-    QStyledItemDelegate, QComboBox, QScrollArea
+    QStyledItemDelegate, QComboBox, QScrollArea, QCompleter
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QObject, QUrl, QSize, QRegExp
+from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
+                          QSize, QRegExp, QTimer, QStringListModel)
 from PyQt5.QtGui import QPixmap, QFont, QDesktopServices, QIcon, QImageReader, QRegExpValidator
 
 try:
@@ -136,7 +162,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.7.4'
+__version__ = '0.8.1'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -250,13 +276,223 @@ WD_BG = '#e6f2ff'
 _WD_SINGLE_RE = QRegExp(r'^(Q\d+)?$')
 _WD_LIST_RE = QRegExp(r'^\s*(Q\d+(\s*[;,]\s*Q\d+)*\s*[;,]?\s*)?$')
 
-def _style_wd_field(edit, multi=False):
-    """Apply the Wikidata look-and-feel: light-blue bg + QID-only validator."""
+# Wikidata entity search (verified: action=wbsearchentities returns a "search"
+# array with id/label/description). Public, unauthenticated endpoint.
+WD_API_ENDPOINT = 'https://www.wikidata.org/w/api.php'
+WD_USER_AGENT = (
+    f'{APP_NAME}/{__version__} '
+    f'(Python {sys.version_info.major}.{sys.version_info.minor}; PyQt5)'
+)
+# A single, complete QID.
+QID_RE = re.compile(r'^Q\d+$')
+
+def _style_wd_field(edit, multi=False, searchable=False):
+    """Apply the Wikidata look-and-feel: light-blue background.
+
+    searchable=True means the user may type a name to search Wikidata, so the
+    strict "Q + digits only" validator is NOT applied (letters must be
+    allowed). Such fields are checked for valid QIDs before upload instead.
+    Non-searchable fields keep the strict QID validator.
+    """
     edit.setStyleSheet(f'QLineEdit {{ background: {WD_BG}; }}')
-    edit.setValidator(QRegExpValidator(_WD_LIST_RE if multi else _WD_SINGLE_RE,
-                                       edit))
+    if not searchable:
+        edit.setValidator(QRegExpValidator(_WD_LIST_RE if multi else _WD_SINGLE_RE,
+                                           edit))
     if not multi:
         edit.setMaximumWidth(WD_FIELD_WIDTH)
+
+
+def current_token(text, multi):
+    """Return the token currently being edited.
+
+    For a multi-value (semicolon-separated) field this is the part after the
+    last ';'. For a single-value field it is the whole (stripped) text.
+    """
+    if multi:
+        return text.rpartition(';')[2].strip()
+    return text.strip()
+
+
+class WikidataSearchWorker(QThread):
+    """Runs one wbsearchentities query off the GUI thread.
+
+    Emits results(seq, items) where items is a list of (qid, label,
+    description) tuples. seq lets the caller ignore stale (out-of-order)
+    responses. Network/parse errors yield an empty list rather than raising.
+    """
+    results = pyqtSignal(int, list)
+
+    def __init__(self, query, lang, seq, timeout=8, parent=None):
+        super().__init__(parent)
+        self._query = query
+        self._lang = lang or 'en'
+        self._seq = seq
+        self._timeout = timeout
+
+    def run(self):
+        items = []
+        try:
+            resp = requests.get(
+                WD_API_ENDPOINT,
+                params={
+                    'action': 'wbsearchentities',
+                    'search': self._query,
+                    'language': self._lang,
+                    'uselang': self._lang,
+                    'type': 'item',
+                    'limit': 10,
+                    'format': 'json',
+                },
+                headers={'User-Agent': WD_USER_AGENT},
+                timeout=self._timeout,
+            )
+            data = resp.json()
+            for entry in data.get('search', []):
+                items.append((
+                    entry.get('id', ''),
+                    entry.get('label', ''),
+                    entry.get('description', ''),
+                ))
+        except Exception:
+            items = []
+        self.results.emit(self._seq, items)
+
+
+class WikidataCompleter(QCompleter):
+    """Completer whose popup lists 'label — description (Qxxx)' entries.
+
+    On selection it writes the bare QID into the field (for a multi-value
+    field it replaces only the token after the last ';'). The suggestion list
+    is supplied externally via set_suggestions(); the completer does not
+    filter it (UnfilteredPopupCompletion), because filtering already happened
+    on Wikidata's side.
+    """
+    _QID_IN_TEXT = re.compile(r'\((Q\d+)\)\s*$')
+
+    def __init__(self, multi=False, parent=None):
+        super().__init__(parent)
+        self._multi = multi
+        self._model = QStringListModel(self)
+        self.setModel(self._model)
+        self.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        self.setCaseSensitivity(Qt.CaseInsensitive)
+        # Make the suggestion list a bit bigger / more readable.
+        self.setMaxVisibleItems(12)
+        popup = self.popup()
+        popup.setMinimumWidth(420)
+        popup.setStyleSheet(
+            'QListView { font-size: 12pt; }'
+            ' QListView::item { padding: 4px 6px; }')
+
+    def set_suggestions(self, display_list):
+        self._model.setStringList(display_list)
+
+    def splitPath(self, path):  # noqa: N802 (Qt override)
+        # Unfiltered popup: matching is not needed, return the token as-is.
+        return [current_token(path, self._multi)]
+
+    def pathFromIndex(self, index):  # noqa: N802 (Qt override)
+        display = self.model().data(index, Qt.DisplayRole) or ''
+        m = self._QID_IN_TEXT.search(display)
+        qid = m.group(1) if m else display
+        if not self._multi:
+            return qid
+        widget = self.widget()
+        text = widget.text() if widget is not None else ''
+        head, sep, _tail = text.rpartition(';')
+        return f'{head}; {qid}' if sep else qid
+
+
+class WikidataSuggest(QObject):
+    """Wire a QLineEdit to live Wikidata suggestions.
+
+    Debounces typing, runs wbsearchentities in a background thread, and feeds
+    a WikidataCompleter. Only the newest query's results are shown (older,
+    slower responses are ignored via a sequence counter).
+    """
+    def __init__(self, line_edit, lang='en', multi=False, timeout=8, parent=None):
+        super().__init__(parent or line_edit)
+        self.edit = line_edit
+        self.lang = lang
+        self.multi = multi
+        self.timeout = timeout
+        self._enabled = True
+        self._seq = 0
+        self._workers = set()
+
+        self.completer = WikidataCompleter(multi=multi, parent=self.edit)
+        self.edit.setCompleter(self.completer)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(300)
+        self._timer.timeout.connect(self._run_search)
+
+        # textEdited fires only on user input, not on programmatic setText,
+        # so setting the QID on selection does not trigger another search.
+        self.edit.textEdited.connect(self._on_text_edited)
+
+    def set_enabled(self, on):
+        """Turn suggestions on/off (used when a field is not a Wikidata field)."""
+        self._enabled = bool(on)
+        if not on:
+            self._timer.stop()
+            self.completer.set_suggestions([])
+
+    def _on_text_edited(self, _text):
+        if not self._enabled:
+            return
+        token = current_token(self.edit.text(), self.multi)
+        # Don't search bare QIDs or very short fragments.
+        if len(token) < 2 or QID_RE.match(token):
+            self._timer.stop()
+            return
+        self._timer.start()
+
+    def _run_search(self):
+        token = current_token(self.edit.text(), self.multi)
+        if len(token) < 2 or QID_RE.match(token):
+            return
+        self._seq += 1
+        worker = WikidataSearchWorker(token, self.lang, self._seq,
+                                      self.timeout, parent=self)
+        worker.results.connect(self._on_results)
+        self._workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._workers.discard(w))
+        worker.start()
+
+    def _on_results(self, seq, items):
+        if seq != self._seq:
+            return  # stale response, a newer query is in flight
+        display = []
+        for qid, label, desc in items:
+            label = label or qid
+            display.append(f'{label} — {desc} ({qid})' if desc
+                           else f'{label} ({qid})')
+        self.completer.set_suggestions(display)
+        if display:
+            self.completer.complete()
+
+
+def invalid_qid_problems(label, value, multi=False):
+    """Return a list of human-readable problems if value is not valid QID(s).
+
+    Empty value is allowed (returns no problems). For multi=True the value is
+    split on ';'/',' and every token must be a QID.
+    """
+    value = (value or '').strip()
+    if not value:
+        return []
+    problems = []
+    if multi:
+        tokens = [t.strip() for t in re.split(r'[;,]', value) if t.strip()]
+        bad = [t for t in tokens if not QID_RE.match(t)]
+        if bad:
+            problems.append(f'{label}: not a QID -> ' + ', '.join(bad))
+    else:
+        if not QID_RE.match(value):
+            problems.append(f'{label}: not a QID -> {value}')
+    return problems
 
 
 _SD_LINE_RE = re.compile(r'^\s*([a-z_]+)\s*=\s*')
@@ -1417,7 +1653,8 @@ class StructuredDescriptionEditor(QWidget):
         # Depicts (P180) — multi-value Wikidata field, semicolon-separated.
         self.depicts = QLineEdit()
         self.depicts.setPlaceholderText('e.g. Q42; Q64')
-        _style_wd_field(self.depicts, multi=True)
+        _style_wd_field(self.depicts, multi=True, searchable=True)
+        self._depicts_suggest = WikidataSuggest(self.depicts, multi=True)
 
         # Categories — plain text (not a Wikidata field).
         self.categories = QLineEdit()
@@ -1427,7 +1664,8 @@ class StructuredDescriptionEditor(QWidget):
         if self.is_base:
             self.created_during = QLineEdit()
             self.created_during.setPlaceholderText('e.g. Q124692383')
-            _style_wd_field(self.created_during)
+            _style_wd_field(self.created_during, searchable=True)
+            self._cd_suggest = WikidataSuggest(self.created_during, multi=False)
 
             self.gallery_suffix = QLineEdit()
             self.gallery_suffix.setPlaceholderText('e.g. Berlinale 2026')
@@ -1590,6 +1828,76 @@ class FileDropTableWidget(QTableWidget):
             super().dropEvent(event)
 
 
+class BulkEditDialog(QDialog):
+    """Pick one field and a value to apply to all selected rows.
+
+    Fields:
+      depicts / categories  -> per-file description keys
+      caption:en / caption:de -> per-file caption in that language
+      date                  -> the Date column
+    An empty value clears that field on the selected rows.
+    """
+    FIELDS = [
+        ('Depicts (P180)', 'depicts'),
+        ('Categories', 'categories'),
+        ('Caption (en)', 'caption:en'),
+        ('Caption (de)', 'caption:de'),
+        ('Date', 'date'),
+    ]
+
+    def __init__(self, n_selected, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Bulk edit selected files')
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            f'Apply a value to the {n_selected} selected file(s):'))
+
+        form = QFormLayout()
+        self.field_combo = QComboBox()
+        for label, key in self.FIELDS:
+            self.field_combo.addItem(label, key)
+        self.value_edit = QLineEdit()
+        form.addRow('Field:', self.field_combo)
+        form.addRow('Value:', self.value_edit)
+        layout.addLayout(form)
+
+        self.hint = QLabel('')
+        self.hint.setStyleSheet('color:#888;')
+        self.hint.setWordWrap(True)
+        layout.addWidget(self.hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        # Wikidata suggestions on the value field, active only for Depicts.
+        self._suggest = WikidataSuggest(self.value_edit, multi=True)
+        self.field_combo.currentIndexChanged.connect(self._on_field_changed)
+        self._on_field_changed()
+
+    def _on_field_changed(self):
+        key = self.field_combo.currentData()
+        is_depicts = (key == 'depicts')
+        self._suggest.set_enabled(is_depicts)
+        if is_depicts:
+            _style_wd_field(self.value_edit, multi=True, searchable=True)
+        else:
+            self.value_edit.setStyleSheet('')
+        hints = {
+            'depicts': 'Semicolon-separated QIDs; type a name to search Wikidata.',
+            'categories': 'Semicolon-separated, without [[Category:]].',
+            'caption:en': 'Sets the English SDC caption.',
+            'caption:de': 'Sets the German SDC caption.',
+            'date': 'Sets the Date column (e.g. 2026-02-15).',
+        }
+        self.hint.setText(hints.get(key, '') + '  Empty value clears this field.')
+
+    def result_field_value(self):
+        return self.field_combo.currentData(), self.value_edit.text().strip()
+
+
 class MainWindow(QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
             'Description (all)', 'Status']
@@ -1652,6 +1960,8 @@ class MainWindow(QMainWindow):
         add_btn.clicked.connect(self.add_files)
         remove_btn = QPushButton('➖ Remove selected')
         remove_btn.clicked.connect(self.remove_selected)
+        bulk_btn = QPushButton('✏ Bulk edit selected')
+        bulk_btn.clicked.connect(self.bulk_edit_selected)
         clear_btn = QPushButton('🗑 Clear all')
         clear_btn.clicked.connect(self.clear_all)
 
@@ -1668,6 +1978,7 @@ class MainWindow(QMainWindow):
         toolbar.addSpacing(20)
         toolbar.addWidget(add_btn)
         toolbar.addWidget(remove_btn)
+        toolbar.addWidget(bulk_btn)
         toolbar.addWidget(clear_btn)
         toolbar.addStretch()
         toolbar.addWidget(self.ignore_warnings_cb)
@@ -1714,8 +2025,13 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(self.COL_STATUS, 150)
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.itemSelectionChanged.connect(self.on_row_selected)
+        # Click a column header to sort. Sorting is switched off while rows
+        # are being inserted (see _add_paths) so the table is not reshuffled
+        # mid-population.
+        self.table.setSortingEnabled(True)
         splitter.addWidget(self.table)
 
         right = QWidget()
@@ -1728,7 +2044,8 @@ class MainWindow(QMainWindow):
         self.author_edit.setPlaceholderText('e.g. [[User:Seewolf|Harald Krichel]]')
         self.creator_edit = QLineEdit()
         self.creator_edit.setPlaceholderText('e.g. Q640')
-        _style_wd_field(self.creator_edit)
+        _style_wd_field(self.creator_edit, searchable=True)
+        self._creator_suggest = WikidataSuggest(self.creator_edit, multi=False)
         self.source_edit = QLineEdit('{{own}}')
         self.source_edit.setPlaceholderText('e.g. {{own}}')
         self.permission_edit = QLineEdit()
@@ -2216,42 +2533,82 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(
             self, 'Select image files', '', f'Images ({pattern})'
         )
-        added, failed = 0, 0
-        for filepath in files:
-            try:
-                self._add_row(filepath)
-                added += 1
-            except Exception as e:
-                failed += 1
-                self.logger.warning(
-                    'Failed to add file %r: %s', filepath, e)
+        added, dups, failed = self._add_paths(files)
         if added:
             self.logger.debug('%d file(s) added to the table.', added)
-        if failed:
-            self.status_bar.showMessage(
-                f'{added} file(s) added, {failed} skipped (see log).', 6000)
+        self._report_add_result(added, dups, failed)
 
     def _add_dropped_files(self, paths):
         """Add image files dropped onto the table.
 
-        Each file is processed independently: a failure on one file (bad
-        image, permission error, unreadable EXIF) is logged and skipped so
-        the rest of the drop still succeeds.
+        Files already present in the table (matched by absolute source path)
+        are skipped as duplicates. Each remaining file is processed
+        independently: a failure on one file (bad image, permission error,
+        unreadable EXIF) is logged and skipped so the rest of the drop still
+        succeeds.
         """
-        added, failed = 0, 0
-        for filepath in paths:
-            try:
-                self._add_row(filepath)
-                added += 1
-            except Exception as e:
-                failed += 1
-                self.logger.warning(
-                    'Failed to add dropped file %r: %s', filepath, e)
+        added, dups, failed = self._add_paths(paths)
         if added:
             self.logger.debug('%d file(s) added via drag-and-drop.', added)
+        self._report_add_result(added, dups, failed)
+
+    def _add_paths(self, paths):
+        """Add the given files to the table, skipping duplicates.
+
+        Returns (added, duplicates, failed). Sorting is disabled for the
+        duration of the batch so setSortingEnabled does not reshuffle rows
+        while they are only partially populated.
+        """
+        was_sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        seen = self._current_filepaths()
+        added = duplicates = failed = 0
+        try:
+            for filepath in paths:
+                try:
+                    if self._add_row(filepath, seen):
+                        added += 1
+                    else:
+                        duplicates += 1
+                        self.logger.debug('Skipping duplicate file: %r', filepath)
+                except Exception as e:
+                    failed += 1
+                    self.logger.warning('Failed to add file %r: %s', filepath, e)
+        finally:
+            self.table.setSortingEnabled(was_sorting)
+        return added, duplicates, failed
+
+    def _report_add_result(self, added, duplicates, failed):
+        parts = []
+        if added:
+            parts.append(f'{added} added')
+        if duplicates:
+            parts.append(f'{duplicates} duplicate(s) skipped')
         if failed:
-            self.status_bar.showMessage(
-                f'{added} file(s) added, {failed} skipped (see log).', 6000)
+            parts.append(f'{failed} skipped (see log)')
+        if parts:
+            self.status_bar.showMessage(', '.join(parts) + '.', 6000)
+
+    @staticmethod
+    def _norm_path(filepath):
+        """Normalized absolute path for duplicate comparison.
+
+        Uses os.path.normcase so the match is case-insensitive on Windows.
+        Note: this compares path strings, so two different paths pointing at
+        the same file (e.g. via symlink or hardlink) are NOT detected as
+        duplicates.
+        """
+        return os.path.normcase(os.path.abspath(filepath))
+
+    def _current_filepaths(self):
+        """Set of normalized source paths currently in the table."""
+        result = set()
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, self.COL_FILENAME)
+            fp = item.data(Qt.UserRole) if item else None
+            if fp:
+                result.add(self._norm_path(fp))
+        return result
 
     def _ext_for_row(self, row):
         """Return the (fixed) extension of a row's source file, e.g. '.jpg'."""
@@ -2274,7 +2631,19 @@ class MainWindow(QMainWindow):
             self.logger.debug('Thumbnail failed for %s: %s', filepath, e)
         return None
 
-    def _add_row(self, filepath):
+    def _add_row(self, filepath, seen=None):
+        """Insert a row for filepath. Returns True if added, False if it was
+        already present (duplicate, matched by normalized absolute path).
+
+        seen: optional set of already-present normalized paths. When given it
+        is used for the duplicate check and updated in place, so a batch add
+        does not re-scan the whole table for every file.
+        """
+        norm = self._norm_path(filepath)
+        existing = seen if seen is not None else self._current_filepaths()
+        if norm in existing:
+            return False
+
         row = self.table.rowCount()
         self.table.insertRow(row)
         filename = os.path.basename(filepath)
@@ -2305,10 +2674,78 @@ class MainWindow(QMainWindow):
         status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(row, self.COL_STATUS, status_item)
 
+        if seen is not None:
+            seen.add(norm)
+        return True
+
     def remove_selected(self):
         rows = sorted(set(i.row() for i in self.table.selectedItems()), reverse=True)
         for row in rows:
             self.table.removeRow(row)
+
+    def bulk_edit_selected(self):
+        rows = sorted(set(i.row() for i in self.table.selectedItems()))
+        if not rows:
+            QMessageBox.information(
+                self, 'No selection',
+                'Please select one or more rows first '
+                '(Ctrl/Shift-click to select several).')
+            return
+        dlg = BulkEditDialog(len(rows), self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        key, value = dlg.result_field_value()
+
+        # Disable sorting so row indices stay valid while we write cells.
+        was_sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        try:
+            for row in rows:
+                self._apply_bulk_field(row, key, value)
+        finally:
+            self.table.setSortingEnabled(was_sorting)
+
+        # Refresh the per-file editor in case the shown row was changed.
+        self.on_row_selected()
+        self.status_bar.showMessage(
+            f'Applied "{key}" to {len(rows)} file(s).', 6000)
+
+    def _apply_bulk_field(self, row, key, value):
+        """Apply one (key, value) to a single row."""
+        if key == 'date':
+            item = self.table.item(row, self.COL_DATE)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(row, self.COL_DATE, item)
+            item.setText(value)
+            return
+
+        # Description-based fields: round-trip through a scratch editor so the
+        # existing load/assemble logic (captions, depicts, categories, extra)
+        # is reused and other fields on the row are preserved.
+        if not hasattr(self, '_scratch_editor'):
+            self._scratch_editor = StructuredDescriptionEditor(is_base=False)
+        ed = self._scratch_editor
+        desc_item = self.table.item(row, self.COL_DESC)
+        if desc_item is None:
+            desc_item = QTableWidgetItem('')
+            self.table.setItem(row, self.COL_DESC, desc_item)
+        ed.load(desc_item.text())
+
+        if key == 'depicts':
+            ed.depicts.setText(value)
+        elif key == 'categories':
+            ed.categories.setText(value)
+        elif key.startswith('caption:'):
+            lang = key.split(':', 1)[1]
+            caps = ed.captions_editor.get_captions()
+            if value:
+                caps[lang] = value
+            else:
+                caps.pop(lang, None)
+            ed.captions_editor.set_captions(caps)
+
+        desc_item.setText(ed.assemble())
 
     def clear_all(self):
         self.table.setRowCount(0)
@@ -2407,12 +2844,59 @@ class MainWindow(QMainWindow):
 
     # ── Upload ───────────────────────────────────────────────────────────────
 
+    def _qid_problems(self):
+        """Collect fields whose Wikidata value is not a valid QID.
+
+        Covers the searchable fields (creator, depicts, created_during) plus
+        the fixed copyright/license fields, in the upload settings, the base
+        description and every per-file description. Returns human-readable
+        strings; empty list means everything is fine.
+        """
+        problems = []
+        problems += invalid_qid_problems('Creator (P170)',
+                                         self.creator_edit.text())
+        problems += invalid_qid_problems('Copyright (P6216)',
+                                         self.copyright_sdc_edit.text())
+        problems += invalid_qid_problems('License (P275)',
+                                         self.license_sdc_edit.text())
+        base_sd, _ = extract_structured_data(self.base_text_edit.toPlainText())
+        problems += invalid_qid_problems('Base: created during (P10408)',
+                                         base_sd.get('created_during', ''))
+        problems += invalid_qid_problems('Base: depicts (P180)',
+                                         base_sd.get('depicts', ''), multi=True)
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, self.COL_DESC)
+            if not item:
+                continue
+            sd, _ = extract_structured_data(item.text())
+            if 'depicts' in sd:
+                problems += invalid_qid_problems(
+                    f'Row {r + 1}: depicts (P180)', sd.get('depicts', ''),
+                    multi=True)
+            if 'created_during' in sd:
+                problems += invalid_qid_problems(
+                    f'Row {r + 1}: created during (P10408)',
+                    sd.get('created_during', ''))
+        return problems
+
     def start_upload(self):
         if not self.api:
             QMessageBox.warning(self, 'Not logged in', 'Please log in first.')
             return
         if self.table.rowCount() == 0:
             QMessageBox.warning(self, 'No files', 'Please add files first.')
+            return
+
+        problems = self._qid_problems()
+        if problems:
+            shown = '\n'.join(problems[:15])
+            if len(problems) > 15:
+                shown += f'\n… (+{len(problems) - 15} more)'
+            QMessageBox.warning(
+                self, 'Invalid Wikidata IDs',
+                'The following fields must contain Wikidata QIDs (e.g. Q640).\n'
+                'Pick an entry from the suggestion list or enter a valid QID:\n\n'
+                + shown)
             return
 
         self._save_settings()

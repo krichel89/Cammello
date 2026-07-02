@@ -23,6 +23,12 @@ without post-processing each one on the wiki.
 - **Per-file description** for anything that varies from file to file:
   captions in any languages, per-file depicts, per-file categories, extra
   wikitext.
+- **Wikidata name search**: on the Creator, Depicts and Created-during fields
+  you can type a name (e.g. "Harald Krichel") and pick from a live suggestion
+  list showing label, description and QID; selecting inserts the QID. These
+  fields are validated to contain real QIDs before upload.
+- **Bulk edit**: select several rows and set one field (Depicts, Categories,
+  Caption en/de or Date) for all of them at once.
 - **Two editing modes**: structured single-line fields (default) or raw
   `description_all` text (expert mode).
 - **Drag and drop** image files (or a folder of image files) onto the
