@@ -4,6 +4,39 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-07-03
+
+### Added
+- Each language row in the structured editor has a second field for the
+  Information-template wikitext of that language, uploaded as `{{lang|1=…}}`
+  (e.g. `{{de|1=…}}`). Existing simple `{{lang|1=…}}` lines in a description are
+  loaded into the field automatically; bulk caption edits keep the information
+  wikitext intact.
+
+### Note
+- Templates whose value contains a nested template (e.g.
+  `{{en|1=With {{other}} inside}}`) are intentionally not extracted and remain
+  in the extra text unchanged.
+
+## [0.8.8] - 2026-07-03
+
+### Fixed
+- Performance: typing in the base description or the upload-settings QID fields
+  refreshed every table row on every keystroke (~1.3 s per keystroke at 200
+  rows). The Description-column refresh is now debounced (one refresh 250 ms
+  after typing stops), skips unchanged cells and batches the repaint; keystroke
+  latency at 200 rows is ~3 ms. Upload correctness is unaffected (upload reads
+  the underlying data, not the display column).
+
+## [0.8.7] - 2026-07-02
+
+### Changed
+- The table shows a single "Description" column containing the combined
+  effective text (base + file). The separate per-file description column is
+  hidden but kept internally as the editable data store (the side editor writes
+  to it and upload reads it). Long entries wrap, rows grow to show the full
+  text, and the full text is also shown as a tooltip.
+
 ## [0.8.6] - 2026-07-02
 
 ### Added

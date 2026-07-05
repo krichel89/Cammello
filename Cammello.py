@@ -1,9 +1,30 @@
 #!/usr/bin/env python3
 """
-Cammello v0.8.6 - Batch upload tool for Wikimedia Commons
+Cammello v0.9.0 - Batch upload tool for Wikimedia Commons
 
 Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
+
+New in 0.9.0:
+  * Each language row in the structured editor has a second field for the
+    Information-template wikitext of that language. It is uploaded as
+    {{lang|1=…}} (e.g. {{de|1=…}}); existing simple {{lang|1=…}} lines are
+    loaded into the field automatically. Templates with nested templates in
+    the value are left untouched in the extra text.
+
+New in 0.8.8:
+  * Performance: typing in the base description or the upload-settings QID
+    fields no longer refreshes every table row per keystroke (measured
+    ~1.3 s/keystroke at 200 rows). The Description-column refresh is now
+    debounced (one refresh 250 ms after typing stops), skips unchanged cells
+    and batches the repaint. Keystroke latency at 200 rows: ~3 ms.
+
+New in 0.8.7:
+  * The table now shows a single "Description" column with the combined
+    effective text (base + file). The separate per-file description column is
+    hidden (it is kept internally as the editable data store). Long entries
+    wrap and rows grow to show the full text; the full text is also available
+    as a tooltip.
 
 New in 0.8.6:
   * New read-only table column "Effective (base + file)" shows, per row, the
@@ -196,7 +217,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.8.6'
+__version__ = '0.9.0'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -1589,10 +1610,13 @@ class CaptionsEditor(QWidget):
 
         self.add_row()  # start with one empty row
 
-    def add_row(self, lang='en', value=''):
+    def add_row(self, lang='en', value='', info=''):
         row_widget = QWidget()
-        h = QHBoxLayout(row_widget)
-        h.setContentsMargins(0, 0, 0, 0)
+        v = QVBoxLayout(row_widget)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
 
         combo = QComboBox()
         for code, name in LANGUAGES:
@@ -1605,23 +1629,46 @@ class CaptionsEditor(QWidget):
         combo.setMaximumWidth(150)
 
         edit = QLineEdit(value)
-        edit.setPlaceholderText('e.g. Harald Krichel at the Berlinale 2026')
+        edit.setPlaceholderText('Caption, e.g. Harald Krichel at the Berlinale 2026')
 
         remove = QPushButton('✕')
         remove.setFixedWidth(28)
         remove.setToolTip('Remove this language')
 
-        h.addWidget(combo)
-        h.addWidget(edit, 1)
-        h.addWidget(remove)
+        top.addWidget(combo)
+        top.addWidget(edit, 1)
+        top.addWidget(remove)
+        v.addLayout(top)
+
+        # Second line: the {{lang|1=…}} description for the Information template.
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.addSpacing(150 + 6)  # align under the caption edit
+        info_edit = QLineEdit(info)
+        info_edit.setPlaceholderText(
+            'Information wikitext for this language (uploaded as {{%s|1=…}})'
+            % lang)
+        bottom.addWidget(info_edit, 1)
+        bottom.addSpacing(28 + 6)
+        v.addLayout(bottom)
+
         self._rows_box.addWidget(row_widget)
 
-        entry = {'widget': row_widget, 'combo': combo, 'edit': edit}
+        entry = {'widget': row_widget, 'combo': combo, 'edit': edit,
+                 'info': info_edit}
         self._rows.append(entry)
+
+        def _update_info_placeholder():
+            info_edit.setPlaceholderText(
+                'Information wikitext for this language (uploaded as {{%s|1=…}})'
+                % combo.currentData())
+        combo.currentIndexChanged.connect(lambda *_: _update_info_placeholder())
         combo.currentIndexChanged.connect(lambda *_: self.changed.emit())
         combo.currentIndexChanged.connect(lambda *_: self.committed.emit())
         edit.textChanged.connect(lambda *_: self.changed.emit())
         edit.editingFinished.connect(self.committed)
+        info_edit.textChanged.connect(lambda *_: self.changed.emit())
+        info_edit.editingFinished.connect(self.committed)
         remove.clicked.connect(lambda: self._remove(entry))
 
     def _remove(self, entry):
@@ -1642,15 +1689,33 @@ class CaptionsEditor(QWidget):
                 out[lang] = val
         return out
 
-    def set_captions(self, captions):
+    def get_infos(self):
+        """Return {lang: wikitext} for all non-empty Information fields."""
+        out = {}
+        for e in self._rows:
+            lang = e['combo'].currentData()
+            val = e['info'].text().strip()
+            if val:
+                out[lang] = val
+        return out
+
+    def set_language_data(self, captions, infos):
+        """Rebuild the rows from {lang: caption} and {lang: info}; a language
+        present in either dict gets a row."""
+        captions = captions or {}
+        infos = infos or {}
         for e in list(self._rows):
             e['widget'].setParent(None)
         self._rows = []
-        if captions:
-            for lang, val in captions.items():
-                self.add_row(lang, val)
+        langs = list(dict.fromkeys(list(captions) + list(infos)))
+        if langs:
+            for lang in langs:
+                self.add_row(lang, captions.get(lang, ''), infos.get(lang, ''))
         else:
             self.add_row()
+
+    def set_captions(self, captions):
+        self.set_language_data(captions, {})
 
 
 # Lines that are recognized key=value assignments (used to compute leftover text).
@@ -1664,6 +1729,33 @@ def leftover_text(text):
     wikitext are kept, so comments survive a round-trip through the structured
     editor (they are only stripped at upload time)."""
     return '\n'.join(l for l in text.split('\n') if not _ASSIGN_RE.match(l)).strip()
+
+
+# {{en|1=...}} / {{de|1=...}} description templates for the Information box.
+# NOTE: the non-greedy match stops at the first '}}', so a value containing a
+# nested template would be cut short; such lines are left in the extra text.
+_LANG_TMPL_RE = re.compile(
+    r'\{\{\s*([a-z]{2,3})\s*\|\s*1\s*=\s*((?:[^{}]|\[\[[^\]]*\]\])*?)\s*\}\}',
+    re.DOTALL)
+
+
+def split_lang_templates(text):
+    """Extract simple {{lang|1=value}} templates from text.
+
+    Returns (infos, remaining) where infos is {lang: value}. Only templates
+    whose value contains no nested template braces are extracted; anything
+    else stays in the remaining text untouched.
+    """
+    infos = {}
+
+    def _take(m):
+        infos[m.group(1)] = m.group(2).strip()
+        return ''
+
+    remaining = _LANG_TMPL_RE.sub(_take, text or '')
+    # Collapse blank lines left behind by removed templates.
+    remaining = re.sub(r'\n{3,}', '\n\n', remaining).strip()
+    return infos, remaining
 
 
 class _VGrip(QWidget):
@@ -1792,13 +1884,16 @@ class StructuredDescriptionEditor(QWidget):
         sd, _ = extract_structured_data(text)
         caps = {k[len('caption_'):]: v for k, v in sd.items()
                 if k.startswith('caption_')}
-        self.captions_editor.set_captions(caps)
         self.depicts.setText(sd.get('depicts', ''))
         if self.is_base:
             self.created_during.setText(sd.get('created_during', ''))
             self.gallery_suffix.setText(sd.get('gallery_suffix', ''))
-        # Split category links out of the leftover text into the categories field.
+        # Split category links out of the leftover text into the categories field,
+        # then pull the {{lang|1=…}} information templates into the per-language
+        # information fields. Whatever remains is free extra wikitext.
         cats, extra = split_categories(leftover_text(text))
+        infos, extra = split_lang_templates(extra)
+        self.captions_editor.set_language_data(caps, infos)
         self.categories.setText('; '.join(cats))
         self.extra.setPlainText(extra)
 
@@ -1815,6 +1910,13 @@ class StructuredDescriptionEditor(QWidget):
                 if val:
                     lines.append(f'{key}={val}')
         body = '\n'.join(lines)
+
+        # Per-language {{lang|1=…}} information templates.
+        info_lines = '\n'.join(
+            f'{{{{{lang}|1={val}}}}}'
+            for lang, val in self.captions_editor.get_infos().items())
+        if info_lines:
+            body = (body + '\n\n' + info_lines).strip()
 
         extra = self.extra.toPlainText().strip()
         if extra:
@@ -1987,7 +2089,7 @@ class BulkEditDialog(QDialog):
 
 class MainWindow(QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
-            'Description (file)', 'Effective (base + file)', 'Status']
+            'Description (file, hidden)', 'Description', 'Status']
     COL_THUMB = 0
     COL_FILENAME = 1
     COL_TITLE = 2
@@ -2116,6 +2218,15 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(self.COL_EFFECTIVE, QHeaderView.Stretch)
         header.setSectionResizeMode(self.COL_STATUS, QHeaderView.Interactive)
         self.table.setColumnWidth(self.COL_STATUS, 150)
+
+        # The per-file description is kept as the editable data store (the side
+        # editor writes to it and upload reads it) but hidden from the table;
+        # the "Description" column now shows the combined effective text.
+        self.table.setColumnHidden(self.COL_DESC, True)
+        # Wrap long effective text and let each row grow to show all of it.
+        self.table.setWordWrap(True)
+        self.table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents)
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -2828,11 +2939,30 @@ class MainWindow(QMainWindow):
             return
         desc_item = self.table.item(row, self.COL_DESC)
         per_file = desc_item.text() if desc_item else ''
-        eff.setText(self._effective_text(per_file))
+        text = self._effective_text(per_file)
+        if eff.text() == text:
+            return  # unchanged: skip setText and the row-height relayout
+        eff.setText(text)
+        eff.setToolTip(text)  # full text on hover, even if the cell is small
 
     def _refresh_all_effective(self):
-        for r in range(self.table.rowCount()):
-            self._refresh_effective(r)
+        """Debounced full refresh: typing in a base/QID field schedules ONE
+        refresh instead of relayouting every row on every keystroke."""
+        if not hasattr(self, '_eff_timer'):
+            self._eff_timer = QTimer(self)
+            self._eff_timer.setSingleShot(True)
+            self._eff_timer.setInterval(250)
+            self._eff_timer.timeout.connect(self._do_refresh_all_effective)
+        self._eff_timer.start()
+
+    def _do_refresh_all_effective(self):
+        # Batch the relayout: suspend painting while all rows are updated.
+        self.table.setUpdatesEnabled(False)
+        try:
+            for r in range(self.table.rowCount()):
+                self._refresh_effective(r)
+        finally:
+            self.table.setUpdatesEnabled(True)
 
     def remove_selected(self):
         rows = sorted(set(i.row() for i in self.table.selectedItems()), reverse=True)
@@ -2905,7 +3035,9 @@ class MainWindow(QMainWindow):
                 caps[lang] = value
             else:
                 caps.pop(lang, None)
-            ed.captions_editor.set_captions(caps)
+            # Keep the per-language information wikitext intact.
+            ed.captions_editor.set_language_data(
+                caps, ed.captions_editor.get_infos())
 
         desc_item.setText(ed.assemble())
 
