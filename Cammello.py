@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """
-Cammello v0.9.0 - Batch upload tool for Wikimedia Commons
+Cammello v0.9.1 - Batch upload tool for Wikimedia Commons
 
 Replaces VicunaUploader with structured data (SDC) support (caption_*, creator,
 depicts, etc.).
+
+New in 0.9.1:
+  * The "Upload settings", "Base description" and "Selected file" sections are
+    collapsible (click the checkbox in the section title to fold/unfold).
+  * The per-language Information wikitext field is now a wide (~90% of the
+    row), right-aligned, height-resizable multi-line box (drag the grip
+    beneath it).
+  * Depicts (P180) has been removed from the base description (it is per-file
+    only). Existing depicts in a base description is dropped.
 
 New in 0.9.0:
   * Each language row in the structured editor has a second field for the
@@ -217,7 +226,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = '0.9.0'
+__version__ = '0.9.1'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -1640,17 +1649,28 @@ class CaptionsEditor(QWidget):
         top.addWidget(remove)
         v.addLayout(top)
 
-        # Second line: the {{lang|1=…}} description for the Information template.
+        # Second line: the {{lang|1=…}} description for the Information
+        # template. Wide (≈90% of the column), right-aligned, height-resizable.
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.addSpacing(150 + 6)  # align under the caption edit
-        info_edit = QLineEdit(info)
+        bottom.addStretch(1)                      # ~10% spacer -> right-aligned
+        info_edit = QTextEdit()
+        info_edit.setPlainText(info)
         info_edit.setPlaceholderText(
             'Information wikitext for this language (uploaded as {{%s|1=…}})'
             % lang)
-        bottom.addWidget(info_edit, 1)
-        bottom.addSpacing(28 + 6)
+        info_edit.setAcceptRichText(False)
+        two_lines = info_edit.fontMetrics().lineSpacing() * 2 + 12
+        info_edit.setFixedHeight(two_lines)
+        bottom.addWidget(info_edit, 9)            # ~90% of the width
         v.addLayout(bottom)
+
+        # Drag grip to resize the info field's height (aligned under it).
+        grip_row = QHBoxLayout()
+        grip_row.setContentsMargins(0, 0, 0, 0)
+        grip_row.addStretch(1)
+        grip_row.addWidget(_VGrip(info_edit, two_lines), 9)
+        v.addLayout(grip_row)
 
         self._rows_box.addWidget(row_widget)
 
@@ -1667,8 +1687,8 @@ class CaptionsEditor(QWidget):
         combo.currentIndexChanged.connect(lambda *_: self.committed.emit())
         edit.textChanged.connect(lambda *_: self.changed.emit())
         edit.editingFinished.connect(self.committed)
+        # QTextEdit has no editingFinished; live sync uses changed (textChanged).
         info_edit.textChanged.connect(lambda *_: self.changed.emit())
-        info_edit.editingFinished.connect(self.committed)
         remove.clicked.connect(lambda: self._remove(entry))
 
     def _remove(self, entry):
@@ -1694,7 +1714,7 @@ class CaptionsEditor(QWidget):
         out = {}
         for e in self._rows:
             lang = e['combo'].currentData()
-            val = e['info'].text().strip()
+            val = e['info'].toPlainText().strip()
             if val:
                 out[lang] = val
         return out
@@ -1787,6 +1807,23 @@ class _VGrip(QWidget):
         self._press_y = None
 
 
+class CollapsibleGroupBox(QGroupBox):
+    """A QGroupBox whose title has a checkbox that collapses/expands its
+    content. Content is held in a container widget so that collapsing only
+    toggles that container (children keep their own visibility state)."""
+
+    def __init__(self, title, parent=None):
+        super().__init__(title, parent)
+        self.setCheckable(True)
+        self.setChecked(True)
+        self.content = QWidget(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.addWidget(self.content)
+        # toggled(True) when expanded -> show content; collapse hides it.
+        self.toggled.connect(self.content.setVisible)
+
+
 class StructuredDescriptionEditor(QWidget):
     """Structured single-line editor for a description_all value: multilingual
     captions plus depicts (P180), created-during (P10408), a categories field
@@ -1819,11 +1856,14 @@ class StructuredDescriptionEditor(QWidget):
 
         form = QFormLayout()
 
-        # Depicts (P180) — multi-value Wikidata field, semicolon-separated.
-        self.depicts = QLineEdit()
-        self.depicts.setPlaceholderText('e.g. Q42; Q64')
-        _style_wd_field(self.depicts, multi=True, searchable=True)
-        self._depicts_suggest = WikidataSuggest(self.depicts, multi=True)
+        # Depicts (P180) — per-file only (no depicts in the base description).
+        if not self.is_base:
+            self.depicts = QLineEdit()
+            self.depicts.setPlaceholderText('e.g. Q42; Q64')
+            _style_wd_field(self.depicts, multi=True, searchable=True)
+            self._depicts_suggest = WikidataSuggest(self.depicts, multi=True)
+        else:
+            self.depicts = None
 
         # Categories — plain text (not a Wikidata field).
         self.categories = QLineEdit()
@@ -1845,7 +1885,9 @@ class StructuredDescriptionEditor(QWidget):
         # Signals: changed = per keystroke (used by the base live sync);
         # committed = on field switch / editing finished (used by the per-file
         # table sync so the table updates when you leave a field, not per char).
-        watched = [self.depicts, self.categories]
+        watched = [self.categories]
+        if not self.is_base:
+            watched.append(self.depicts)
         if self.is_base:
             watched += [self.created_during, self.gallery_suffix]
         for w in watched:
@@ -1853,7 +1895,8 @@ class StructuredDescriptionEditor(QWidget):
             w.editingFinished.connect(self.committed)
 
         # Rows.
-        form.addRow('Depicts (P180):', self.depicts)
+        if not self.is_base:
+            form.addRow('Depicts (P180):', self.depicts)
         if self.is_base:
             form.addRow('Created during (P10408):', self.created_during)
         form.addRow('Categories:', self.categories)
@@ -1884,7 +1927,8 @@ class StructuredDescriptionEditor(QWidget):
         sd, _ = extract_structured_data(text)
         caps = {k[len('caption_'):]: v for k, v in sd.items()
                 if k.startswith('caption_')}
-        self.depicts.setText(sd.get('depicts', ''))
+        if self.depicts is not None:
+            self.depicts.setText(sd.get('depicts', ''))
         if self.is_base:
             self.created_during.setText(sd.get('created_during', ''))
             self.gallery_suffix.setText(sd.get('gallery_suffix', ''))
@@ -1900,9 +1944,10 @@ class StructuredDescriptionEditor(QWidget):
     def assemble(self):
         lines = [f'caption_{lang}={val}'
                  for lang, val in self.captions_editor.get_captions().items()]
-        depicts = self.depicts.text().strip()
-        if depicts:
-            lines.append(f'depicts={depicts}')
+        if self.depicts is not None:
+            depicts = self.depicts.text().strip()
+            if depicts:
+                lines.append(f'depicts={depicts}')
         if self.is_base:
             for key, w in (('created_during', self.created_during),
                            ('gallery_suffix', self.gallery_suffix)):
@@ -2242,9 +2287,9 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right.setMinimumWidth(360)
 
-        settings_group = QGroupBox('Upload settings')
+        settings_group = CollapsibleGroupBox('Upload settings')
         settings_group.setStyleSheet(GROUP_TITLE_STYLE)
-        settings_form = QFormLayout(settings_group)
+        settings_form = QFormLayout(settings_group.content)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText('e.g. [[User:Seewolf|Harald Krichel]]')
         self.creator_edit = QLineEdit()
@@ -2299,9 +2344,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.expert_cb)
 
         # ── Base description (for all files) ──
-        base_group = QGroupBox('Base description (for all files)')
+        base_group = CollapsibleGroupBox('Base description (for all files)')
         base_group.setStyleSheet(GROUP_TITLE_STYLE)
-        base_layout = QVBoxLayout(base_group)
+        base_layout = QVBoxLayout(base_group.content)
         self.base_text_edit = QTextEdit()
         self.base_text_edit.setPlaceholderText(
             'Shared lines for every file, e.g.\n'
@@ -2344,9 +2389,9 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(file_io)
 
         # ── Selected file description ──
-        file_group = QGroupBox('Selected file – description')
+        file_group = CollapsibleGroupBox('Selected file – description')
         file_group.setStyleSheet(GROUP_TITLE_STYLE)
-        file_layout = QVBoxLayout(file_group)
+        file_layout = QVBoxLayout(file_group.content)
         self.file_desc_edit = FocusOutTextEdit()
         self.file_desc_edit.setPlaceholderText(EXAMPLE_FILE_DESCRIPTION)
         self.file_desc_edit.setMinimumHeight(150)

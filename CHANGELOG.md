@@ -4,6 +4,18 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-07-03
+
+### Added
+- The "Upload settings", "Base description" and "Selected file" sections are
+  collapsible: click the checkbox in the section title to fold/unfold them.
+
+### Changed
+- The per-language Information wikitext field is now a wide (~90% of the row),
+  right-aligned, height-resizable multi-line box (drag the grip beneath it).
+- Depicts (P180) removed from the base description; it is per-file only. An
+  existing `depicts=` in a base description is dropped.
+
 ## [0.9.0] - 2026-07-03
 
 ### Added
