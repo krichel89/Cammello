@@ -1,55 +1,42 @@
-name: Build executables
+name: Build macOS App
 
 on:
   push:
-    tags: ['v*']        # build + attach to release on a version tag
-  workflow_dispatch:    # allow manual runs (downloadable as workflow artifacts)
-
-permissions:
-  contents: write       # required for attaching files to a release
+    tags:
+      - 'v*' # Startet den Build, wenn du ein Tag wie v1.0.0 pushst
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            artifact: Cammello-windows.zip
-          - os: macos-latest
-            artifact: Cammello-macos.zip
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest # Nutzt einen macOS-Server von GitHub
+
     steps:
-      - uses: actions/checkout@v4
+    - name: Code auschecken
+      uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+    - name: Python einrichten
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11' # Deine Python-Version
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt pyinstaller
+    - name: Abhängigkeiten installieren
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Build executable
-        run: pyinstaller --onefile --windowed --name Cammello Cammello.py
+    - name: App mit PyInstaller bauen
+      run: |
+        # Ersetze main.py und MeineMacApp mit deinen Werten
+        pyinstaller --noconfirm --onedir --windowed --name="MeineMacApp" main.py
 
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist/Cammello.exe -DestinationPath Cammello-windows.zip
+    - name: App in ein ZIP-Archiv packen
+      run: |
+        cd dist
+        zip -r ../MeineMacApp-macOS.zip MeineMacApp.app
 
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent "dist/Cammello.app" "Cammello-macos.zip"
-
-      # Always available for download from the Actions run (also on manual runs).
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-
-      # On a version tag, also attach the file to the GitHub release.
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ matrix.artifact }}
+    - name: Release auf GitHub erstellen
+      uses: softprops/action-gh-release@v2
+      with:
+        files: MeineMacApp-macOS.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
