@@ -45,3 +45,8 @@ desktop.ini
 
 # Logs
 *.log
+
+# Cammello local
+*.zip
+cammello_settings.txt
+Cammello_monolith_backup.py

@@ -4,19 +4,6 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.9.6] - 2026-07-07
-
-### Changed
-- The collapsible sections use a simple collapse arrow (down = expanded,
-  right = collapsed) in the section title instead of a checkbox.
-- All input fields have higher-contrast borders; the per-language Information
-  wikitext boxes get the same border as the other fields. The Wikidata fields
-  keep their light-blue background and gain the same border.
-- Form labels are narrower (fixed width, word-wrapped) and the input fields
-  take the remaining width — approximately a 30:70 split. The width cap on
-  single-value Wikidata fields was removed so they grow with the form.
-- All emojis removed from button and checkbox labels.
-
 ## [0.9.5] - 2026-07-07
 
 ### Added
