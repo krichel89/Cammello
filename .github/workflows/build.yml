@@ -1,15 +1,22 @@
-name: Build Mac App
+name: Build Mac and Windows App
 
 on:
   release:
     types: [published]
-  workflow_dispatch: # Ermöglicht den manuellen Start im Browser oder per PowerShell
+  workflow_dispatch: # Ermöglicht den manuellen Start im Browser oder per CLI
+    inputs:
+      platform:
+        description: "Welche Plattform bauen?"
+        type: choice
+        default: both
+        options: [both, mac, windows]
 
 permissions:
-  contents: write # Erlaubt das Hochladen der fertigen Datei in das Release
+  contents: write # Erlaubt das Hochladen der fertigen Dateien in das Release
 
 jobs:
   build-mac:
+    if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'mac' }}
     runs-on: macos-latest
     steps:
       - name: Checkout Code
@@ -31,8 +38,6 @@ jobs:
           # --onedir statt --onefile: onefile+windowed ist auf macOS
           # deprecated (ab PyInstaller 7.0 ein Fehler); das .app-Bundle
           # entsteht bei --onedir genauso und wird gezippt.
-          # --collect-submodules stellt sicher, dass das cammello/-Paket
-          # vollstaendig eingesammelt wird.
           pyinstaller --onedir --windowed --name Cammello \
             --collect-submodules cammello Cammello.py
           cd dist
@@ -42,8 +47,38 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Cammello_Mac.zip
-          # Verwendet das aktuelle Release-Tag oder faellt bei manuellem
-          # Start auf das angegebene Tag zurueck.
+          tag_name: ${{ github.event.release.tag_name || 'v0.9.6' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build App
+        run: |
+          # Unter Windows ist --onefile unproblematisch und ergibt eine
+          # einzelne Cammello.exe.
+          pyinstaller --onefile --windowed --name Cammello --collect-submodules cammello Cammello.py
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Cammello.exe
           tag_name: ${{ github.event.release.tag_name || 'v0.9.6' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
