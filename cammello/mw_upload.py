@@ -32,14 +32,44 @@ from .editors import *
 
 
 class MWUploadMixin:
-    def _qid_problems(self):
+    def _upload_rows(self):
+        """Table rows the Upload button acts on.
+
+        Selected rows only; if nothing is selected, every row. Returns a sorted
+        list of table row indices.
+        """
+        selected = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if selected:
+            return selected
+        return list(range(self.table.rowCount()))
+
+    def _update_upload_btn(self):
+        """Keep the button label honest about what a click would do."""
+        total = self.table.rowCount()
+        selected = {idx.row() for idx in self.table.selectedIndexes()}
+        if selected:
+            self.upload_btn.setText(f'Upload selected ({len(selected)})')
+            self.upload_btn.setToolTip(
+                'Uploads the selected rows. Deselect everything to upload all '
+                'files.')
+        else:
+            self.upload_btn.setText(f'Upload all ({total})' if total
+                                    else 'Upload all')
+            self.upload_btn.setToolTip(
+                'Nothing is selected, so all files are uploaded. Select rows '
+                'to upload only those.')
+
+    def _qid_problems(self, rows=None):
         """Collect fields whose Wikidata value is not a valid QID.
 
         Covers the searchable fields (creator, depicts, created_during) plus
         the fixed copyright/license fields, in the upload settings, the base
-        description and every per-file description. Returns human-readable
-        strings; empty list means everything is fine.
+        description and the per-file descriptions of the rows about to be
+        uploaded (rows=None: all rows). Returns human-readable strings; empty
+        list means everything is fine.
         """
+        if rows is None:
+            rows = range(self.table.rowCount())
         problems = []
         problems += invalid_qid_problems('Creator (P170)',
                                          self.creator_edit.text())
@@ -52,7 +82,7 @@ class MWUploadMixin:
                                          base_sd.get('created_during', ''))
         problems += invalid_qid_problems('Base: depicts (P180)',
                                          base_sd.get('depicts', ''), multi=True)
-        for r in range(self.table.rowCount()):
+        for r in rows:
             item = self.table.item(r, self.COL_DESC)
             if not item:
                 continue
@@ -68,10 +98,14 @@ class MWUploadMixin:
         return problems
 
     def start_upload(self):
+        # These early exits used to be silent in the log, which made an
+        # apparently dead Upload button impossible to diagnose from the Log tab.
         if not self.api:
+            self.logger.info('Upload aborted: not logged in.')
             QMessageBox.warning(self, 'Not logged in', 'Please log in first.')
             return
         if self.table.rowCount() == 0:
+            self.logger.info('Upload aborted: the file table is empty.')
             QMessageBox.warning(self, 'No files', 'Please add files first.')
             return
 
@@ -79,8 +113,17 @@ class MWUploadMixin:
         # before reading the descriptions.
         self._commit_editor()
 
-        problems = self._qid_problems()
+        # Selected rows only; nothing selected means all rows.
+        upload_rows = self._upload_rows()
+        selection_used = bool({idx.row() for idx in self.table.selectedIndexes()})
+        self.logger.info('Upload requested for %d of %d row(s) (%s).',
+                         len(upload_rows), self.table.rowCount(),
+                         'selection' if selection_used else 'no selection: all')
+
+        problems = self._qid_problems(upload_rows)
         if problems:
+            self.logger.info('Upload aborted: %d invalid Wikidata ID(s).',
+                             len(problems))
             shown = '\n'.join(problems[:15])
             if len(problems) > 15:
                 shown += f'\n… (+{len(problems) - 15} more)'
@@ -96,7 +139,10 @@ class MWUploadMixin:
         self.api.timeout = self._get_timeout()
 
         rows = []
-        for r in range(self.table.rowCount()):
+        # Maps a worker index (0..n-1) back to its table row, which is not the
+        # same thing as soon as only a selection is uploaded.
+        self.upload_row_map = list(upload_rows)
+        for r in upload_rows:
             filepath = self.table.item(r, self.COL_FILENAME).data(Qt.UserRole)
             source_name = self.table.item(r, self.COL_FILENAME).text()
             date = self.table.item(r, self.COL_DATE).text() if self.table.item(r, self.COL_DATE) else ''
@@ -132,6 +178,12 @@ class MWUploadMixin:
         self.progress_bar.setValue(0)
         self.upload_btn.setEnabled(False)
 
+        # Progress window with a Cancel button. Modeless on purpose: the table
+        # stays readable (per-row status keeps updating behind it) while the
+        # run is going on.
+        self._progress_dlg = UploadProgressDialog(len(rows), self)
+        self._done_count = 0
+
         # creator / copyright / license live in the upload settings; prepend
         # them to the base description so the worker's SDC extractor picks
         # them up alongside the user-authored base text.
@@ -154,20 +206,41 @@ class MWUploadMixin:
         self.worker.progress.connect(self.on_progress)
         self.worker.error.connect(self.on_error)
         self.worker.finished.connect(self.on_finished)
+        self.worker.file_started.connect(self._progress_dlg.set_current)
+        # Queued across threads by Qt: the flag is set in the worker object,
+        # the worker thread picks it up before the next file.
+        self._progress_dlg.cancel_requested.connect(self.worker.cancel)
+        self._progress_dlg.show()
         self.worker.start()
 
-    def on_progress(self, row, status):
+    def _table_row(self, worker_index):
+        """Translate a worker index into a table row (see upload_row_map)."""
+        mapping = getattr(self, 'upload_row_map', None)
+        if mapping and 0 <= worker_index < len(mapping):
+            return mapping[worker_index]
+        return worker_index
+
+    def on_progress(self, index, status):
+        row = self._table_row(index)
         item = self.table.item(row, self.COL_STATUS)
         if item:
             item.setText(status)
-        self.progress_bar.setValue(row + 1)
-        self.status_bar.showMessage(f'Uploading {row + 1}/{self.table.rowCount()}…')
+        total = len(getattr(self, 'upload_row_map', []) or []) or self.table.rowCount()
+        self.progress_bar.setValue(index + 1)
+        self.status_bar.showMessage(f'Uploading {index + 1}/{total}…')
+        # The bar counts finished files, not started ones.
+        if status.startswith(('✓', '✗')):
+            self._done_count = getattr(self, '_done_count', 0) + 1
+            dlg = getattr(self, '_progress_dlg', None)
+            if dlg is not None:
+                dlg.set_done(self._done_count)
 
-    def on_error(self, row, msg):
-        if row < 0:
+    def on_error(self, index, msg):
+        if index < 0:
             # Gallery/global errors are shown only in the log/status bar.
             self.status_bar.showMessage(msg, 8000)
             return
+        row = self._table_row(index)
         item = self.table.item(row, self.COL_STATUS)
         if item:
             item.setText(f'✗ {msg[:60]}')
@@ -176,6 +249,13 @@ class MWUploadMixin:
     def on_finished(self, summary):
         self.progress_bar.setVisible(False)
         self.upload_btn.setEnabled(True)
+        self._update_upload_btn()
         self.status_bar.showMessage(summary)
-        QMessageBox.information(self, 'Upload complete',
-                                summary + '\n\nDetails in the Log tab.')
+        dlg = getattr(self, '_progress_dlg', None)
+        if dlg is not None:
+            dlg.close()
+            self._progress_dlg = None
+        cancelled = summary.startswith('Cancelled')
+        QMessageBox.information(
+            self, 'Upload cancelled' if cancelled else 'Upload complete',
+            summary + '\n\nDetails in the Log tab.')

@@ -97,6 +97,7 @@ class MWEditorMixin:
         rows = sorted(set(i.row() for i in self.table.selectedItems()), reverse=True)
         for row in rows:
             self.table.removeRow(row)
+        self._update_upload_btn()   # the row count changed
 
     def bulk_edit_selected(self):
         # Commit any pending per-file edit before touching the rows.
@@ -172,6 +173,7 @@ class MWEditorMixin:
 
     def clear_all(self):
         self.table.setRowCount(0)
+        self._update_upload_btn()   # the row count changed
 
 
     def _selected_row(self):

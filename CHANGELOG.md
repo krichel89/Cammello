@@ -4,6 +4,57 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.11] - 2026-07-11
+
+### Added
+- A progress window appears when an upload run starts: "Uploading 3 of 12
+  file(s)", the name of the file currently going up, a progress bar counting
+  finished files, and a Cancel button.
+- Cancel. The file currently in flight is finished first, then the run stops,
+  so no file is left half-uploaded on Commons. Files already uploaded are still
+  added to the gallery page. The summary reports what happened ("Cancelled:
+  3/12 file(s) uploaded, 9 not started."). Esc routes into Cancel instead of
+  closing the window behind a running upload.
+
+### Changed
+- The tab formerly called "Upload" is now called "Files" - it holds the file
+  table, it does not start an upload. Emojis removed from both tab labels.
+
+## [0.9.10] - 2026-07-11
+
+### Changed
+- The Upload button now acts on the **selected** rows; if no row is selected it
+  uploads all of them (as before). The button label follows the selection
+  ("Upload selected (3)" / "Upload all (12)"), and the QID check only inspects
+  the rows that are actually going to be uploaded, so an invalid QID in an
+  unrelated row no longer blocks the upload.
+
+### Fixed
+- The worker's row index is mapped back to the table row (`upload_row_map`).
+  Without it, uploading a selection would have written status messages into
+  the wrong rows.
+- The early exits in `start_upload()` (not logged in / no files / invalid QIDs)
+  now write a line to the log. They only raised a message box before, so an
+  Upload button that appeared to do nothing left no trace in the Log tab.
+
+## [0.9.9] - 2026-07-11
+
+### Fixed
+- Login was broken since the package split: `widgets.py` used `QSettings` in
+  `LoginDialog.__init__` without importing it, so clicking Login raised
+  `NameError: name 'QSettings' is not defined` and no dialog ever appeared.
+- Same class of bug, found by an AST scan of all modules and fixed before it
+  could surface: `workers.py` used `MediaWikiApi` without importing it (the
+  login would have failed again right after the dialog), and `api.py` used
+  `os` (in `upload()`) and `extract_name_from_caption` (in the gallery page
+  update) without importing either. In the pre-0.9.0 monolith these names were
+  module-level globals and visible everywhere; the split did not carry them
+  over. Uploads could not have worked in 0.9.x.
+- New static test (`test_imports.py`) walks the AST of every module and fails
+  if any global name does not resolve in that module's namespace, so this bug
+  class cannot come back unnoticed. `test_login.py` exercises the full chain
+  LoginDialog -> LoginWorker -> MediaWikiApi.
+
 ## [0.9.8] - 2026-07-11
 
 ### Changed

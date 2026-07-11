@@ -6,12 +6,14 @@ import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 from .constants import *
 from .sdc import *
+from .api import MediaWikiApi
 
 
 class UploadWorker(QThread):
     progress = pyqtSignal(int, str)   # row, status
     finished = pyqtSignal(str)        # summary message
     error = pyqtSignal(int, str)      # row, error message
+    file_started = pyqtSignal(int, str)   # index, target filename
 
     def __init__(self, api, rows, base_text, gallery_prefix, ignore_warnings):
         super().__init__()
@@ -21,10 +23,21 @@ class UploadWorker(QThread):
         self.base_text = base_text
         self.gallery_prefix = gallery_prefix
         self.ignore_warnings = ignore_warnings
+        # Set from the GUI thread by cancel(). A bool assignment is atomic
+        # under the GIL, so no lock is needed. Checked between files only: an
+        # HTTP request already in flight is always finished, never torn down
+        # halfway, so no half-uploaded file is left on Commons.
+        self._cancelled = False
+
+    def cancel(self):
+        """Request a stop. The current file is finished, then the run ends."""
+        self._cancelled = True
+        self.log.info('Cancel requested: stopping after the current file.')
 
     def run(self):
         gallery_entries = {}   # gallery_page -> list of (filename, caption)
         success_count = 0
+        cancelled_at = None
 
         self.log.info('=== Upload run started: %d file(s) ===', len(self.rows))
 
@@ -32,7 +45,14 @@ class UploadWorker(QThread):
             fname = (row.get('target_name')
                      or os.path.basename(row.get('filepath', ''))
                      or f'#{i}')
+            if self._cancelled:
+                cancelled_at = i
+                self.log.info('Upload cancelled before file %d/%d ("%s").',
+                              i + 1, len(self.rows), fname)
+                self.progress.emit(i, 'Cancelled')
+                break
             try:
+                self.file_started.emit(i, fname)
                 self.progress.emit(i, 'Uploading…')
 
                 # Normalize the target filename: ensure extension, strip a
@@ -161,7 +181,8 @@ class UploadWorker(QThread):
                 self.error.emit(i, msg)
                 self.progress.emit(i, '✗ Error')
 
-        # Update galleries
+        # Update galleries. Files that did go up are still added to the
+        # gallery, even after a cancel - they exist on Commons now.
         for gallery_page, entries in gallery_entries.items():
             if not gallery_page:
                 continue
@@ -172,11 +193,21 @@ class UploadWorker(QThread):
                                gallery_page, e, exc_info=True)
                 self.error.emit(-1, f'Gallery error ({gallery_page}): {e}')
 
-        self.log.info('=== Upload run finished: %d/%d succeeded ===',
-                      success_count, len(self.rows))
-        self.finished.emit(
-            f'Done: {success_count}/{len(self.rows)} file(s) uploaded.'
-        )
+        total = len(self.rows)
+        if cancelled_at is not None:
+            skipped = total - cancelled_at
+            self.log.info('=== Upload run cancelled: %d/%d succeeded, '
+                          '%d not started ===', success_count, total, skipped)
+            self.finished.emit(
+                f'Cancelled: {success_count}/{total} file(s) uploaded, '
+                f'{skipped} not started.'
+            )
+        else:
+            self.log.info('=== Upload run finished: %d/%d succeeded ===',
+                          success_count, total)
+            self.finished.emit(
+                f'Done: {success_count}/{total} file(s) uploaded.'
+            )
 
 
 # ── Login / test worker ────────────────────────────────────────────────────────

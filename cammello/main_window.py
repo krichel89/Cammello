@@ -72,8 +72,8 @@ class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QM
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
-        self.tabs.addTab(self._build_upload_tab(), '⬆ Upload')
-        self.tabs.addTab(self._build_log_tab(), '🐞 Log')
+        self.tabs.addTab(self._build_upload_tab(), 'Files')
+        self.tabs.addTab(self._build_log_tab(), 'Log')
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -104,6 +104,8 @@ class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QM
         clear_btn = QPushButton('Clear all')
         clear_btn.clicked.connect(self.clear_all)
 
+        # Label is kept in sync with the selection by _update_upload_btn:
+        # selected rows are uploaded, or all rows when nothing is selected.
         self.upload_btn = QPushButton('Upload all')
         self.upload_btn.clicked.connect(self.start_upload)
         self.upload_btn.setStyleSheet(
@@ -192,6 +194,7 @@ class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QM
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.itemSelectionChanged.connect(self.on_row_selected)
+        self.table.itemSelectionChanged.connect(self._update_upload_btn)
         # Click a column header to sort. Sorting is switched off while rows
         # are being inserted (see _add_paths) so the table is not reshuffled
         # mid-population.

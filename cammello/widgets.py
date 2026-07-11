@@ -5,8 +5,8 @@ from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
                              QTextEdit, QDialog, QDialogButtonBox, QCheckBox,
                              QTableWidget, QTableWidgetItem, QStyledItemDelegate,
-                             QAbstractItemView)
-from PyQt5.QtCore import Qt, QEvent, pyqtSignal, QUrl, QSize
+                             QAbstractItemView, QProgressBar)
+from PyQt5.QtCore import Qt, QEvent, pyqtSignal, QUrl, QSize, QSettings
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon
 from .constants import *
 from .sdc import *
@@ -237,6 +237,79 @@ class CappedRowHeightDelegate(QStyledItemDelegate):
         if hint.height() > cap:
             hint.setHeight(cap)
         return hint
+
+
+class UploadProgressDialog(QDialog):
+    """Modeless progress window shown while an upload run is going on.
+
+    Cancel does not kill the worker thread; it asks it to stop after the file
+    it is currently working on (see UploadWorker.cancel), so no file is left
+    half-uploaded on Commons. The dialog has no close button in its title bar:
+    it is closed by the upload finishing or by Cancel + finishing.
+    """
+
+    cancel_requested = pyqtSignal()
+
+    def __init__(self, total, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f'Upload - {APP_NAME}')
+        self.setMinimumWidth(460)
+        self.setWindowFlags(
+            (self.windowFlags() | Qt.CustomizeWindowHint)
+            & ~Qt.WindowCloseButtonHint)
+        self.setStyleSheet(INPUT_STYLE)
+        self.total = total
+        self._cancelling = False
+
+        layout = QVBoxLayout(self)
+        self.headline = QLabel(f'Uploading 0 of {total} file(s)…')
+        f = self.headline.font()
+        f.setBold(True)
+        self.headline.setFont(f)
+        layout.addWidget(self.headline)
+
+        self.detail = QLabel('Preparing…')
+        self.detail.setWordWrap(True)
+        self.detail.setStyleSheet('color: gray;')
+        layout.addWidget(self.detail)
+
+        self.bar = QProgressBar()
+        self.bar.setMinimum(0)
+        self.bar.setMaximum(max(1, total))
+        self.bar.setValue(0)
+        layout.addWidget(self.bar)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        self.cancel_btn = QPushButton('Cancel')
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        row.addWidget(self.cancel_btn)
+        layout.addLayout(row)
+
+    def _on_cancel(self):
+        if self._cancelling:
+            return
+        self._cancelling = True
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText('Cancelling…')
+        self.detail.setText('Cancelling: the file currently being uploaded is '
+                            'finished first, then the run stops.')
+        self.cancel_requested.emit()
+
+    def set_current(self, index, filename):
+        """index is 0-based; called when a file starts uploading."""
+        if self._cancelling:
+            return
+        self.headline.setText(
+            f'Uploading {index + 1} of {self.total} file(s)…')
+        self.detail.setText(filename)
+
+    def set_done(self, count):
+        self.bar.setValue(min(count, self.bar.maximum()))
+
+    def reject(self):
+        # Esc must not close the window and leave the upload running blind.
+        self._on_cancel()
 
 
 class FileDropTableWidget(QTableWidget):

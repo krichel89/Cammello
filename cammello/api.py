@@ -1,9 +1,11 @@
 """MediaWiki / Wikimedia Commons API client."""
 import json
 import logging
+import os
 import requests
 from .constants import *
 from .constants import __version__
+from .sdc import extract_name_from_caption
 
 
 REDACT_KEYS = {'password', 'lgpassword', 'token', 'lgtoken', 'logintoken'}

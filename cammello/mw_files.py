@@ -135,6 +135,7 @@ class MWFilesMixin:
                     self.logger.warning('Failed to add file %r: %s', filepath, e)
         finally:
             self.table.setSortingEnabled(was_sorting)
+        self._update_upload_btn()   # the row count changed
         return added, duplicates, failed
 
     def _report_add_result(self, added, duplicates, failed):
