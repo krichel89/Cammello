@@ -4,7 +4,7 @@ import re
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.9.7'
+__version__ = '0.9.8'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -28,6 +28,19 @@ PROPERTY_MAP = {
 # editor. Keeps QID inputs at a sensible length instead of stretching them
 # across the whole panel.
 WD_FIELD_WIDTH = 220
+
+# Table preview thumbnails: icon size, column width and the fallback row
+# height. 0.9.8 enlarged the icons by 50% (was 96x64 / 104 px / 70 px).
+THUMB_W = 144
+THUMB_H = 96
+THUMB_COL_WIDTH = 156
+THUMB_ROW_HEIGHT = 105
+
+# Maximum number of text lines shown in the Wikitext column. The vertical
+# header resizes rows to their contents, which for a long effective wikitext
+# would grow a row without limit; CappedRowHeightDelegate caps it here. The
+# full text stays available in the cell tooltip.
+WIKITEXT_MAX_LINES = 12
 
 # Accepted image extensions (used by the file dialog and by drag-and-drop).
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.svg', '.webp')

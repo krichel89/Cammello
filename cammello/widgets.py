@@ -215,6 +215,30 @@ def apply_form_ratio(form, label_width=FORM_LABEL_WIDTH):
 
 
 
+class CappedRowHeightDelegate(QStyledItemDelegate):
+    """Item delegate that limits how tall a word-wrapped cell may become.
+
+    The table's vertical header uses QHeaderView.ResizeToContents, so a row
+    grows until the whole wrapped text of every cell fits. For the Wikitext
+    column (the effective description) that can be dozens of lines. This
+    delegate reports at most max_lines lines as its size hint; text beyond
+    that is clipped by the painter. The complete text remains available in
+    the cell's tooltip, which is set in MWEditorMixin._refresh_effective.
+    """
+
+    def __init__(self, max_lines=WIKITEXT_MAX_LINES, parent=None):
+        super().__init__(parent)
+        self.max_lines = max(1, int(max_lines))
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        # Padding: same top/bottom margin Qt adds around the text (2 x 4 px).
+        cap = option.fontMetrics.lineSpacing() * self.max_lines + 8
+        if hint.height() > cap:
+            hint.setHeight(cap)
+        return hint
+
+
 class FileDropTableWidget(QTableWidget):
     """QTableWidget that accepts image files dropped onto it.
 

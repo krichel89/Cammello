@@ -4,6 +4,21 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.8] - 2026-07-11
+
+### Changed
+- The preview thumbnails in the file table are 50% larger (icons 96x64 ->
+  144x96 px, thumbnail column 104 -> 156 px, default row height 70 -> 105 px).
+- The "Description" column (the effective wikitext of a file) is now called
+  "Wikitext" and is noticeably wider: its neighbours were narrowed (source
+  file 250 -> 180 px, target filename 240 -> 200 px, status 150 -> 110 px)
+  and the splitter gives the table more room (720:420 -> 880:400). All three
+  columns stay interactive and can be resized by hand.
+- The Wikitext column no longer grows a row without limit. A new
+  CappedRowHeightDelegate limits it to 12 text lines (WIKITEXT_MAX_LINES in
+  constants.py); longer text is clipped in the cell but remains complete in
+  the cell tooltip.
+
 ## [0.9.7] - 2026-07-10
 
 ### Fixed

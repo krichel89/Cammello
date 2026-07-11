@@ -175,7 +175,7 @@ class MWFilesMixin:
         fp = item.data(Qt.UserRole) if item else None
         return os.path.splitext(fp)[1] if fp else ''
 
-    def _make_thumbnail(self, filepath, w=96, h=64):
+    def _make_thumbnail(self, filepath, w=THUMB_W, h=THUMB_H):
         """Create a downscaled preview efficiently (without full resolution)."""
         try:
             reader = QImageReader(filepath)

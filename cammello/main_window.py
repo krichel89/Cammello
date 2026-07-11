@@ -32,7 +32,7 @@ from .mw_upload import MWUploadMixin
 
 class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
-            'Description (file, hidden)', 'Description', 'Status']
+            'Description (file, hidden)', 'Wikitext', 'Status']
     COL_THUMB = 0
     COL_FILENAME = 1
     COL_TITLE = 2
@@ -133,8 +133,8 @@ class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QM
             logger=self.logger)
         self.table.setHorizontalHeaderLabels(self.COLS)
         # Thumbnails on the left: icon size and row height.
-        self.table.setIconSize(QSize(96, 64))
-        self.table.verticalHeader().setDefaultSectionSize(70)
+        self.table.setIconSize(QSize(THUMB_W, THUMB_H))
+        self.table.verticalHeader().setDefaultSectionSize(THUMB_ROW_HEIGHT)
         self.table.verticalHeader().setVisible(False)
         # Fixed extension in the target filename (via delegate).
         self.table.setItemDelegateForColumn(
@@ -151,26 +151,40 @@ class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QM
         htb = self.table.horizontalHeaderItem(self.COL_THUMB)
         if htb:
             htb.setToolTip('Preview')
+        he = self.table.horizontalHeaderItem(self.COL_EFFECTIVE)
+        if he:
+            he.setToolTip('Effective wikitext (upload settings + base '
+                          'description + this file). Read-only; shown at most '
+                          f'{WIKITEXT_MAX_LINES} lines high - hover a cell for '
+                          'the full text.')
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(self.COL_THUMB, QHeaderView.Fixed)
-        self.table.setColumnWidth(self.COL_THUMB, 104)
+        self.table.setColumnWidth(self.COL_THUMB, THUMB_COL_WIDTH)
+        # 0.9.8: the neighbours of the Wikitext column are narrower so the
+        # stretching Wikitext column gets noticeably more room (was 250 / 240
+        # / 150). All three stay interactive and can be widened by hand.
         header.setSectionResizeMode(self.COL_FILENAME, QHeaderView.Interactive)
-        self.table.setColumnWidth(self.COL_FILENAME, 250)
+        self.table.setColumnWidth(self.COL_FILENAME, 180)
         header.setSectionResizeMode(self.COL_TITLE, QHeaderView.Interactive)
-        self.table.setColumnWidth(self.COL_TITLE, 240)
+        self.table.setColumnWidth(self.COL_TITLE, 200)
         header.setSectionResizeMode(self.COL_DESC, QHeaderView.Interactive)
         self.table.setColumnWidth(self.COL_DESC, 220)
         header.setSectionResizeMode(self.COL_EFFECTIVE, QHeaderView.Stretch)
         header.setSectionResizeMode(self.COL_STATUS, QHeaderView.Interactive)
-        self.table.setColumnWidth(self.COL_STATUS, 150)
+        self.table.setColumnWidth(self.COL_STATUS, 110)
 
         # The per-file description is kept as the editable data store (the side
         # editor writes to it and upload reads it) but hidden from the table;
         # the "Description" column now shows the combined effective text.
         self.table.setColumnHidden(self.COL_DESC, True)
-        # Wrap long effective text and let each row grow to show all of it.
+        # Wrap long effective text and let each row grow with its content -
+        # but the Wikitext column is capped at WIKITEXT_MAX_LINES lines by the
+        # delegate, so a single long description cannot blow up the row.
         self.table.setWordWrap(True)
+        self.table.setItemDelegateForColumn(
+            self.COL_EFFECTIVE,
+            CappedRowHeightDelegate(WIKITEXT_MAX_LINES, self.table))
         self.table.verticalHeader().setSectionResizeMode(
             QHeaderView.ResizeToContents)
 
@@ -324,7 +338,8 @@ class MainWindow(MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin, QM
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         splitter.addWidget(right_scroll)
-        splitter.setSizes([720, 420])
+        # 0.9.8: more room for the table (and thus for the Wikitext column).
+        splitter.setSizes([880, 400])
         main_layout.addWidget(splitter)
 
         self.progress_bar = QProgressBar()
