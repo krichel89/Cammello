@@ -4,6 +4,16 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.7] - 2026-07-10
+
+### Fixed
+- Dark mode on macOS made the app unusable: input fields forced a white (or
+  light-blue, for Wikidata fields) background but never set an explicit text
+  color, so Qt5 used the system's dark-mode text color (light) on top of it,
+  producing white-on-white text. All stylesheets that force a light background
+  now also force a matching dark text color (#1a1a1a), independent of the
+  system theme.
+
 ## [0.9.6] - 2026-07-07
 
 ### Changed

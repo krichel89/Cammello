@@ -20,7 +20,7 @@ def _style_wd_field(edit, multi=False, searchable=False):
     form (no fixed width cap) so the 30:70 label/field split holds.
     """
     edit.setStyleSheet(
-        f'QLineEdit {{ background: {WD_BG};'
+        f'QLineEdit {{ background: {WD_BG}; color: #1a1a1a;'
         ' border: 1px solid #7a8ea6; border-radius: 3px; padding: 2px 4px; }'
         'QLineEdit:focus { border: 1px solid #2a6db0; }')
     if not searchable:

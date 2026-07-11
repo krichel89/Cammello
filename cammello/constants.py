@@ -4,7 +4,7 @@ import re
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.9.6'
+__version__ = '0.9.7'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -60,6 +60,10 @@ INPUT_STYLE = (
     ' border-radius: 3px;'
     ' padding: 2px 4px;'
     ' background: white;'
+    ' color: #1a1a1a;'          # explicit dark text: on macOS dark mode, Qt5
+    #                             follows the system (light) text color while
+    #                             this stylesheet forces a white background,
+    #                             which made fields unreadable (white on white).
     ' }'
     'QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {'
     ' border: 1px solid #2a6db0;'
