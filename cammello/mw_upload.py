@@ -148,8 +148,12 @@ class MWUploadMixin:
             date = self.table.item(r, self.COL_DATE).text() if self.table.item(r, self.COL_DATE) else ''
             per_file_desc = self.table.item(r, self.COL_DESC).text() if self.table.item(r, self.COL_DESC) else ''
 
-            base = self.base_text_edit.toPlainText().strip()
-            combined = (base + '\n' + per_file_desc).strip() if base else per_file_desc
+            # Same function as the Wikitext preview column: what you see in the
+            # table is byte-for-byte what gets uploaded.
+            combined, merge_warnings = self._effective_text(per_file_desc,
+                                                            with_warnings=True)
+            for warn in merge_warnings:
+                self.logger.warning('Row %d ("%s"): %s', r + 1, source_name, warn)
 
             # Target filename on Commons (may differ from the source name);
             # empty -> source filename. The extension is ensured in the worker.
@@ -184,22 +188,11 @@ class MWUploadMixin:
         self._progress_dlg = UploadProgressDialog(len(rows), self)
         self._done_count = 0
 
-        # creator / copyright / license live in the upload settings; prepend
-        # them to the base description so the worker's SDC extractor picks
-        # them up alongside the user-authored base text.
-        base_lines = []
-        for key, val in (('creator',   self.creator_edit.text().strip()),
-                         ('copyright', self.copyright_sdc_edit.text().strip()),
-                         ('license',   self.license_sdc_edit.text().strip())):
-            if val:
-                base_lines.append(f'{key}={val}')
-        base_text = self.base_text_edit.toPlainText()
-        if base_lines:
-            base_text = '\n'.join(base_lines) + '\n' + base_text
-
+        # No base_text argument any more: each row already carries the fully
+        # merged description_all (settings SDC + base + per-file). The worker
+        # used to take a base_text it never read.
         self.worker = UploadWorker(
             self.api, rows,
-            base_text,
             self.gallery_prefix_edit.text(),
             self.ignore_warnings_cb.isChecked()
         )
@@ -253,7 +246,7 @@ class MWUploadMixin:
         self.status_bar.showMessage(summary)
         dlg = getattr(self, '_progress_dlg', None)
         if dlg is not None:
-            dlg.close()
+            dlg.force_close()   # plain close() is swallowed by reject()
             self._progress_dlg = None
         cancelled = summary.startswith('Cancelled')
         QMessageBox.information(

@@ -50,37 +50,82 @@ def _strip_sd_lines(text, keys):
 NAME_SEPARATORS = [' at ', ' bei ', ' à ', ' al ', ' auf ', ' sur ', ' on ', ' sul ']
 
 
-def extract_structured_data(text):
+# Keys whose values are MERGED when they occur more than once (i.e. once in the
+# base description and once in the per-file description). Only depicts qualifies:
+# workers.py turns a ";"-separated depicts value into several P180 claims. The
+# other keys become a single claim each, so a merged "Q640;Q123" would be handed
+# to the API as one (invalid) QID; and a merged gallery_suffix would be a
+# nonsensical page name. For those, the per-file value wins - see below.
+MERGE_KEYS = {'depicts'}
+
+
+def extract_structured_data(text, logger=None):
     """Extract key=value lines from description_all text.
+
     Lines starting with # are treated as comments and removed.
-    Keys are matched case-insensitively (license= and LICENSE= are equivalent)."""
+    Keys are matched case-insensitively (license= and LICENSE= are equivalent).
+
+    The text handed in is the concatenation of the upload settings, the base
+    description and the per-file description, in that order, so a key can occur
+    twice. Since 0.9.13:
+      - depicts (MERGE_KEYS): all occurrences are merged, deduplicated, order
+        preserved -> several P180 claims.
+      - every other key, and caption_XX: the LAST occurrence wins, i.e. the
+        per-file value overrides the base value. (Up to 0.9.12 the first one won
+        for the non-caption keys, so a per-file value was silently dropped while
+        captions behaved the other way round.)
+    """
     sd = {}
     # Remove comment lines (starting with #)
     text = re.sub(r'^#[^\n]*\n?', '', text, flags=re.MULTILINE)
     result = text
 
-    # Dynamically extract all caption_XX= lines (any language code)
+    # Dynamically extract all caption_XX= lines (any language code). Assigning
+    # into the dict means the last occurrence wins.
     for m in re.finditer(r'(?:^|\n)caption_([a-z]{2,3})=([^\n]+)',
                          result, flags=re.IGNORECASE):
         lang = m.group(1).lower()
         val = m.group(2).strip()
-        sd['caption_' + lang] = val
+        key = 'caption_' + lang
+        if logger and key in sd and sd[key] != val:
+            logger.info('%s: per-file value overrides the base value '
+                        '("%s" -> "%s").', key, sd[key], val)
+        sd[key] = val
     # Remove all matched caption_XX= lines from result
     result = re.sub(r'\ncaption_[a-z]{2,3}=[^\n]+', '', result, flags=re.IGNORECASE)
     result = re.sub(r'^caption_[a-z]{2,3}=[^\n]+\n?', '', result,
                     flags=re.MULTILINE | re.IGNORECASE)
 
     for key in SD_KEYS:
-        # Match at start of string
-        m = re.match(rf'^{key}=([^\n]+)', result, flags=re.IGNORECASE)
-        if not m:
-            # Match after newline
-            m = re.search(rf'\n{key}=([^\n]+)', result, flags=re.IGNORECASE)
-        if m:
-            sd[key] = m.group(1).strip()
-            result = re.sub(rf'\n{key}=[^\n]+', '', result, flags=re.IGNORECASE)
-            result = re.sub(rf'^{key}=[^\n]+\n?', '', result,
-                            flags=re.MULTILINE | re.IGNORECASE)
+        values = [v.strip() for v in
+                  re.findall(rf'(?:^|\n){key}=([^\n]+)', result,
+                             flags=re.IGNORECASE)]
+        values = [v for v in values if v]
+        if not values:
+            continue
+
+        if key in MERGE_KEYS:
+            merged, seen = [], set()
+            for value in values:
+                # ";" is the separator, "," is tolerated for older values.
+                for part in re.split(r'[;,]', value):
+                    part = part.strip()
+                    if part and part not in seen:
+                        seen.add(part)
+                        merged.append(part)
+            sd[key] = '; '.join(merged)
+            if logger and len(values) > 1:
+                logger.info('%s: base and per-file values merged -> %s',
+                            key, sd[key])
+        else:
+            sd[key] = values[-1]
+            if logger and len(values) > 1 and values[0] != values[-1]:
+                logger.info('%s: per-file value overrides the base value '
+                            '("%s" -> "%s").', key, values[0], values[-1])
+
+        result = re.sub(rf'\n{key}=[^\n]+', '', result, flags=re.IGNORECASE)
+        result = re.sub(rf'^{key}=[^\n]+\n?', '', result,
+                        flags=re.MULTILINE | re.IGNORECASE)
 
     return sd, result.strip()
 
@@ -261,3 +306,92 @@ def split_lang_templates(text):
     # Collapse blank lines left behind by removed templates.
     remaining = re.sub(r'\n{3,}', '\n\n', remaining).strip()
     return infos, remaining
+
+
+# ── Merging the base description with a per-file description ────────────────────
+#
+# Up to 0.9.12 the two texts were simply concatenated and parsed as one blob,
+# with two consequences the user could not see:
+#   * for creator/copyright/license/depicts/created_during/gallery_suffix,
+#     extract_structured_data() takes the FIRST occurrence, so the base silently
+#     won and a per-file value was dropped - while for caption_XX the LAST one
+#     wins, so there the file won. Inconsistent.
+#   * the preview column assembled the text differently from the upload path.
+# merge_descriptions() is now the single source of truth for both.
+
+# Keys where the per-file value replaces the base value.
+_OVERRIDE_KEYS = ['creator', 'copyright', 'license', 'created_during']
+# Keys only ever taken from the base description.
+_BASE_ONLY_KEYS = ['gallery_suffix']
+# Keys whose values are merged into one list.
+_MERGE_KEYS = ['depicts']
+
+
+def _split_qids(value):
+    """Split a multi-value field. ';' is the separator, ',' is tolerated."""
+    return [p.strip() for p in re.split(r'[;,]', value or '') if p.strip()]
+
+
+def merge_descriptions(base_text, file_text):
+    """Combine base and per-file description into one description_all text.
+
+    Rules (agreed with the user):
+      * depicts        - base and file are merged, duplicates removed, order kept
+      * caption_XX     - the file overrides the base
+      * creator, copyright, license, created_during - the file overrides the base
+                         (NOT merged: the worker writes these as a single QID per
+                         property, so "Q1;Q2" would be an invalid QID)
+      * gallery_suffix - base only; a per-file value is ignored
+      * free wikitext  - base text first, then the file text
+
+    Returns (merged_text, warnings): warnings are human-readable strings about
+    values that were overridden or dropped.
+    """
+    base_sd, base_rest = extract_structured_data(base_text or '')
+    file_sd, file_rest = extract_structured_data(file_text or '')
+    warnings = []
+
+    merged = dict(base_sd)
+
+    for key, val in file_sd.items():
+        if key in _BASE_ONLY_KEYS:
+            if val.strip():
+                warnings.append(
+                    f'"{key}" belongs in the base description; the per-file '
+                    f'value "{val}" is ignored.')
+            continue
+
+        if key in _MERGE_KEYS:
+            out, seen = [], set()
+            for qid in _split_qids(base_sd.get(key, '')) + _split_qids(val):
+                if qid not in seen:
+                    out.append(qid)
+                    seen.add(qid)
+            if out:
+                merged[key] = '; '.join(out)
+            continue
+
+        # caption_XX and the override keys: the file wins.
+        old = base_sd.get(key)
+        if old is not None and old.strip() != val.strip():
+            warnings.append(
+                f'"{key}": the per-file value overrides the base '
+                f'("{old}" -> "{val}").')
+        merged[key] = val
+
+    # Assemble in a stable order: captions (by language), then the SD keys.
+    lines = []
+    for key in sorted(k for k in merged if k.startswith('caption_')):
+        lines.append(f'{key}={merged[key]}')
+    for key in SD_KEYS:
+        if merged.get(key, '').strip():
+            lines.append(f'{key}={merged[key]}')
+
+    parts = []
+    if lines:
+        parts.append('\n'.join(lines))
+    if (base_rest or '').strip():
+        parts.append(base_rest.strip())
+    if (file_rest or '').strip():
+        parts.append(file_rest.strip())
+    return '\n'.join(parts), warnings

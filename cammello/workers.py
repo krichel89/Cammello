@@ -15,12 +15,13 @@ class UploadWorker(QThread):
     error = pyqtSignal(int, str)      # row, error message
     file_started = pyqtSignal(int, str)   # index, target filename
 
-    def __init__(self, api, rows, base_text, gallery_prefix, ignore_warnings):
+    def __init__(self, api, rows, gallery_prefix, ignore_warnings):
         super().__init__()
         self.api = api
         self.log = api.log
+        # Each row's description_all is already the merged text (upload settings
+        # + base + per-file), built by MWEditorMixin._effective_text.
         self.rows = rows
-        self.base_text = base_text
         self.gallery_prefix = gallery_prefix
         self.ignore_warnings = ignore_warnings
         # Set from the GUI thread by cancel(). A bool assignment is atomic
@@ -37,6 +38,7 @@ class UploadWorker(QThread):
     def run(self):
         gallery_entries = {}   # gallery_page -> list of (filename, caption)
         success_count = 0
+        sdc_failures = 0
         cancelled_at = None
 
         self.log.info('=== Upload run started: %d file(s) ===', len(self.rows))
@@ -119,7 +121,21 @@ class UploadWorker(QThread):
                     filename, row['filepath'], wikitext,
                     f'Uploaded with {APP_NAME}', self.ignore_warnings
                 )
+            except Exception as e:
+                # The file never made it to Commons.
+                self.log.error('✗ Error for "%s": %s', fname, e, exc_info=True)
+                msg = str(e) or f'{type(e).__name__} (no message)'
+                self.error.emit(i, msg)
+                self.progress.emit(i, '✗ Error')
+                continue
 
+            # From here on the file EXISTS on Commons. Structured data and the
+            # gallery entry are post-processing: if they fail, the upload still
+            # counts, it is only flagged. Up to 0.9.11 they shared the handler
+            # above, so a file that was already on Commons was reported as
+            # "Done: 0/1 file(s) uploaded".
+            sdc_ok = True
+            try:
                 # Structured data
                 labels = {}
                 claims = []
@@ -171,15 +187,29 @@ class UploadWorker(QThread):
                     (filename, caption)
                 )
 
-                self.progress.emit(i, '✓ Done')
-                success_count += 1
-
             except Exception as e:
-                # Full text + traceback to the log, compact message to the table.
-                self.log.error('✗ Error for "%s": %s', fname, e, exc_info=True)
+                sdc_ok = False
+                sdc_failures += 1
+                self.log.error('Uploaded "%s", but post-processing (structured '
+                               'data / gallery) failed: %s', fname, e,
+                               exc_info=True)
                 msg = str(e) or f'{type(e).__name__} (no message)'
-                self.error.emit(i, msg)
-                self.progress.emit(i, '✗ Error')
+                if 'permissiondenied' in msg:
+                    # Writing structured data is an edit of the file page, so
+                    # it needs the "Edit existing pages" grant. Uploading only
+                    # needs an upload grant - which is why the file goes up and
+                    # only wbeditentity is refused. (Deduced from the API error,
+                    # not verified against the grant documentation.)
+                    msg += (' - if you log in with a bot password, check that '
+                            'it has the "Edit existing pages" grant (and '
+                            '"Create, edit, and move pages" if you use a '
+                            'gallery prefix) at Special:BotPasswords.')
+                self.error.emit(
+                    i, f'Uploaded, but structured data failed: {msg}')
+
+            self.progress.emit(
+                i, '✓ Done' if sdc_ok else '✓ Uploaded (SDC failed)')
+            success_count += 1
 
         # Update galleries. Files that did go up are still added to the
         # gallery, even after a cancel - they exist on Commons now.
@@ -194,19 +224,37 @@ class UploadWorker(QThread):
                 self.error.emit(-1, f'Gallery error ({gallery_page}): {e}')
 
         total = len(self.rows)
+        # Files that are on Commons but whose structured data could not be
+        # written must not be hidden behind a plain "Done".
+        sdc_note = (f' {sdc_failures} of them without structured data '
+                    f'(see the Log tab).' if sdc_failures else '')
         if cancelled_at is not None:
             skipped = total - cancelled_at
-            self.log.info('=== Upload run cancelled: %d/%d succeeded, '
-                          '%d not started ===', success_count, total, skipped)
+            self.log.info('=== Upload run cancelled: %d/%d succeeded, %d not '
+                          'started, %d SDC failure(s) ===',
+                          success_count, total, skipped, sdc_failures)
             self.finished.emit(
                 f'Cancelled: {success_count}/{total} file(s) uploaded, '
-                f'{skipped} not started.'
+                f'{skipped} not started.{sdc_note}'
+            )
+        elif self._cancelled:
+            # Cancel arrived while the last file was already in flight, so the
+            # run completed anyway. Saying "Done" without a word about it would
+            # look like the Cancel button did nothing.
+            self.log.info('=== Upload run finished (cancel came too late): '
+                          '%d/%d succeeded, %d SDC failure(s) ===',
+                          success_count, total, sdc_failures)
+            self.finished.emit(
+                f'Done: {success_count}/{total} file(s) uploaded. The cancel '
+                f'arrived while the last file was already being uploaded, so '
+                f'the run finished.{sdc_note}'
             )
         else:
-            self.log.info('=== Upload run finished: %d/%d succeeded ===',
-                          success_count, total)
+            self.log.info('=== Upload run finished: %d/%d succeeded, '
+                          '%d SDC failure(s) ===',
+                          success_count, total, sdc_failures)
             self.finished.emit(
-                f'Done: {success_count}/{total} file(s) uploaded.'
+                f'Done: {success_count}/{total} file(s) uploaded.{sdc_note}'
             )
 
 

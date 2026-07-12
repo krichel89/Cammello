@@ -260,6 +260,12 @@ class UploadProgressDialog(QDialog):
         self.setStyleSheet(INPUT_STYLE)
         self.total = total
         self._cancelling = False
+        # QDialog.close() raises a close event, and QDialog handles it by
+        # calling reject(). Since reject() is overridden below to mean "the
+        # user wants to cancel", close() alone would NOT close this window
+        # (0.9.11 bug: the progress window stayed on screen after the upload
+        # had finished). force_close() is the way out for the caller.
+        self._closable = False
 
         layout = QVBoxLayout(self)
         self.headline = QLabel(f'Uploading 0 of {total} file(s)…')
@@ -307,9 +313,25 @@ class UploadProgressDialog(QDialog):
     def set_done(self, count):
         self.bar.setValue(min(count, self.bar.maximum()))
 
+    def force_close(self):
+        """Close the window for real. Called by MainWindow.on_finished."""
+        self._closable = True
+        self.accept()
+
     def reject(self):
-        # Esc must not close the window and leave the upload running blind.
-        self._on_cancel()
+        # Esc must not close the window and leave the upload running blind: it
+        # means "cancel" instead. Only force_close() gets through.
+        if self._closable:
+            super().reject()
+        else:
+            self._on_cancel()
+
+    def closeEvent(self, event):
+        if self._closable:
+            event.accept()
+        else:
+            self._on_cancel()
+            event.ignore()
 
 
 class FileDropTableWidget(QTableWidget):

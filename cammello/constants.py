@@ -4,7 +4,7 @@ import re
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.9.11'
+__version__ = '0.9.12'
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.

@@ -44,10 +44,8 @@ class MWEditorMixin:
                 lines.append(f'{key}={val}')
         return lines
 
-    def _effective_text(self, per_file_text):
-        """The combined description_all for one file, as it will be uploaded:
-        creator/copyright/license (from Upload settings) + base description +
-        the per-file description."""
+    def _full_base_text(self):
+        """Base description including the SDC fields from the upload settings."""
         parts = []
         sdc = self._base_sdc_lines()
         if sdc:
@@ -55,10 +53,20 @@ class MWEditorMixin:
         base = self.base_text_edit.toPlainText().strip()
         if base:
             parts.append(base)
-        pf = (per_file_text or '').strip()
-        if pf:
-            parts.append(pf)
         return '\n'.join(parts)
+
+    def _effective_text(self, per_file_text, with_warnings=False):
+        """The combined description_all for one file, exactly as it is uploaded.
+
+        Both the preview column and start_upload() go through here, so the two
+        cannot drift apart - which they did up to 0.9.12: the preview showed
+        creator/copyright/license from the upload settings, but the upload path
+        never put them into description_all (the worker's base_text argument was
+        assigned and never read), so P170/P6216/P275 were never written.
+        """
+        text, warnings = merge_descriptions(self._full_base_text(),
+                                            per_file_text or '')
+        return (text, warnings) if with_warnings else text
 
     def _refresh_effective(self, row):
         if row < 0 or row >= self.table.rowCount():

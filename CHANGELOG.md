@@ -4,6 +4,46 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.12] - 2026-07-12
+
+### Fixed
+- The upload settings (creator, copyright, license) never reached Commons:
+  start_upload() put them into a base_text argument that UploadWorker assigned
+  and never read, while row['description_all'] was built without them. P170,
+  P6216 and P275 were therefore never written - although the preview column
+  showed them, because the preview assembled its text differently. Preview and
+  upload now both go through merge_descriptions(), so what the Wikitext column
+  shows is what gets uploaded. The dead base_text argument is gone.
+- Base and per-file description are merged by rule instead of being
+  concatenated and re-parsed (where extract_structured_data() took the FIRST
+  occurrence for creator/copyright/license/depicts/created_during/
+  gallery_suffix - the base silently won - but the LAST one for caption_XX -
+  there the file won):
+  * depicts: base and file merged, duplicates removed, order kept
+  * caption_XX, creator, copyright, license, created_during: the file overrides
+    the base (not merged: these are written as a single QID per property)
+  * gallery_suffix: base only; a per-file value is ignored
+  * free wikitext: base first, then the file
+  Overridden or dropped values are written to the log as warnings.
+- A permissiondenied error from wbeditentity now says what it usually means:
+  the bot password is missing the "Edit existing pages" grant. The upload
+  itself only needs an upload grant, which is why the file goes up and only
+  the structured data is refused.
+- A file that was uploaded but whose structured data (or gallery entry) could
+  not be written was reported as a failure: the summary said "Done: 0/1
+  file(s) uploaded" although the file was on Commons. Upload and
+  post-processing now have separate error handlers. The upload counts as soon
+  as the file is on Commons; a failure afterwards is flagged in the row status
+  ("Uploaded (SDC failed)"), in the message ("Uploaded, but structured data
+  failed: ...") and in the summary ("1 of them without structured data").
+- The progress window did not close when the upload finished. QDialog.close()
+  raises a close event, which QDialog answers by calling reject() - and
+  reject() was overridden in 0.9.11 to mean "cancel", so it swallowed the
+  close. There is now an explicit force_close(); Esc and the window's close
+  box still mean "cancel".
+- Cancelling a run whose last file is already in flight can no longer finish
+  with a bare "Done": the summary says the cancel arrived too late.
+
 ## [0.9.11] - 2026-07-11
 
 ### Added
