@@ -15,9 +15,28 @@ from PyQt5.QtTest import QTest
 
 import Cammello
 from cammello import culling
+from cammello.constants import APP_NAME
 from cammello.logging_setup import setup_logging
+from PyQt5.QtCore import QSettings
 
 app = QApplication(sys.argv)
+
+# Deterministic tab layout: pin the hidden feature switches (this test
+# predates the 0.10.0 tab changes). Culling/IPTC/FTP on, Flickr off - the
+# FTP and Flickr tabs are separate here, and IPTC is visible.
+_ts = QSettings(APP_NAME, 'Main')
+_ts_saved = {k: _ts.value(k) for k in
+             ('feature_culling', 'feature_iptc', 'feature_ftp',
+              'feature_flickr', 'cull_auto_advance', 'color_scheme')}
+_ts.setValue('feature_culling', True)
+_ts.setValue('feature_iptc', True)
+_ts.setValue('feature_ftp', True)
+_ts.setValue('feature_flickr', False)
+# The keyboard tests rely on auto-advance (the app default); pin it so a
+# persisted 'false' from another session does not break the test.
+_ts.setValue('cull_auto_advance', True)
+_ts.setValue('color_scheme', 'system')   # w8 expects the default scheme
+_ts.sync()
 logger, emitter, gui_handler, log_path = setup_logging()
 
 import logging
@@ -53,7 +72,8 @@ open(os.path.join(folder, 'IMG_0001.CR3'), 'wb').write(b'\0' * 32)
 w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 tabs = [w.tabs.tabText(i) for i in range(w.tabs.count())]
 check('tabs order',
-      tabs == ['Culling', 'MediaWiki', 'IPTC', 'FTP', 'Settings', 'Log'],
+      tabs == ['Culling', 'MediaWiki', 'IPTC', 'FTP', 'Settings', 'Log',
+               'About'],
       str(tabs))
 w.tabs.setCurrentWidget(w._cull_tab_widget)
 w._cull_tab_widget.setFocus()
@@ -459,7 +479,7 @@ check('combo POPUP is styled (dark-mode contrast)',
       and 'color: #1a1a1a' in INPUT_STYLE.split('QAbstractItemView')[1])
 
 w8 = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
-check('scheme combo in settings', w8.scheme_combo.currentText() == 'system')
+check('scheme combo in settings', w8.scheme_combo.currentData() == 'system')
 check('settings tab exists', w8.scheme_combo is not None)
 
 # Dark scheme: palette flips, delegate follows.
@@ -522,12 +542,12 @@ t10 = w10._cull_tab_widget
 # Scheme switch re-applies the input stylesheet variant (the "not clean" bug).
 w10.scheme_combo.setCurrentText('dark')
 check('dark scheme applies dark input style',
-      '#2b2b2b' in w10.styleSheet() and 'white' not in
-      w10.styleSheet().split('QComboBox QAbstractItemView')[0])
+      '#2b2b2b' in app.styleSheet() and 'white' not in
+      app.styleSheet().split('QComboBox QAbstractItemView')[0])
 check('dialogs pick the active variant',
       current_input_style() == input_style(True))
 w10.scheme_combo.setCurrentText('light')
-check('light scheme restores light inputs', 'white' in w10.styleSheet())
+check('light scheme restores light inputs', 'white' in app.styleSheet())
 check('active variant follows back',
       current_input_style() == input_style(False))
 w10.scheme_combo.setCurrentText('system')
@@ -641,6 +661,10 @@ check('IPTC JPG rows carry the table thumbnails',
       jpg_rows and all(not it.icon().isNull() for it in jpg_rows),
       f'{len(jpg_rows)} JPG rows')
 w11._cull_shutdown()
+
+for _k, _v in _ts_saved.items():
+    (_ts.remove(_k) if _v is None else _ts.setValue(_k, _v))
+_ts.sync()  # restore feature switches
 
 print('\nFAILURES (9):', fails if fails else 'none')
 sys.exit(1 if fails else 0)
