@@ -1865,4 +1865,34 @@ TRANSLATIONS = {
         'fr': 'BotPassword recommandé (Special:BotPasswords). Le mot de passe est enregistré en TEXTE CLAIR – laissez-le vide pour qu’il soit demandé à la connexion.',
         'it': 'BotPassword consigliata (Special:BotPasswords). La password è salvata in TESTO IN CHIARO: lasciala vuota per farla chiedere all’accesso.',
     },
+    'Other (ISO code)…': {
+        'de': 'Weitere (ISO-Code)…',
+        'es': 'Otro (código ISO)…',
+        'fr': 'Autre (code ISO)…',
+        'it': 'Altro (codice ISO)…',
+    },
+    'Caption language': {
+        'de': 'Bildunterschriften-Sprache',
+        'es': 'Idioma de la leyenda',
+        'fr': 'Langue de la légende',
+        'it': 'Lingua della didascalia',
+    },
+    'ISO language code (e.g. nl, pt, ja):': {
+        'de': 'ISO-Sprachcode (z. B. nl, pt, ja):',
+        'es': 'Código de idioma ISO (p. ej. nl, pt, ja):',
+        'fr': 'Code de langue ISO (p. ex. nl, pt, ja) :',
+        'it': 'Codice lingua ISO (ad es. nl, pt, ja):',
+    },
+    'Not a valid ISO code: {code}': {
+        'de': 'Kein gültiger ISO-Code: {code}',
+        'es': 'Código ISO no válido: {code}',
+        'fr': 'Code ISO non valide : {code}',
+        'it': 'Codice ISO non valido: {code}',
+    },
+    '{n} files selected - a changed field is applied to all of them.': {
+        'de': '{n} Dateien ausgewählt – ein geändertes Feld wird auf alle angewendet.',
+        'es': '{n} archivos seleccionados: un campo modificado se aplica a todos.',
+        'fr': '{n} fichiers sélectionnés – un champ modifié est appliqué à tous.',
+        'it': '{n} file selezionati: un campo modificato viene applicato a tutti.',
+    },
 }

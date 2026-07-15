@@ -243,9 +243,22 @@ def normalize_commons_filename(target, source_path):
 # maintenance category is added (requested 2026-07-15).
 DEPICTS_OVERRIDES = {
     'no_item': 'WikiPortraits photos needing Wikidata item',
-    'no_person': 'WikiPortraits photos without identifiable person',
+    'not_applicable': 'WikiPortraits photos without identifiable person',
     'unidentified': 'WikiPortraits photos needing identification',
 }
+
+# Backwards compatibility: 'no_person' was the internal value for 'Not
+# applicable' up to 0.11.0. It was named for people only, but the option
+# also covers buildings, landscapes etc. - so the value is now
+# 'not_applicable'. Old file descriptions carrying 'no_person' still map to
+# the same category.
+_OVERRIDE_ALIASES = {'no_person': 'not_applicable'}
+
+
+def canonical_override(value):
+    """Normalize a depicts_override value, mapping legacy aliases."""
+    v = (value or '').strip().lower()
+    return _OVERRIDE_ALIASES.get(v, v)
 
 
 def wikiportraits_maintenance_category(sd, context_text):
@@ -254,7 +267,7 @@ def wikiportraits_maintenance_category(sd, context_text):
     Applied only when the upload is in a WikiPortraits context: the assembled
     categories or templates mention WikiPortraits (a {{WikiPortraits ...}}
     template or a WikiPortraits (sub)category)."""
-    override = (sd.get('depicts_override') or '').strip().lower()
+    override = canonical_override(sd.get('depicts_override'))
     cat = DEPICTS_OVERRIDES.get(override)
     if not cat:
         return None
@@ -421,3 +434,114 @@ def merge_descriptions(base_text, file_text):
     if (file_rest or '').strip():
         parts.append(file_rest.strip())
     return '\n'.join(parts), warnings
+
+
+# ── Field-level diff/apply for the multi-select editor (0.11.0) ───────────────
+#
+# A file description is decomposed into named FIELDS so the multi-select
+# editor can propagate exactly what the user changed and nothing else:
+#   * assignment fields:  caption_xx=, depicts=, depicts_override=, ... (key)
+#   * info fields:         the {{lang|1=...}} Information templates (info:lang)
+#   * 'extra':             the remaining free wikitext (comments etc.)
+# Categories are a separate list, replaced only when they change. This covers
+# free-text edits (Information templates and expert/extra text), which the
+# earlier key=value-only diff missed.
+
+_ANY_ASSIGN_RE = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$')
+
+
+def assignment_map(text):
+    """{key_lower: value} of every recognized key=value line (captions
+    included). Used by the upload validation."""
+    out = {}
+    for line in (text or '').splitlines():
+        if line.lstrip().startswith('#'):
+            continue
+        m = _ANY_ASSIGN_RE.match(line)
+        if m and _ASSIGN_RE.match(line):
+            out[m.group(1).lower()] = m.group(2).strip()
+    return out
+
+
+def decompose_fields(text):
+    """(fields, categories) for a description.
+
+    fields maps a field id to its value:
+      * '<key>'        a recognized key=value assignment line
+      * 'info:<lang>'  a {{lang|1=value}} Information template
+      * 'extra'        the remaining free wikitext (only if non-empty)
+    categories is the list of bare [[Category:]] names.
+    """
+    text = text or ''
+    cats = split_categories(text)[0]
+    fields = assignment_map(text)
+    non_assign = _CATEGORY_RE.sub('', leftover_text(text))
+    infos, remaining = split_lang_templates(non_assign)
+    for lang, val in infos.items():
+        fields[f'info:{lang}'] = val
+    remaining = '\n'.join(l for l in remaining.splitlines()
+                          if not l.lstrip().startswith('#')).strip()
+    if remaining:
+        fields['extra'] = remaining
+    return fields, cats
+
+
+def diff_fields(old_text, new_text):
+    """(changes, categories_or_None): what changed from old to new.
+
+    changes maps field id -> new value, or -> None for a removed field.
+    categories is the new list only when it differs, else None.
+    """
+    old_f, old_c = decompose_fields(old_text)
+    new_f, new_c = decompose_fields(new_text)
+    changes = {fid: val for fid, val in new_f.items() if old_f.get(fid) != val}
+    for fid in old_f:
+        if fid not in new_f:
+            changes[fid] = None
+    cats = (new_c if [c.strip() for c in new_c] != [c.strip() for c in old_c]
+            else None)
+    return changes, cats
+
+
+def _render_field(fid, value):
+    if fid.startswith('info:'):
+        return f'{{{{{fid[5:]}|1={value}}}}}'
+    if fid == 'extra':
+        return value
+    return f'{fid}={value}'
+
+
+def apply_field_changes(text, changes, categories=None):
+    """Apply a field-level diff (from diff_fields) to ANOTHER file.
+
+    Fields not mentioned in changes are preserved verbatim, including this
+    file's own captions, info templates and free text. categories (a list)
+    replaces all category links when given; None keeps this file's own.
+    Re-serialized in the same order the structured editor's assemble() uses,
+    so a file edited here and one edited directly look identical.
+    """
+    merged, own_cats = decompose_fields(text)
+    for fid, val in (changes or {}).items():
+        if val in (None, ''):
+            merged.pop(fid, None)
+        else:
+            merged[fid] = val
+    cats = categories if categories is not None else own_cats
+
+    assign = {k: v for k, v in merged.items()
+              if ':' not in k and k != 'extra'}
+    infos = {k: v for k, v in merged.items() if k.startswith('info:')}
+    cap_keys = sorted(k for k in assign if k.startswith('caption_'))
+    other_keys = [k for k in assign if not k.startswith('caption_')]
+    lines = [_render_field(k, assign[k]) for k in cap_keys + other_keys]
+    body = '\n'.join(lines)
+    info_block = '\n'.join(_render_field(k, infos[k]) for k in sorted(infos))
+    if info_block:
+        body = (body + '\n\n' + info_block).strip()
+    if merged.get('extra'):
+        body = (body + '\n\n' + merged['extra']).strip()
+    cat_block = '\n'.join(f'[[Category:{c.strip()}]]'
+                          for c in cats if c and c.strip())
+    if cat_block:
+        body = (body + '\n' + cat_block).strip()
+    return body

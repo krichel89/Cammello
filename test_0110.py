@@ -49,10 +49,18 @@ check('override survives merge', 'depicts_override=unidentified' in m)
 
 # ── 2) Editor round-trip: checkboxes <-> depicts_override= ──────────────────
 ed = StructuredDescriptionEditor(is_base=False)
-ed.load('depicts_override=no_person')
+ed.load('depicts_override=not_applicable')
 check('load selects the right override',
-      ed.override_combo.currentData() == 'no_person')
-check('assemble writes the key', 'depicts_override=no_person' in ed.assemble())
+      ed.override_combo.currentData() == 'not_applicable')
+check('assemble writes the key',
+      'depicts_override=not_applicable' in ed.assemble())
+# Legacy 'no_person' still maps to the same option (buildings/landscapes
+# were wrongly excluded by the people-only name).
+from cammello.sdc import canonical_override
+check('legacy no_person aliased', canonical_override('no_person')
+      == 'not_applicable')
+ed.load('depicts_override=no_person')
+check('legacy value loads', ed.override_combo.currentData() == 'not_applicable')
 ed.override_combo.setCurrentIndex(ed.override_combo.findData('unidentified'))
 check('assemble follows the dropdown',
       'depicts_override=unidentified' in ed.assemble())
@@ -81,6 +89,10 @@ ctx = '[[Category:WikiPortraits at Berlinale 2026]] {{Information}}'
 for value, cat in DEPICTS_OVERRIDES.items():
     got = wikiportraits_maintenance_category({'depicts_override': value}, ctx)
     check(f'category for {value}', got == f'[[Category:{cat}]]', str(got))
+check('legacy no_person -> without-identifiable-person category',
+      wikiportraits_maintenance_category(
+          {'depicts_override': 'no_person'}, ctx)
+      == '[[Category:WikiPortraits photos without identifiable person]]')
 check('template context counts',
       wikiportraits_maintenance_category(
           {'depicts_override': 'no_item'},
@@ -212,6 +224,116 @@ finally:
     for k, v in saved2.items():
         (settings.remove(k) if v is None else settings.setValue(k, v))
     settings.sync()
+
+# ── 8) Multi-select field propagation ───────────────────────────────────────
+from cammello.sdc import (decompose_fields, diff_fields,
+                          apply_field_changes)
+f, c = decompose_fields(
+    'caption_en=Hi\ndepicts=Q1\n\n{{en|1=Info EN}}\n\nFree note\n'
+    '[[Category:A]]')
+check('decompose: assignments + info + extra',
+      f == {'caption_en': 'Hi', 'depicts': 'Q1', 'info:en': 'Info EN',
+            'extra': 'Free note'} and c == ['A'], str((f, c)))
+# Diff detects an INFO-template change (the case that used not to propagate).
+ch, cats = diff_fields('caption_en=Hi\n\n{{en|1=Old}}',
+                       'caption_en=Hi\n\n{{en|1=New}}')
+check('diff: info template change detected',
+      ch == {'info:en': 'New'} and cats is None, str((ch, cats)))
+# Diff detects a free/expert text change.
+ch2, _ = diff_fields('caption_en=Hi\n\nOld note',
+                     'caption_en=Hi\n\nNew note')
+check('diff: free text change detected',
+      ch2 == {'extra': 'New note'}, str(ch2))
+# Apply keeps the other file's OWN info + extra, adds the changed field.
+other = apply_field_changes(
+    'caption_de=Hallo\n\n{{de|1=Eigen}}\n\nEigene Notiz\n[[Category:B]]',
+    {'info:en': 'New'}, None)
+check('apply: own info/extra kept, changed field added',
+      '{{de|1=Eigen}}' in other and '{{en|1=New}}' in other
+      and 'Eigene Notiz' in other and '[[Category:B]]' in other, other)
+# Category replacement only when given.
+out2 = apply_field_changes('caption_en=X\n[[Category:Old]]\nText',
+                           {}, categories=['New A', 'New B'])
+check('apply: categories replaced only when given',
+      '[[Category:New A]]' in out2 and '[[Category:New B]]' in out2
+      and 'Old' not in out2, repr(out2))
+
+saved3 = {k: settings.value(k) for k in
+          ('feature_culling', 'feature_iptc', 'feature_ftp',
+           'feature_flickr')}
+try:
+    for k in saved3:
+        settings.setValue(k, False)
+    settings.sync()
+    w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
+    from PyQt5.QtGui import QPixmap as _QP
+    p1, p2, p3 = '/tmp/ms_a.jpg', '/tmp/ms_b.jpg', '/tmp/ms_c.jpg'
+    for p in (p1, p2, p3):
+        _QP(8, 8).save(p)
+    w._add_paths([p1, p2, p3])
+    w.table.item(1, w.COL_DESC).setText('caption_en=Own B\n[[Category:B]]')
+    # Select all three rows; anchor = row 0.
+    from PyQt5.QtCore import QItemSelectionModel as _ISM
+    w.table.clearSelection()
+    w.table.setCurrentCell(0, w.COL_FILENAME)
+    sm = w.table.selectionModel()
+    for r in range(3):
+        sm.select(w.table.model().index(r, 0), _ISM.Select | _ISM.Rows)
+    app.processEvents()
+    w.on_row_selected()
+    check('multi: editor loaded (anchor)', w._editor_item is not None
+          and w._editor_item.row() == 0)
+    check('multi: selection captured',
+          len(getattr(w, '_editor_sel_items', [])) == 3)
+    # Change ONE field and commit.
+    w.file_struct.depicts.setText('Q640')
+    w._commit_editor()
+    d1 = w.table.item(1, w.COL_DESC).text()
+    d2 = w.table.item(2, w.COL_DESC).text()
+    check('multi: depicts propagated to row 1', 'depicts=Q640' in d1, d1)
+    check('multi: row 1 keeps its own fields',
+          'caption_en=Own B' in d1 and '[[Category:B]]' in d1, d1)
+    check('multi: depicts propagated to row 2', 'depicts=Q640' in d2, d2)
+    # Second commit without changes must NOT touch others again.
+    before = w.table.item(1, w.COL_DESC).text()
+    w._commit_editor()
+    check('multi: no-change commit is a no-op',
+          w.table.item(1, w.COL_DESC).text() == before)
+    w.deleteLater(); app.processEvents()
+finally:
+    for k, v in saved3.items():
+        (settings.remove(k) if v is None else settings.setValue(k, v))
+    settings.sync()
+
+# ── 9) Caption language dropdown: 4 base + persisted extras ─────────────────
+from cammello.constants import (caption_language_choices, CAPTION_BASE_LANGS,
+                                remember_caption_language)
+extra_saved = settings.value('caption_extra_langs')
+try:
+    settings.remove('caption_extra_langs'); settings.sync()
+    base = [c for c, _n in caption_language_choices()]
+    check('four base languages', base == ['en', 'de', 'es', 'fr'], str(base))
+    remember_caption_language('ja')
+    remember_caption_language('ja')          # dedup
+    remember_caption_language('de')          # base: not duplicated
+    langs = [c for c, _n in caption_language_choices()]
+    check('entered ISO code persisted once',
+          langs == ['en', 'de', 'es', 'fr', 'ja'], str(langs))
+    ed2 = StructuredDescriptionEditor(is_base=False)
+    combo = ed2.captions_editor._rows[0]['combo']
+    codes = [combo.itemData(i) for i in range(combo.count())]
+    check('dropdown = base + extras + Other',
+          codes[:5] == ['en', 'de', 'es', 'fr', 'ja']
+          and codes[-1] == '__other__', str(codes))
+finally:
+    (settings.remove('caption_extra_langs') if extra_saved is None
+     else settings.setValue('caption_extra_langs', extra_saved))
+    settings.sync()
+
+# ── 10) About page is dark by design ─────────────────────────────────────────
+from cammello.constants import app_style, ABOUT_STYLE, GROUP_TITLE_STYLE
+check('app_style contains inputs + groups + about',
+      'aboutPage' in app_style() and 'groupTitle' in app_style())
 
 print('---')
 print('FAILURES:', fails if fails else 'none')

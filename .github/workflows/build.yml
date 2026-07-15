@@ -61,6 +61,10 @@ jobs:
           python test_098.py
           python test_uploadsel.py
           python test_cancel.py
+          python test_merge.py
+          python test_iptc.py
+          python test_culling.py
+          python test_cullview.py
 
   build-mac:
     needs: test
@@ -81,13 +85,31 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
+      - name: Build .icns from icon.png
+        run: |
+          mkdir icon.iconset
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size cammello/assets/icon.png \
+              --out icon.iconset/icon_${size}x${size}.png
+            double=$((size * 2))
+            sips -z $double $double cammello/assets/icon.png \
+              --out icon.iconset/icon_${size}x${size}@2x.png
+          done
+          iconutil -c icns icon.iconset -o cammello/assets/icon.icns
+
       - name: Build App
         run: |
           # --onedir statt --onefile: onefile+windowed ist auf macOS
           # deprecated (ab PyInstaller 7.0 ein Fehler); das .app-Bundle
           # entsteht bei --onedir genauso und wird gezippt.
+          # --add-data buendelt die Assets (Logo!): --collect-submodules
+          # sammelt nur Module, keine Datendateien - deshalb fehlte das
+          # Logo in allen bisherigen Binaries.
           pyinstaller --onedir --windowed --name Cammello \
-            --collect-submodules cammello Cammello.py
+            --icon cammello/assets/icon.icns \
+            --add-data "cammello/assets:cammello/assets" \
+            --hidden-import paramiko \
+            --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
           cd dist
           zip -r Cammello_Mac.zip Cammello.app
 
@@ -115,14 +137,23 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller pillow
           pip install -r requirements.txt
+
+      - name: Build .ico from icon.png
+        shell: python
+        run: |
+          from PIL import Image
+          im = Image.open("cammello/assets/icon.png")
+          im.save("cammello/assets/icon.ico",
+                  sizes=[(16, 16), (32, 32), (48, 48), (128, 128), (256, 256)])
 
       - name: Build App
         run: |
           # Unter Windows ist --onefile unproblematisch und ergibt eine
           # einzelne Cammello.exe.
-          pyinstaller --onefile --windowed --name Cammello --collect-submodules cammello Cammello.py
+          # --add-data mit Semikolon (Windows-Trenner); siehe Mac-Job.
+          pyinstaller --onefile --windowed --name Cammello --icon cammello/assets/icon.ico --add-data "cammello/assets;cammello/assets" --hidden-import paramiko --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
@@ -165,7 +196,7 @@ jobs:
         run: |
           # --onefile ergibt ein einzelnes ausfuehrbares Binary; PyQt5 ist
           # darin enthalten, der Nutzer braucht es nicht separat zu installieren.
-          pyinstaller --onefile --windowed --name Cammello --collect-submodules cammello Cammello.py
+          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
           cd dist
           tar -czf Cammello_Linux.tar.gz Cammello
 

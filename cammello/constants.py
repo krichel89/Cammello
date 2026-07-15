@@ -5,7 +5,7 @@ import re
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.11.0'
+__version__ = '0.11.1'
 
 
 def asset_path(name):
@@ -60,6 +60,28 @@ IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.svg', '.webp')
 
 # Highlighted style for the main section headings (Upload settings, Base
 # description, Selected file): a bold, colored title badge on the group box.
+# The About page is deliberately dark in EVERY scheme (it hosts the dark
+# logo tile); scoped by objectName so nothing else is affected.
+ABOUT_STYLE = (
+    'QWidget#aboutPage { background: #16222e; }'
+    'QWidget#aboutPage QLabel { color: #e9eff6; background: transparent; }')
+
+
+def app_style():
+    """The ONE application-wide stylesheet: input fields (light/dark
+    variant) + the collapsible-group chrome + the About page.
+
+    0.11.0: set on the QApplication instead of the main window, and the
+    collapsible groups no longer carry their own setStyleSheet(). Rationale:
+    per-widget stylesheets kept producing wrongly rendered child fields on
+    macOS (captions/description fields with dark backgrounds inside styled
+    group boxes - not reproducible on other platforms). An application-level
+    sheet reaches every widget unconditionally; all rules are scoped by
+    class/objectName, so the merge is equivalent on platforms that rendered
+    correctly before."""
+    return current_input_style() + '\n' + GROUP_TITLE_STYLE + '\n' + ABOUT_STYLE
+
+
 GROUP_TITLE_STYLE = (
     # Collapsible section: arrow tool-button header + framed content.
     'QToolButton#groupTitle {'
@@ -185,6 +207,44 @@ WD_USER_AGENT = (
 )
 # A single, complete QID.
 QID_RE = re.compile(r'^Q\d+$')
+
+# The caption-language dropdown shows FOUR default languages; every other
+# ISO code can be typed via the "Other (ISO code)..." entry and is then
+# PERSISTED (QSettings key caption_extra_langs) so the dropdown grows with
+# the codes the user actually uses. LANGUAGES below stays as the lookup
+# table for display names.
+CAPTION_BASE_LANGS = ['en', 'de', 'es', 'fr']
+
+
+def _caption_extra_langs():
+    from PyQt5.QtCore import QSettings
+    raw = QSettings(APP_NAME, 'Main').value('caption_extra_langs', '') or ''
+    return [c for c in raw.split(',') if c.strip()]
+
+
+def remember_caption_language(code):
+    """Persist a freely entered ISO code so future dropdowns include it."""
+    from PyQt5.QtCore import QSettings
+    s = QSettings(APP_NAME, 'Main')
+    extras = _caption_extra_langs()
+    if code not in extras and code not in CAPTION_BASE_LANGS:
+        extras.append(code)
+        s.setValue('caption_extra_langs', ','.join(extras))
+        s.sync()
+
+
+def format_caption_language(code):
+    name = dict(LANGUAGES).get(code, '')
+    return f'{code} – {name}' if name else code
+
+
+def caption_language_choices():
+    """[(code, display_name)] - the four defaults plus the persisted extras."""
+    known = dict(LANGUAGES)
+    out = [(c, known.get(c, '')) for c in CAPTION_BASE_LANGS]
+    out += [(c, known.get(c, '')) for c in _caption_extra_langs()]
+    return out
+
 
 LANGUAGES = [
     ('en', 'English'), ('de', 'Deutsch'), ('es', 'Español'), ('fr', 'Français'),

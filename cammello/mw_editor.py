@@ -189,9 +189,20 @@ class MWEditorMixin:
         self._update_upload_btn()   # the row count changed
 
 
+    def _selected_rows_all(self):
+        return sorted(set(i.row() for i in self.table.selectedItems()))
+
     def _selected_row(self):
-        rows = list(set(i.row() for i in self.table.selectedItems()))
-        return rows[0] if len(rows) == 1 else None
+        """The ANCHOR row of the selection: the current row when it is part
+        of the selection, else the first selected row; None only when
+        nothing is selected. 0.11.0: multi-select no longer disables the
+        editor - the anchor is loaded, and committed field changes are
+        propagated to every selected row (see _commit_editor)."""
+        rows = self._selected_rows_all()
+        if not rows:
+            return None
+        cur = self.table.currentRow()
+        return cur if cur in rows else rows[0]
 
     def on_row_selected(self):
         # Flush the row currently in the editor before switching away from it.
@@ -233,6 +244,19 @@ class MWEditorMixin:
         # correct after sorting or row removal.
         self._editor_item = (self.table.item(row, self.COL_FILENAME)
                              if row is not None else None)
+        # Snapshot the raw description text for the multi-select field diff
+        # (diff_fields decomposes it, so captions, depicts, the Information
+        # templates AND free/expert text all propagate), plus the selection
+        # at load time as items (the selection may already have changed when
+        # the commit fires on the NEXT selection change).
+        self._editor_snapshot_text = text
+        self._editor_sel_items = [
+            self.table.item(r, self.COL_FILENAME)
+            for r in self._selected_rows_all()]
+        if len(self._editor_sel_items) > 1:
+            self.status_bar.showMessage(
+                tr('{n} files selected - a changed field is applied to all '
+                   'of them.').format(n=len(self._editor_sel_items)), 5000)
 
     def _date_text_for_current(self):
         """Date column text of the row loaded in the per-file editor (for the
@@ -340,10 +364,48 @@ class MWEditorMixin:
         if expert is None:
             expert = self.expert_cb.isChecked()
         if expert:
-            item.setText(self.file_desc_edit.toPlainText())
+            new_text = self.file_desc_edit.toPlainText()
         else:
-            item.setText(self.file_struct.assemble())
+            new_text = self.file_struct.assemble()
+        item.setText(new_text)
         self._refresh_effective(row)
+        self._propagate_field_changes(row, new_text)
+
+    def _propagate_field_changes(self, anchor_row, new_text):
+        """Multi-select editing: diff the anchor's new text against its
+        load-time text and apply exactly the changed FIELDS to every other
+        selected row. Fields cover captions, depicts, the depicts override,
+        the {{lang|1=...}} Information templates AND free/expert text; each
+        file's untouched fields, categories and own free text stay intact
+        (categories replaced only when they changed). The snapshot then
+        advances so a second commit without a change is a no-op."""
+        old_text = getattr(self, '_editor_snapshot_text', None)
+        sel_items = getattr(self, '_editor_sel_items', None) or []
+        if old_text is None:
+            self._editor_snapshot_text = new_text
+            return
+        changes, cats = diff_fields(old_text, new_text)
+        self._editor_snapshot_text = new_text
+        if not changes and cats is None:
+            return
+        touched = 0
+        for sel_item in sel_items:
+            if sel_item is None:
+                continue
+            r = sel_item.row()
+            if r < 0 or r == anchor_row:
+                continue
+            desc_item = self.table.item(r, self.COL_DESC)
+            if desc_item is None:
+                continue
+            desc_item.setText(apply_field_changes(
+                desc_item.text(), changes, cats))
+            self._refresh_effective(r)
+            touched += 1
+        if touched:
+            self.logger.info(
+                'Multi-select edit: %s applied to %d additional file(s).',
+                ', '.join(sorted(changes) or ['categories']), touched)
 
     # ── Expert mode ──────────────────────────────────────────────────────────
 

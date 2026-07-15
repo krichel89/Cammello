@@ -1,52 +1,9 @@
-# Python
 __pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg
-*.egg-info/
-dist/
+*.pyc
+.pytest_cache/
 build/
-eggs/
-parts/
-var/
-sdist/
-develop-eggs/
-.installed.cfg
-lib/
-lib64/
-
-# Virtual environments
-.env
-.venv
-env/
-venv/
-
-# PyInstaller
+dist/
 *.spec
-dist/
-build/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
+cammello/assets/icon.icns
+cammello/assets/icon.ico
 .DS_Store
-Thumbs.db
-desktop.ini
-
-# Qt / App settings
-*.ini
-*.cfg
-
-# Logs
-*.log
-
-# Cammello local
-*.zip
-cammello_settings.txt
-Cammello_monolith_backup.py

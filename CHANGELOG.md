@@ -4,9 +4,21 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.11.0] - Unreleased
+## [0.11.1] - 2026-07-15
 
 ### Added
+- **Multi-select editing**: selecting several files no longer disables the
+  per-file editor. The anchor row is loaded; a field the user CHANGES is
+  applied to every selected file - only that field, each file's other
+  fields, categories and free wikitext stay untouched (categories are
+  replaced only when the categories field itself was edited). The status
+  bar announces the mode ("{n} files selected ...").
+- **Caption languages**: the dropdown shows four defaults (en, de, es, fr);
+  "Other (ISO code)..." accepts any ISO code, which is validated, selected
+  and PERSISTED - the dropdown grows with the codes actually used.
+- **Frozen-build diagnostics**: the log's second line now states the
+  pyexiv2 status (with the import error when unavailable) and every feature
+  flag - a binary that hides tabs now says exactly why.
 - **MediaWiki account in the Settings tab**: username and password next to
   the other service credentials (QSettings scope 'Login', shared with the
   login dialog, which is prefilled from it). The password is stored in plain
@@ -37,6 +49,29 @@ adheres to [Semantic Versioning](https://semver.org/).
   environment (logic is unit-tested against a fake fetch).
 
 ### Fixed
+- **Multi-select editing now also propagates FREE-TEXT changes** - the
+  per-language Information templates ({{en|1=...}}) and expert/extra
+  wikitext. The diff was rewritten to work on decomposed FIELDS (captions,
+  depicts, override, info:<lang>, extra) instead of key=value lines only,
+  so a changed Information or expert-mode text is applied to every selected
+  file while each file keeps its own untouched fields.
+- **"Not applicable" no longer implies a person**: its stored value was
+  `no_person`, named for people only, though the option also covers
+  buildings, landscapes etc. The value is now `not_applicable`; existing
+  descriptions carrying `no_person` still map to the same maintenance
+  category.
+- **Binaries were built without the assets** (`--collect-submodules`
+  collects modules, not data files): the logo/icon was missing from every
+  .app/.exe. The build workflow now bundles `cammello/assets` via
+  `--add-data` on all three platforms and ships paramiko explicitly.
+- **Application-level stylesheet**: the input/group/About rules moved from
+  the main window and per-widget setStyleSheet() calls onto the
+  QApplication. Per-widget stylesheets on the collapsible groups kept
+  producing captions/description fields with wrong (dark) backgrounds on
+  macOS; an application-level sheet reaches every widget unconditionally.
+- **About tab is dark by design** now (#16222e with light text and
+  inline-colored links) - it hosts the dark logo tile, and its contrast no
+  longer depends on the platform's rendering of the color scheme.
 - **Application icon** now has rounded corners (macOS-style, radius ~22%).
 - **Wikidata fields no longer carry their OWN background color**: the blue
   border alone marks them. The special light-blue background was the last

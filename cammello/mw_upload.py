@@ -19,7 +19,8 @@ from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
 from .i18n import tr
-from .sdc import extract_structured_data, DEPICTS_OVERRIDES
+from .sdc import (extract_structured_data, DEPICTS_OVERRIDES,
+                  canonical_override)
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
@@ -116,7 +117,7 @@ class MWUploadMixin:
             sd, _ = extract_structured_data(item.text() if item else '')
             has_depicts = bool((sd.get('depicts') or '').strip()
                                or base_depicts)
-            override = (sd.get('depicts_override') or '').strip().lower()
+            override = canonical_override(sd.get('depicts_override'))
             if has_depicts or override in DEPICTS_OVERRIDES:
                 continue
             name_item = self.table.item(r, self.COL_FILENAME)

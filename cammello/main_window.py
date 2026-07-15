@@ -34,6 +34,7 @@ from .mw_iptc import MWIptcMixin
 from .mw_culling import MWCullingMixin, _TabBarDropSwitcher
 from .mw_flickr import FlickrMixin
 from . import iptc as iptc_mod
+from .wikidata import refresh_wd_fields
 from .i18n import (tr, UI_LANGUAGES, set_language,
                    default_language_from_locale, current_language)
 
@@ -80,7 +81,11 @@ class MainWindow(FlickrMixin,
         set_current_input_style(
             QApplication.instance().palette().color(
                 QPalette.Window).lightness() < 128)
-        self.setStyleSheet(current_input_style())
+        # 0.11.0: ONE application-level stylesheet (inputs + group chrome +
+        # About page; see constants.app_style) - per-widget stylesheets on
+        # the collapsible groups kept producing wrongly rendered child
+        # fields on macOS.
+        QApplication.instance().setStyleSheet(app_style())
         self.api = None
         self.settings = QSettings(APP_NAME, 'Main')
         self._loading_desc = False  # guard against feedback loops while loading
@@ -110,6 +115,14 @@ class MainWindow(FlickrMixin,
         avail = iptc_mod.available()
         self._feat_culling = avail and self.settings.value(
             'feature_culling', True, type=bool)
+        self.logger.info(
+            'Features: pyexiv2 %s | culling=%s iptc=%s ftp=%s flickr=%s',
+            'available' if avail else
+            f'UNAVAILABLE ({iptc_mod.unavailable_reason()})',
+            self._feat_culling if avail else False,
+            self.settings.value('feature_iptc', False, type=bool) and avail,
+            self.settings.value('feature_ftp', True, type=bool) and avail,
+            self.settings.value('feature_flickr', True, type=bool))
         # RELEASE DEFAULT 0.10.0: the IPTC tab is hidden; `--enable-tab
         # iptc` brings it back (persists in QSettings).
         self._feat_iptc = avail and self.settings.value(
@@ -324,7 +337,6 @@ class MainWindow(FlickrMixin,
         right.setMinimumWidth(360)
 
         settings_group = CollapsibleGroupBox(tr('Upload settings'))
-        settings_group.setStyleSheet(GROUP_TITLE_STYLE)
         settings_form = QFormLayout(settings_group.content)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText(tr('e.g.') + ' [[User:Seewolf|Harald Krichel]]')
@@ -388,7 +400,6 @@ class MainWindow(FlickrMixin,
 
         # ── Base description (for all files) ──
         base_group = CollapsibleGroupBox(tr('Base description (for all files)'))
-        base_group.setStyleSheet(GROUP_TITLE_STYLE)
         base_layout = QVBoxLayout(base_group.content)
         self.base_text_edit = QTextEdit()
         self.base_text_edit.setPlaceholderText(
@@ -438,7 +449,6 @@ class MainWindow(FlickrMixin,
 
         # ── Selected file description ──
         file_group = CollapsibleGroupBox(tr('Selected file(s) - description'))
-        file_group.setStyleSheet(GROUP_TITLE_STYLE)
         file_layout = QVBoxLayout(file_group.content)
         self.file_desc_edit = FocusOutTextEdit()
         self.file_desc_edit.setPlaceholderText(EXAMPLE_FILE_DESCRIPTION)
@@ -680,6 +690,7 @@ class MainWindow(FlickrMixin,
     def _build_about_tab(self):
         """About: name, tagline, links, license, components - the usual."""
         page = QWidget()
+        page.setObjectName('aboutPage')   # dark background via ABOUT_STYLE
         outer = QVBoxLayout(page)
         outer.addStretch()
         icon_file = asset_path('icon.png')
@@ -709,18 +720,19 @@ class MainWindow(FlickrMixin,
                 deps.append(name)
         links = QLabel(
             '<div align="center">'
-            '<p><a href="https://github.com/krichel89/Cammello">GitHub: '
+            '<p><a style="color:#8ec2ff;" '
+            'href="https://github.com/krichel89/Cammello">GitHub: '
             'krichel89/Cammello</a><br>'
-            '<a href="https://wikiportraits.org">'
+            '<a style="color:#8ec2ff;" href="https://wikiportraits.org">'
             'WikiPortraits</a> · '
-            '<a href="https://commons.wikimedia.org/wiki/User:Seewolf">'
+            '<a style="color:#8ec2ff;" href="https://commons.wikimedia.org/wiki/User:Seewolf">'
             'Commons: User:Seewolf</a> · '
-            '<a href="https://fotografie.krichel.de">fotografie.krichel.de'
+            '<a style="color:#8ec2ff;" href="https://fotografie.krichel.de">fotografie.krichel.de'
             '</a></p>'
-            '<p>' + tr('License:') + ' <a href='
+            '<p>' + tr('License:') + ' <a style="color:#8ec2ff;" href='
             '"https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0 '
             '(public domain)</a></p>'
-            '<p style="color: gray;">' + tr('Built with:') + ' '
+            '<p style="color: #9fb3c8;">' + tr('Built with:') + ' '
             + ', '.join(deps) + '</p>'
             '</div>')
         links.setOpenExternalLinks(True)
@@ -839,7 +851,8 @@ class MainWindow(FlickrMixin,
         # on the window (dialogs pick it up at construction).
         dark = self._is_dark_scheme_for(scheme)
         set_current_input_style(dark)
-        self.setStyleSheet(current_input_style())
+        QApplication.instance().setStyleSheet(app_style())
+        refresh_wd_fields()   # WD fields carry their own (border) stylesheet
         # A style/palette change does not repolish existing widgets; without
         # this pass, parts of the UI kept the previous scheme ("switching is
         # not clean"). Restricted to THIS window's tree: app.allWidgets()

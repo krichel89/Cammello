@@ -1,7 +1,7 @@
 """Caption/description editors and the bulk-edit dialog."""
 import re
 import os
-from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
+from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QWidget, QLabel, QLineEdit, QPushButton,
                              QComboBox, QTextEdit, QVBoxLayout, QHBoxLayout,
                              QFormLayout, QDialog, QDialogButtonBox)
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -61,14 +61,17 @@ class CaptionsEditor(QWidget):
         top.setContentsMargins(0, 0, 0, 0)
 
         combo = QComboBox()
-        for code, name in LANGUAGES:
-            combo.addItem(f'{code} – {name}', code)
+        for code, name in caption_language_choices():
+            combo.addItem(f'{code} – {name}' if name else code, code)
+        combo.addItem(tr('Other (ISO code)…'), '__other__')
         idx = combo.findData(lang)
         if idx < 0:                       # unknown code (e.g. from advanced mode)
-            combo.addItem(lang, lang)
+            combo.insertItem(combo.count() - 1, lang, lang)
             idx = combo.findData(lang)
         combo.setCurrentIndex(idx)
         combo.setMaximumWidth(150)
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo: self._on_lang_combo_changed(c))
 
         edit = QLineEdit(value)
         edit.setPlaceholderText(tr('Caption, e.g. Harald Krichel at the Berlinale 2026'))
@@ -123,6 +126,36 @@ class CaptionsEditor(QWidget):
         # QTextEdit has no editingFinished; live sync uses changed (textChanged).
         info_edit.textChanged.connect(lambda *_: self.changed.emit())
         remove.clicked.connect(lambda: self._remove(entry))
+
+    def _on_lang_combo_changed(self, combo):
+        """'Other (ISO code)…' selected: ask for a code, validate it, insert
+        it into the dropdown, select it, and PERSIST it - freely entered
+        codes extend the four-language default list permanently."""
+        if combo.currentData() != '__other__':
+            return
+        code, ok = QInputDialog.getText(
+            self, tr('Caption language'),
+            tr('ISO language code (e.g. nl, pt, ja):'))
+        code = (code or '').strip().lower()
+        combo.blockSignals(True)
+        if not ok or not re.fullmatch(r'[a-z]{2,3}', code):
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+            if ok:
+                QMessageBox.warning(self, tr('Caption language'),
+                                    tr('Not a valid ISO code: {code}').format(
+                                        code=code or '?'))
+            return
+        idx = combo.findData(code)
+        if idx < 0:
+            combo.insertItem(combo.count() - 1,
+                             format_caption_language(code), code)
+            idx = combo.findData(code)
+            remember_caption_language(code)
+        combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+        self.changed.emit()
+        self.committed.emit()
 
     def _info_from_captions(self):
         """Copy each row's caption into its Information field, but only where
@@ -237,7 +270,7 @@ class StructuredDescriptionEditor(QWidget):
             self.override_combo = QComboBox()
             self.override_combo.addItem(tr('depicts is set (required)'), '')
             self.override_combo.addItem(tr('No Wikidata item'), 'no_item')
-            self.override_combo.addItem(tr('Not applicable'), 'no_person')
+            self.override_combo.addItem(tr('Not applicable'), 'not_applicable')
             self.override_combo.addItem(tr('Unidentified'), 'unidentified')
             self.override_combo.currentIndexChanged.connect(
                 self._on_override_changed)
@@ -334,6 +367,7 @@ class StructuredDescriptionEditor(QWidget):
     def _set_override_value(self, value):
         if self.override_combo is None:
             return
+        value = canonical_override(value)
         idx = self.override_combo.findData(value or '')
         self.override_combo.blockSignals(True)
         self.override_combo.setCurrentIndex(idx if idx >= 0 else 0)
