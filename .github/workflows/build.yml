@@ -79,6 +79,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install exiv2 native libraries
+        run: |
+          # Das macOS-Wheel von pyexiv2 bringt zwar libexiv2.dylib mit,
+          # aber die linkt gegen ABSOLUTE Homebrew-Pfade (brotli, gettext/
+          # libintl, inih; per otool am Wheel verifiziert). Fehlen die beim
+          # Bauen, kann PyInstaller sie nicht buendeln - die fertige App
+          # scheitert dann beim Nutzer mit "Failed to load dynlib/dll ...
+          # libexiv2.dylib" und der Culling-/IPTC-/FTP-Teil verschwindet
+          # (so geschehen bei v0.11.1). brew install exiv2 zieht alle drei
+          # als Abhaengigkeiten mit.
+          brew install exiv2
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
