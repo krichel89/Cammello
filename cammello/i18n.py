@@ -1,0 +1,1868 @@
+"""Lightweight UI translation (0.10.0).
+
+Design decisions (agreed 2026-07-14):
+  * Five UI languages: en, de, es, fr, it. English is the SOURCE language;
+    the translation key IS the English string, so an untranslated string
+    falls back to English automatically and the code stays readable.
+  * tr() returns the template UNFORMATTED - call sites with runtime values
+    use tr('... {n} ...').format(n=...). Translations must keep every
+    {placeholder} of their key (enforced by test_i18n.py).
+  * The language is chosen in the Settings tab, persisted as 'ui_language'
+    in QSettings, and applied at STARTUP in main() before the window is
+    built (a change takes effect after a restart - live retranslation of
+    every widget was deliberately not built, it would touch the MediaWiki
+    core for cosmetics).
+  * First start: the system locale picks the language if it is one of the
+    five, otherwise English.
+  * Log messages stay English on purpose (diagnostic channel).
+
+No Qt imports in here: the module is usable from plain logic tests.
+"""
+
+# (code, native name) - the order of the Settings dropdown.
+UI_LANGUAGES = [
+    ('en', 'English'),
+    ('de', 'Deutsch'),
+    ('es', 'Español'),
+    ('fr', 'Français'),
+    ('it', 'Italiano'),
+]
+
+_current = ['en']
+
+
+def set_language(code):
+    """Select the UI language ('en'|'de'|'es'|'fr'|'it'); unknown codes fall
+    back to English."""
+    _current[0] = code if code in dict(UI_LANGUAGES) else 'en'
+
+
+def current_language():
+    return _current[0]
+
+
+def default_language_from_locale(locale_name):
+    """Map a locale name like 'de_DE' to one of the five UI languages
+    ('en' if none matches). The caller passes QLocale().name()."""
+    prefix = (locale_name or '').split('_')[0].lower()
+    return prefix if prefix in dict(UI_LANGUAGES) else 'en'
+
+
+def tr(text):
+    """Translate an English UI string into the current language.
+
+    Unknown keys and missing per-language entries return the English text
+    unchanged (fallback), so a forgotten entry can never crash the app.
+    """
+    lang = _current[0]
+    if lang == 'en':
+        return text
+    entry = TRANSLATIONS.get(text)
+    if not entry:
+        return text
+    return entry.get(lang, text)
+
+
+def missing_keys():
+    """[(key, lang)] for every key lacking a translation - used by tests."""
+    out = []
+    for key, entry in TRANSLATIONS.items():
+        for lang, _name in UI_LANGUAGES:
+            if lang != 'en' and lang not in entry:
+                out.append((key, lang))
+    return out
+
+
+# key (English) -> {'de': ..., 'es': ..., 'fr': ..., 'it': ...}
+# Grouped by UI area. Every {placeholder} of a key MUST survive
+# translation (enforced by test_i18n.py).
+TRANSLATIONS = {
+    'Culling': {
+        'de': 'Sichtung',
+        'es': 'Selección',
+        'fr': 'Tri',
+        'it': 'Selezione',
+    },
+    'Settings': {
+        'de': 'Einstellungen',
+        'es': 'Ajustes',
+        'fr': 'Réglages',
+        'it': 'Impostazioni',
+    },
+    'Log': {
+        'de': 'Protokoll',
+        'es': 'Registro',
+        'fr': 'Journal',
+        'it': 'Registro',
+    },
+    'Appearance': {
+        'de': 'Darstellung',
+        'es': 'Apariencia',
+        'fr': 'Apparence',
+        'it': 'Aspetto',
+    },
+    'Language:': {
+        'de': 'Sprache:',
+        'es': 'Idioma:',
+        'fr': 'Langue :',
+        'it': 'Lingua:',
+    },
+    'Color scheme:': {
+        'de': 'Farbschema:',
+        'es': 'Esquema de color:',
+        'fr': 'Thème de couleurs :',
+        'it': 'Schema colori:',
+    },
+    'system': {
+        'de': 'System',
+        'es': 'sistema',
+        'fr': 'système',
+        'it': 'sistema',
+    },
+    'light': {
+        'de': 'hell',
+        'es': 'claro',
+        'fr': 'clair',
+        'it': 'chiaro',
+    },
+    'dark': {
+        'de': 'dunkel',
+        'es': 'oscuro',
+        'fr': 'sombre',
+        'it': 'scuro',
+    },
+    'The language change takes effect after a restart.': {
+        'de': 'Die Sprachumstellung wirkt nach einem Neustart.',
+        'es': 'El cambio de idioma se aplica tras reiniciar.',
+        'fr': 'Le changement de langue prend effet après un redémarrage.',
+        'it': 'Il cambio di lingua ha effetto dopo il riavvio.',
+    },
+    'Settings are saved when the window is closed.': {
+        'de': 'Die Einstellungen werden beim Schließen des Fensters gespeichert.',
+        'es': 'Los ajustes se guardan al cerrar la ventana.',
+        'fr': 'Les réglages sont enregistrés à la fermeture de la fenêtre.',
+        'it': 'Le impostazioni vengono salvate alla chiusura della finestra.',
+    },
+    'e.g.': {
+        'de': 'z. B.',
+        'es': 'p. ej.',
+        'fr': 'p. ex.',
+        'it': 'ad es.',
+    },
+    'Cancel': {
+        'de': 'Abbrechen',
+        'es': 'Cancelar',
+        'fr': 'Annuler',
+        'it': 'Annulla',
+    },
+    'Cancelled': {
+        'de': 'Abgebrochen',
+        'es': 'Cancelado',
+        'fr': 'Annulé',
+        'it': 'Annullato',
+    },
+    'Cancelling…': {
+        'de': 'Wird abgebrochen…',
+        'es': 'Cancelando…',
+        'fr': 'Annulation…',
+        'it': 'Annullamento…',
+    },
+    'Error': {
+        'de': 'Fehler',
+        'es': 'Error',
+        'fr': 'Erreur',
+        'it': 'Errore',
+    },
+    'Done': {
+        'de': 'Fertig',
+        'es': 'Listo',
+        'fr': 'Terminé',
+        'it': 'Fatto',
+    },
+    'Preparing…': {
+        'de': 'Wird vorbereitet…',
+        'es': 'Preparando…',
+        'fr': 'Préparation…',
+        'it': 'Preparazione…',
+    },
+    'Preview': {
+        'de': 'Vorschau',
+        'es': 'Vista previa',
+        'fr': 'Aperçu',
+        'it': 'Anteprima',
+    },
+    'Images': {
+        'de': 'Bilder',
+        'es': 'Imágenes',
+        'fr': 'Images',
+        'it': 'Immagini',
+    },
+    'Text files': {
+        'de': 'Textdateien',
+        'es': 'Archivos de texto',
+        'fr': 'Fichiers texte',
+        'it': 'File di testo',
+    },
+    'All files': {
+        'de': 'Alle Dateien',
+        'es': 'Todos los archivos',
+        'fr': 'Tous les fichiers',
+        'it': 'Tutti i file',
+    },
+    'Drag to resize the field': {
+        'de': 'Ziehen, um die Feldhöhe zu ändern',
+        'es': 'Arrastre para cambiar el tamaño del campo',
+        'fr': 'Faites glisser pour redimensionner le champ',
+        'it': 'Trascina per ridimensionare il campo',
+    },
+    'Source file': {
+        'de': 'Quelldatei',
+        'es': 'Archivo de origen',
+        'fr': 'Fichier source',
+        'it': 'File sorgente',
+    },
+    'Target filename (Commons)': {
+        'de': 'Zieldateiname (Commons)',
+        'es': 'Nombre de destino (Commons)',
+        'fr': 'Nom de fichier cible (Commons)',
+        'it': 'Nome file di destinazione (Commons)',
+    },
+    'Date': {
+        'de': 'Datum',
+        'es': 'Fecha',
+        'fr': 'Date',
+        'it': 'Data',
+    },
+    'Description (file, hidden)': {
+        'de': 'Beschreibung (Datei, verborgen)',
+        'es': 'Descripción (archivo, oculta)',
+        'fr': 'Description (fichier, masquée)',
+        'it': 'Descrizione (file, nascosta)',
+    },
+    'Wikitext': {
+        'de': 'Wikitext',
+        'es': 'Wikitexto',
+        'fr': 'Wikitexte',
+        'it': 'Wikitesto',
+    },
+    'Status': {
+        'de': 'Status',
+        'es': 'Estado',
+        'fr': 'État',
+        'it': 'Stato',
+    },
+    'Local source file (not modified).': {
+        'de': 'Lokale Quelldatei (wird nicht verändert).',
+        'es': 'Archivo de origen local (no se modifica).',
+        'fr': 'Fichier source local (non modifié).',
+        'it': 'File sorgente locale (non modificato).',
+    },
+    'Name under which the file is stored on Commons (without "File:"). The extension is taken from the source file and cannot be changed. Empty = source filename.': {
+        'de': 'Name, unter dem die Datei auf Commons gespeichert wird (ohne „File:“). Die Endung stammt aus der Quelldatei und kann nicht geändert werden. Leer = Quelldateiname.',
+        'es': 'Nombre con el que el archivo se guarda en Commons (sin «File:»). La extensión procede del archivo de origen y no se puede cambiar. Vacío = nombre del archivo de origen.',
+        'fr': 'Nom sous lequel le fichier est enregistré sur Commons (sans « File: »). L’extension provient du fichier source et ne peut pas être modifiée. Vide = nom du fichier source.',
+        'it': 'Nome con cui il file viene salvato su Commons (senza "File:"). L’estensione proviene dal file sorgente e non può essere modificata. Vuoto = nome del file sorgente.',
+    },
+    'Effective wikitext (upload settings + base description + this file). Read-only; shown at most {max_lines} lines high - hover a cell for the full text.': {
+        'de': 'Effektiver Wikitext (Upload-Einstellungen + Basisbeschreibung + diese Datei). Nur lesbar; höchstens {max_lines} Zeilen hoch dargestellt – der vollständige Text erscheint im Tooltip.',
+        'es': 'Wikitexto efectivo (ajustes de subida + descripción base + este archivo). Solo lectura; se muestran como máximo {max_lines} líneas: pase el ratón para ver el texto completo.',
+        'fr': 'Wikitexte effectif (réglages d’envoi + description de base + ce fichier). En lecture seule ; affiché sur {max_lines} lignes au maximum – survolez la cellule pour le texte complet.',
+        'it': 'Wikitesto effettivo (impostazioni di caricamento + descrizione base + questo file). Sola lettura; mostrato al massimo su {max_lines} righe: passa sopra la cella per il testo completo.',
+    },
+    'Login': {
+        'de': 'Anmelden',
+        'es': 'Iniciar sesión',
+        'fr': 'Connexion',
+        'it': 'Accedi',
+    },
+    'Login – Wikimedia Commons': {
+        'de': 'Anmeldung – Wikimedia Commons',
+        'es': 'Iniciar sesión – Wikimedia Commons',
+        'fr': 'Connexion – Wikimedia Commons',
+        'it': 'Accesso – Wikimedia Commons',
+    },
+    'Test connection': {
+        'de': 'Verbindung testen',
+        'es': 'Probar conexión',
+        'fr': 'Tester la connexion',
+        'it': 'Prova connessione',
+    },
+    'Not logged in': {
+        'de': 'Nicht angemeldet',
+        'es': 'Sin sesión iniciada',
+        'fr': 'Non connecté',
+        'it': 'Non connesso',
+    },
+    'Add files': {
+        'de': 'Dateien hinzufügen',
+        'es': 'Añadir archivos',
+        'fr': 'Ajouter des fichiers',
+        'it': 'Aggiungi file',
+    },
+    'Remove selected': {
+        'de': 'Auswahl entfernen',
+        'es': 'Quitar seleccionados',
+        'fr': 'Retirer la sélection',
+        'it': 'Rimuovi selezionati',
+    },
+    'Bulk edit selected': {
+        'de': 'Auswahl gesammelt bearbeiten',
+        'es': 'Editar en lote la selección',
+        'fr': 'Édition groupée de la sélection',
+        'it': 'Modifica in blocco la selezione',
+    },
+    'Clear all': {
+        'de': 'Alles leeren',
+        'es': 'Vaciar todo',
+        'fr': 'Tout effacer',
+        'it': 'Svuota tutto',
+    },
+    'Upload all': {
+        'de': 'Alle hochladen',
+        'es': 'Subir todo',
+        'fr': 'Tout envoyer',
+        'it': 'Carica tutto',
+    },
+    'Upload all ({n})': {
+        'de': 'Alle hochladen ({n})',
+        'es': 'Subir todo ({n})',
+        'fr': 'Tout envoyer ({n})',
+        'it': 'Carica tutto ({n})',
+    },
+    'Upload selected ({n})': {
+        'de': 'Auswahl hochladen ({n})',
+        'es': 'Subir selección ({n})',
+        'fr': 'Envoyer la sélection ({n})',
+        'it': 'Carica selezione ({n})',
+    },
+    'Ignore warnings (overwrite)': {
+        'de': 'Warnungen ignorieren (überschreiben)',
+        'es': 'Ignorar avisos (sobrescribir)',
+        'fr': 'Ignorer les avertissements (écraser)',
+        'it': 'Ignora avvisi (sovrascrivi)',
+    },
+    'Uploads the selected rows. Deselect everything to upload all files.': {
+        'de': 'Lädt die ausgewählten Zeilen hoch. Auswahl aufheben, um alle Dateien hochzuladen.',
+        'es': 'Sube las filas seleccionadas. Deseleccione todo para subir todos los archivos.',
+        'fr': 'Envoie les lignes sélectionnées. Désélectionnez tout pour envoyer tous les fichiers.',
+        'it': 'Carica le righe selezionate. Deseleziona tutto per caricare tutti i file.',
+    },
+    'Nothing is selected, so all files are uploaded. Select rows to upload only those.': {
+        'de': 'Nichts ausgewählt – es werden alle Dateien hochgeladen. Zeilen auswählen, um nur diese hochzuladen.',
+        'es': 'No hay selección: se suben todos los archivos. Seleccione filas para subir solo esas.',
+        'fr': 'Rien n’est sélectionné : tous les fichiers sont envoyés. Sélectionnez des lignes pour n’envoyer que celles-ci.',
+        'it': 'Nessuna selezione: vengono caricati tutti i file. Seleziona righe per caricare solo quelle.',
+    },
+    'Ready. Please log in first.': {
+        'de': 'Bereit. Bitte zuerst anmelden.',
+        'es': 'Listo. Inicie sesión primero.',
+        'fr': 'Prêt. Veuillez d’abord vous connecter.',
+        'it': 'Pronto. Accedi prima.',
+    },
+    'Please log in first.': {
+        'de': 'Bitte zuerst anmelden.',
+        'es': 'Inicie sesión primero.',
+        'fr': 'Veuillez d’abord vous connecter.',
+        'it': 'Accedi prima.',
+    },
+    'No files': {
+        'de': 'Keine Dateien',
+        'es': 'Sin archivos',
+        'fr': 'Aucun fichier',
+        'it': 'Nessun file',
+    },
+    'Please add files first.': {
+        'de': 'Bitte zuerst Dateien hinzufügen.',
+        'es': 'Añada archivos primero.',
+        'fr': 'Veuillez d’abord ajouter des fichiers.',
+        'it': 'Aggiungi prima dei file.',
+    },
+    'Select image files': {
+        'de': 'Bilddateien auswählen',
+        'es': 'Seleccionar archivos de imagen',
+        'fr': 'Sélectionner des fichiers image',
+        'it': 'Seleziona file immagine',
+    },
+    'Logged in as {username}': {
+        'de': 'Angemeldet als {username}',
+        'es': 'Sesión iniciada como {username}',
+        'fr': 'Connecté en tant que {username}',
+        'it': 'Connesso come {username}',
+    },
+    'Testing connection…': {
+        'de': 'Verbindung wird getestet…',
+        'es': 'Probando conexión…',
+        'fr': 'Test de la connexion…',
+        'it': 'Test della connessione…',
+    },
+    'Connection OK: {info}': {
+        'de': 'Verbindung OK: {info}',
+        'es': 'Conexión correcta: {info}',
+        'fr': 'Connexion OK : {info}',
+        'it': 'Connessione OK: {info}',
+    },
+    '{n} added': {
+        'de': '{n} hinzugefügt',
+        'es': '{n} añadidos',
+        'fr': '{n} ajouté(s)',
+        'it': '{n} aggiunti',
+    },
+    '{n} duplicate(s) skipped': {
+        'de': '{n} Duplikat(e) übersprungen',
+        'es': '{n} duplicado(s) omitido(s)',
+        'fr': '{n} doublon(s) ignoré(s)',
+        'it': '{n} duplicato/i ignorato/i',
+    },
+    '{n} skipped (see log)': {
+        'de': '{n} übersprungen (siehe Protokoll)',
+        'es': '{n} omitido(s) (ver registro)',
+        'fr': '{n} ignoré(s) (voir le journal)',
+        'it': '{n} ignorato/i (vedi registro)',
+    },
+    'Upload settings': {
+        'de': 'Upload-Einstellungen',
+        'es': 'Ajustes de subida',
+        'fr': 'Réglages d’envoi',
+        'it': 'Impostazioni di caricamento',
+    },
+    'MediaWiki upload': {
+        'de': 'MediaWiki-Upload',
+        'es': 'Subida a MediaWiki',
+        'fr': 'Envoi MediaWiki',
+        'it': 'Caricamento MediaWiki',
+    },
+    'Author:': {
+        'de': 'Autor:',
+        'es': 'Autor:',
+        'fr': 'Auteur :',
+        'it': 'Autore:',
+    },
+    'Creator (P170):': {
+        'de': 'Urheber (P170):',
+        'es': 'Creador (P170):',
+        'fr': 'Créateur (P170) :',
+        'it': 'Autore (P170):',
+    },
+    'Source:': {
+        'de': 'Quelle:',
+        'es': 'Fuente:',
+        'fr': 'Source :',
+        'it': 'Fonte:',
+    },
+    'Permission:': {
+        'de': 'Genehmigung:',
+        'es': 'Permiso:',
+        'fr': 'Autorisation :',
+        'it': 'Autorizzazione:',
+    },
+    'License:': {
+        'de': 'Lizenz:',
+        'es': 'Licencia:',
+        'fr': 'Licence :',
+        'it': 'Licenza:',
+    },
+    'License (P275):': {
+        'de': 'Lizenz (P275):',
+        'es': 'Licencia (P275):',
+        'fr': 'Licence (P275) :',
+        'it': 'Licenza (P275):',
+    },
+    'Copyright (P6216):': {
+        'de': 'Urheberrechtsstatus (P6216):',
+        'es': 'Copyright (P6216):',
+        'fr': 'Droit d’auteur (P6216) :',
+        'it': 'Copyright (P6216):',
+    },
+    'Other templates:': {
+        'de': 'Weitere Vorlagen:',
+        'es': 'Otras plantillas:',
+        'fr': 'Autres modèles :',
+        'it': 'Altri template:',
+    },
+    'Other fields:': {
+        'de': 'Weitere Felder:',
+        'es': 'Otros campos:',
+        'fr': 'Autres champs :',
+        'it': 'Altri campi:',
+    },
+    'Gallery prefix:': {
+        'de': 'Galerie-Präfix:',
+        'es': 'Prefijo de galería:',
+        'fr': 'Préfixe de galerie :',
+        'it': 'Prefisso galleria:',
+    },
+    'HTTP timeout (s):': {
+        'de': 'HTTP-Zeitlimit (s):',
+        'es': 'Tiempo de espera HTTP (s):',
+        'fr': 'Délai HTTP (s) :',
+        'it': 'Timeout HTTP (s):',
+    },
+    'e.g. (leave empty unless needed)': {
+        'de': 'z. B. (leer lassen, falls nicht nötig)',
+        'es': 'p. ej. (dejar vacío si no hace falta)',
+        'fr': 'p. ex. (laisser vide sauf si nécessaire)',
+        'it': 'ad es. (lasciare vuoto se non serve)',
+    },
+    'Save settings': {
+        'de': 'Einstellungen speichern',
+        'es': 'Guardar ajustes',
+        'fr': 'Enregistrer les réglages',
+        'it': 'Salva impostazioni',
+    },
+    'Save the upload settings and the base description so they are restored next time.': {
+        'de': 'Speichert die Upload-Einstellungen und die Basisbeschreibung, damit sie beim nächsten Start wieder da sind.',
+        'es': 'Guarda los ajustes de subida y la descripción base para restaurarlos la próxima vez.',
+        'fr': 'Enregistre les réglages d’envoi et la description de base pour les restaurer au prochain démarrage.',
+        'it': 'Salva le impostazioni di caricamento e la descrizione base per ripristinarle al prossimo avvio.',
+    },
+    'Save to file…': {
+        'de': 'In Datei speichern…',
+        'es': 'Guardar en archivo…',
+        'fr': 'Enregistrer dans un fichier…',
+        'it': 'Salva su file…',
+    },
+    'Load from file…': {
+        'de': 'Aus Datei laden…',
+        'es': 'Cargar desde archivo…',
+        'fr': 'Charger depuis un fichier…',
+        'it': 'Carica da file…',
+    },
+    'Write settings + base description to a text file.': {
+        'de': 'Schreibt Einstellungen und Basisbeschreibung in eine Textdatei.',
+        'es': 'Escribe los ajustes y la descripción base en un archivo de texto.',
+        'fr': 'Écrit les réglages et la description de base dans un fichier texte.',
+        'it': 'Scrive impostazioni e descrizione base in un file di testo.',
+    },
+    'Read settings back from a text file.': {
+        'de': 'Liest die Einstellungen aus einer Textdatei zurück.',
+        'es': 'Lee de nuevo los ajustes desde un archivo de texto.',
+        'fr': 'Relit les réglages depuis un fichier texte.',
+        'it': 'Rilegge le impostazioni da un file di testo.',
+    },
+    'incl. selected file': {
+        'de': 'inkl. ausgewählter Datei',
+        'es': 'incl. archivo seleccionado',
+        'fr': 'y compris le fichier sélectionné',
+        'it': 'incl. file selezionato',
+    },
+    "Also write the selected file's description into the settings file.": {
+        'de': 'Schreibt auch die Beschreibung der ausgewählten Datei in die Einstellungsdatei.',
+        'es': 'Escribe también la descripción del archivo seleccionado en el archivo de ajustes.',
+        'fr': 'Écrit aussi la description du fichier sélectionné dans le fichier de réglages.',
+        'it': 'Scrive anche la descrizione del file selezionato nel file delle impostazioni.',
+    },
+    'Save settings to file': {
+        'de': 'Einstellungen in Datei speichern',
+        'es': 'Guardar ajustes en archivo',
+        'fr': 'Enregistrer les réglages dans un fichier',
+        'it': 'Salva le impostazioni su file',
+    },
+    'Load settings from file': {
+        'de': 'Einstellungen aus Datei laden',
+        'es': 'Cargar ajustes desde archivo',
+        'fr': 'Charger les réglages depuis un fichier',
+        'it': 'Carica le impostazioni da file',
+    },
+    'Save error': {
+        'de': 'Fehler beim Speichern',
+        'es': 'Error al guardar',
+        'fr': 'Erreur d’enregistrement',
+        'it': 'Errore di salvataggio',
+    },
+    'Load error': {
+        'de': 'Fehler beim Laden',
+        'es': 'Error al cargar',
+        'fr': 'Erreur de chargement',
+        'it': 'Errore di caricamento',
+    },
+    'Could not write the file:': {
+        'de': 'Die Datei konnte nicht geschrieben werden:',
+        'es': 'No se pudo escribir el archivo:',
+        'fr': 'Impossible d’écrire le fichier :',
+        'it': 'Impossibile scrivere il file:',
+    },
+    'Could not read the file:': {
+        'de': 'Die Datei konnte nicht gelesen werden:',
+        'es': 'No se pudo leer el archivo:',
+        'fr': 'Impossible de lire le fichier :',
+        'it': 'Impossibile leggere il file:',
+    },
+    'Settings saved.': {
+        'de': 'Einstellungen gespeichert.',
+        'es': 'Ajustes guardados.',
+        'fr': 'Réglages enregistrés.',
+        'it': 'Impostazioni salvate.',
+    },
+    'Settings saved to {path}': {
+        'de': 'Einstellungen gespeichert unter {path}',
+        'es': 'Ajustes guardados en {path}',
+        'fr': 'Réglages enregistrés dans {path}',
+        'it': 'Impostazioni salvate in {path}',
+    },
+    'Settings loaded from {path}.': {
+        'de': 'Einstellungen geladen aus {path}.',
+        'es': 'Ajustes cargados desde {path}.',
+        'fr': 'Réglages chargés depuis {path}.',
+        'it': 'Impostazioni caricate da {path}.',
+    },
+    'Saved. No single file selected, so no file description was included.': {
+        'de': 'Gespeichert. Keine einzelne Datei ausgewählt, daher wurde keine Dateibeschreibung aufgenommen.',
+        'es': 'Guardado. No hay un único archivo seleccionado, así que no se incluyó ninguna descripción de archivo.',
+        'fr': 'Enregistré. Aucun fichier unique sélectionné : aucune description de fichier n’a été incluse.',
+        'it': 'Salvato. Nessun singolo file selezionato, quindi non è stata inclusa alcuna descrizione del file.',
+    },
+    '(file description in the file was ignored: no single file selected)': {
+        'de': '(die Dateibeschreibung in der Datei wurde ignoriert: keine einzelne Datei ausgewählt)',
+        'es': '(se ignoró la descripción del archivo: no hay un único archivo seleccionado)',
+        'fr': '(la description de fichier a été ignorée : aucun fichier unique sélectionné)',
+        'it': '(la descrizione del file è stata ignorata: nessun singolo file selezionato)',
+    },
+    'Base description (for all files)': {
+        'de': 'Basisbeschreibung (für alle Dateien)',
+        'es': 'Descripción base (para todos los archivos)',
+        'fr': 'Description de base (pour tous les fichiers)',
+        'it': 'Descrizione base (per tutti i file)',
+    },
+    'Selected file(s) - description': {
+        'de': 'Ausgewählte Datei(en) – Beschreibung',
+        'es': 'Archivo(s) seleccionado(s) – descripción',
+        'fr': 'Fichier(s) sélectionné(s) – description',
+        'it': 'File selezionato/i – descrizione',
+    },
+    'Shared lines for every file, e.g.': {
+        'de': 'Gemeinsame Zeilen für jede Datei, z. B.',
+        'es': 'Líneas comunes para cada archivo, p. ej.',
+        'fr': 'Lignes communes à chaque fichier, p. ex.',
+        'it': 'Righe comuni per ogni file, ad es.',
+    },
+    'Expert mode (raw description_all text)': {
+        'de': 'Expertenmodus (roher description_all-Text)',
+        'es': 'Modo experto (texto description_all sin procesar)',
+        'fr': 'Mode expert (texte description_all brut)',
+        'it': 'Modalità esperto (testo description_all grezzo)',
+    },
+    'Edit the raw description_all text directly instead of using the structured single-line fields.': {
+        'de': 'Den rohen description_all-Text direkt bearbeiten, statt die strukturierten Einzelfelder zu benutzen.',
+        'es': 'Editar directamente el texto description_all en lugar de usar los campos estructurados.',
+        'fr': 'Modifier directement le texte description_all au lieu d’utiliser les champs structurés.',
+        'it': 'Modificare direttamente il testo description_all invece di usare i campi strutturati.',
+    },
+    'Select a single file to edit its description.': {
+        'de': 'Eine einzelne Datei auswählen, um ihre Beschreibung zu bearbeiten.',
+        'es': 'Seleccione un único archivo para editar su descripción.',
+        'fr': 'Sélectionnez un seul fichier pour modifier sa description.',
+        'it': 'Seleziona un singolo file per modificarne la descrizione.',
+    },
+    'Captions:': {
+        'de': 'Bildunterschriften:',
+        'es': 'Leyendas:',
+        'fr': 'Légendes :',
+        'it': 'Didascalie:',
+    },
+    'Add language': {
+        'de': 'Sprache hinzufügen',
+        'es': 'Añadir idioma',
+        'fr': 'Ajouter une langue',
+        'it': 'Aggiungi lingua',
+    },
+    'Remove this language': {
+        'de': 'Diese Sprache entfernen',
+        'es': 'Quitar este idioma',
+        'fr': 'Supprimer cette langue',
+        'it': 'Rimuovi questa lingua',
+    },
+    'Caption, e.g. Harald Krichel at the Berlinale 2026': {
+        'de': 'Bildunterschrift, z. B. Harald Krichel auf der Berlinale 2026',
+        'es': 'Leyenda, p. ej. Harald Krichel en la Berlinale 2026',
+        'fr': 'Légende, p. ex. Harald Krichel à la Berlinale 2026',
+        'it': 'Didascalia, ad es. Harald Krichel alla Berlinale 2026',
+    },
+    'Information wikitext for this language (uploaded as {{%s|1=…}})': {
+        'de': 'Information-Wikitext für diese Sprache (wird als {{%s|1=…}} hochgeladen)',
+        'es': 'Wikitexto Information para este idioma (se sube como {{%s|1=…}})',
+        'fr': 'Wikitexte Information pour cette langue (envoyé comme {{%s|1=…}})',
+        'it': 'Wikitesto Information per questa lingua (caricato come {{%s|1=…}})',
+    },
+    'Depicts (P180):': {
+        'de': 'Zeigt (P180):',
+        'es': 'Representa (P180):',
+        'fr': 'Représente (P180) :',
+        'it': 'Raffigura (P180):',
+    },
+    'Created during (P10408):': {
+        'de': 'Entstanden während (P10408):',
+        'es': 'Creado durante (P10408):',
+        'fr': 'Créé lors de (P10408) :',
+        'it': 'Creato durante (P10408):',
+    },
+    'Categories:': {
+        'de': 'Kategorien:',
+        'es': 'Categorías:',
+        'fr': 'Catégories :',
+        'it': 'Categorie:',
+    },
+    'Gallery suffix:': {
+        'de': 'Galerie-Suffix:',
+        'es': 'Sufijo de galería:',
+        'fr': 'Suffixe de galerie :',
+        'it': 'Suffisso galleria:',
+    },
+    'Extra wikitext / comments:': {
+        'de': 'Zusätzlicher Wikitext / Kommentare:',
+        'es': 'Wikitexto adicional / comentarios:',
+        'fr': 'Wikitexte supplémentaire / commentaires :',
+        'it': 'Wikitesto aggiuntivo / commenti:',
+    },
+    '# lines starting with # are comments and are not uploaded': {
+        'de': '# Zeilen, die mit # beginnen, sind Kommentare und werden nicht hochgeladen',
+        'es': '# las líneas que empiezan por # son comentarios y no se suben',
+        'fr': '# les lignes commençant par # sont des commentaires et ne sont pas envoyées',
+        'it': '# le righe che iniziano con # sono commenti e non vengono caricate',
+    },
+    'Bulk edit selected files': {
+        'de': 'Ausgewählte Dateien gesammelt bearbeiten',
+        'es': 'Editar en lote los archivos seleccionados',
+        'fr': 'Édition groupée des fichiers sélectionnés',
+        'it': 'Modifica in blocco dei file selezionati',
+    },
+    'Apply a value to the {n} selected file(s):': {
+        'de': 'Einen Wert auf die {n} ausgewählte(n) Datei(en) anwenden:',
+        'es': 'Aplicar un valor a los {n} archivo(s) seleccionado(s):',
+        'fr': 'Appliquer une valeur aux {n} fichier(s) sélectionné(s) :',
+        'it': 'Applica un valore ai {n} file selezionati:',
+    },
+    'Field:': {
+        'de': 'Feld:',
+        'es': 'Campo:',
+        'fr': 'Champ :',
+        'it': 'Campo:',
+    },
+    'Value:': {
+        'de': 'Wert:',
+        'es': 'Valor:',
+        'fr': 'Valeur :',
+        'it': 'Valore:',
+    },
+    'Depicts (P180)': {
+        'de': 'Zeigt (P180)',
+        'es': 'Representa (P180)',
+        'fr': 'Représente (P180)',
+        'it': 'Raffigura (P180)',
+    },
+    'Categories': {
+        'de': 'Kategorien',
+        'es': 'Categorías',
+        'fr': 'Catégories',
+        'it': 'Categorie',
+    },
+    'Caption (en)': {
+        'de': 'Bildunterschrift (en)',
+        'es': 'Leyenda (en)',
+        'fr': 'Légende (en)',
+        'it': 'Didascalia (en)',
+    },
+    'Caption (de)': {
+        'de': 'Bildunterschrift (de)',
+        'es': 'Leyenda (de)',
+        'fr': 'Légende (de)',
+        'it': 'Didascalia (de)',
+    },
+    'Semicolon-separated QIDs; type a name to search Wikidata.': {
+        'de': 'Durch Semikolon getrennte QIDs; einen Namen eingeben, um Wikidata zu durchsuchen.',
+        'es': 'QID separados por punto y coma; escriba un nombre para buscar en Wikidata.',
+        'fr': 'QID séparés par des points-virgules ; saisissez un nom pour chercher dans Wikidata.',
+        'it': 'QID separati da punto e virgola; digita un nome per cercare in Wikidata.',
+    },
+    'Semicolon-separated, without [[Category:]].': {
+        'de': 'Durch Semikolon getrennt, ohne [[Category:]].',
+        'es': 'Separadas por punto y coma, sin [[Category:]].',
+        'fr': 'Séparées par des points-virgules, sans [[Category:]].',
+        'it': 'Separate da punto e virgola, senza [[Category:]].',
+    },
+    'Sets the English SDC caption.': {
+        'de': 'Setzt die englische SDC-Bildunterschrift.',
+        'es': 'Establece la leyenda SDC en inglés.',
+        'fr': 'Définit la légende SDC anglaise.',
+        'it': 'Imposta la didascalia SDC inglese.',
+    },
+    'Sets the German SDC caption.': {
+        'de': 'Setzt die deutsche SDC-Bildunterschrift.',
+        'es': 'Establece la leyenda SDC en alemán.',
+        'fr': 'Définit la légende SDC allemande.',
+        'it': 'Imposta la didascalia SDC tedesca.',
+    },
+    'Sets the Date column (e.g. 2026-02-15).': {
+        'de': 'Setzt die Spalte „Datum“ (z. B. 2026-02-15).',
+        'es': 'Establece la columna Fecha (p. ej. 2026-02-15).',
+        'fr': 'Définit la colonne Date (p. ex. 2026-02-15).',
+        'it': 'Imposta la colonna Data (ad es. 2026-02-15).',
+    },
+    'No selection': {
+        'de': 'Keine Auswahl',
+        'es': 'Sin selección',
+        'fr': 'Aucune sélection',
+        'it': 'Nessuna selezione',
+    },
+    'Please select one or more rows first (Ctrl/Shift-click to select several).': {
+        'de': 'Bitte zuerst eine oder mehrere Zeilen auswählen (Strg-/Umschalt-Klick für mehrere).',
+        'es': 'Seleccione primero una o varias filas (Ctrl/Mayús-clic para varias).',
+        'fr': 'Sélectionnez d’abord une ou plusieurs lignes (Ctrl/Maj-clic pour en choisir plusieurs).',
+        'it': 'Seleziona prima una o più righe (Ctrl/Maiusc-clic per selezionarne diverse).',
+    },
+    'Applied "{key}" to {n} file(s).': {
+        'de': '„{key}“ auf {n} Datei(en) angewendet.',
+        'es': '«{key}» aplicado a {n} archivo(s).',
+        'fr': '« {key} » appliqué à {n} fichier(s).',
+        'it': '"{key}" applicato a {n} file.',
+    },
+    'Invalid Wikidata IDs': {
+        'de': 'Ungültige Wikidata-IDs',
+        'es': 'ID de Wikidata no válidos',
+        'fr': 'Identifiants Wikidata invalides',
+        'it': 'ID Wikidata non validi',
+    },
+    'The following fields must contain Wikidata QIDs (e.g. Q640).\nPick an entry from the suggestion list or enter a valid QID:': {
+        'de': 'Die folgenden Felder müssen Wikidata-QIDs enthalten (z. B. Q640).\nWähle einen Eintrag aus der Vorschlagsliste oder gib eine gültige QID ein:',
+        'es': 'Los siguientes campos deben contener QID de Wikidata (p. ej. Q640).\nElija una entrada de la lista de sugerencias o escriba un QID válido:',
+        'fr': 'Les champs suivants doivent contenir des QID Wikidata (p. ex. Q640).\nChoisissez une entrée dans la liste de suggestions ou saisissez un QID valide :',
+        'it': 'I campi seguenti devono contenere QID di Wikidata (ad es. Q640).\nScegli una voce dall’elenco dei suggerimenti o inserisci un QID valido:',
+    },
+    '… (+{n} more)': {
+        'de': '… (+{n} weitere)',
+        'es': '… (+{n} más)',
+        'fr': '… (+{n} de plus)',
+        'it': '… (+{n} altri)',
+    },
+    'Upload': {
+        'de': 'Upload',
+        'es': 'Subida',
+        'fr': 'Envoi',
+        'it': 'Caricamento',
+    },
+    'Uploading': {
+        'de': 'Hochladen',
+        'es': 'Subiendo',
+        'fr': 'Envoi',
+        'it': 'Caricamento',
+    },
+    'Copying': {
+        'de': 'Kopieren',
+        'es': 'Copiando',
+        'fr': 'Copie',
+        'it': 'Copia',
+    },
+    'Copy': {
+        'de': 'Kopieren',
+        'es': 'Copiar',
+        'fr': 'Copier',
+        'it': 'Copia',
+    },
+    '{verb} {i} of {total} file(s)…': {
+        'de': '{verb}: {i} von {total} Datei(en)…',
+        'es': '{verb}: {i} de {total} archivo(s)…',
+        'fr': '{verb} : {i} sur {total} fichier(s)…',
+        'it': '{verb}: {i} di {total} file…',
+    },
+    'Uploading {i}/{total}…': {
+        'de': 'Hochladen {i}/{total}…',
+        'es': 'Subiendo {i}/{total}…',
+        'fr': 'Envoi {i}/{total}…',
+        'it': 'Caricamento {i}/{total}…',
+    },
+    'Uploading…': {
+        'de': 'Wird hochgeladen…',
+        'es': 'Subiendo…',
+        'fr': 'Envoi…',
+        'it': 'Caricamento…',
+    },
+    'Uploaded (SDC failed)': {
+        'de': 'Hochgeladen (SDC fehlgeschlagen)',
+        'es': 'Subido (SDC falló)',
+        'fr': 'Envoyé (SDC en échec)',
+        'it': 'Caricato (SDC fallito)',
+    },
+    'Uploaded, but structured data failed: {msg}': {
+        'de': 'Hochgeladen, aber die strukturierten Daten schlugen fehl: {msg}',
+        'es': 'Subido, pero los datos estructurados fallaron: {msg}',
+        'fr': 'Envoyé, mais les données structurées ont échoué : {msg}',
+        'it': 'Caricato, ma i dati strutturati non sono riusciti: {msg}',
+    },
+    'Cancelling: the file currently being uploaded is finished first, then the run stops.': {
+        'de': 'Wird abgebrochen: Die gerade laufende Datei wird noch fertig hochgeladen, danach stoppt der Lauf.',
+        'es': 'Cancelando: primero se termina el archivo que se está subiendo y luego se detiene la ejecución.',
+        'fr': 'Annulation : le fichier en cours d’envoi est d’abord terminé, puis l’exécution s’arrête.',
+        'it': 'Annullamento: il file in corso di caricamento viene prima completato, poi l’esecuzione si ferma.',
+    },
+    'Use a <b>BotPassword</b>: create one at <a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">Special:BotPasswords</a> and log in with the name shown there (e.g. <i>YourName@Cammello</i>).<br><br>Required grants:<ul style="margin-top:2px;"><li>Edit existing pages</li><li>Create, edit, and move pages</li><li>Upload new files</li><li>Upload, replace, and move files</li></ul>': {
+        'de': 'Verwende ein <b>BotPassword</b>: unter <a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">Special:BotPasswords</a> anlegen und mit dem dort angezeigten Namen anmelden (z. B. <i>DeinName@Cammello</i>).<br><br>Erforderliche Rechte:<ul style="margin-top:2px;"><li>Bestehende Seiten bearbeiten</li><li>Seiten erstellen, bearbeiten und verschieben</li><li>Neue Dateien hochladen</li><li>Dateien hochladen, ersetzen und verschieben</li></ul>',
+        'es': 'Use una <b>BotPassword</b>: créela en <a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">Special:BotPasswords</a> e inicie sesión con el nombre que aparece allí (p. ej. <i>SuNombre@Cammello</i>).<br><br>Permisos necesarios:<ul style="margin-top:2px;"><li>Editar páginas existentes</li><li>Crear, editar y trasladar páginas</li><li>Subir archivos nuevos</li><li>Subir, reemplazar y trasladar archivos</li></ul>',
+        'fr': 'Utilisez un <b>BotPassword</b> : créez-en un sur <a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">Special:BotPasswords</a> et connectez-vous avec le nom qui y est affiché (p. ex. <i>VotreNom@Cammello</i>).<br><br>Droits requis :<ul style="margin-top:2px;"><li>Modifier des pages existantes</li><li>Créer, modifier et renommer des pages</li><li>Importer de nouveaux fichiers</li><li>Importer, remplacer et renommer des fichiers</li></ul>',
+        'it': 'Usa una <b>BotPassword</b>: creane una su <a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">Special:BotPasswords</a> e accedi con il nome mostrato lì (ad es. <i>TuoNome@Cammello</i>).<br><br>Permessi necessari:<ul style="margin-top:2px;"><li>Modificare pagine esistenti</li><li>Creare, modificare e spostare pagine</li><li>Caricare nuovi file</li><li>Caricare, sostituire e spostare file</li></ul>',
+    },
+    'Username:': {
+        'de': 'Benutzername:',
+        'es': 'Nombre de usuario:',
+        'fr': 'Nom d’utilisateur :',
+        'it': 'Nome utente:',
+    },
+    'Password:': {
+        'de': 'Passwort:',
+        'es': 'Contraseña:',
+        'fr': 'Mot de passe :',
+        'it': 'Password:',
+    },
+    'Verbose logging': {
+        'de': 'Ausführliches Protokoll',
+        'es': 'Registro detallado',
+        'fr': 'Journalisation détaillée',
+        'it': 'Registro dettagliato',
+    },
+    'Clear': {
+        'de': 'Leeren',
+        'es': 'Vaciar',
+        'fr': 'Effacer',
+        'it': 'Svuota',
+    },
+    'Open log file': {
+        'de': 'Protokolldatei öffnen',
+        'es': 'Abrir archivo de registro',
+        'fr': 'Ouvrir le fichier journal',
+        'it': 'Apri file di registro',
+    },
+    'Open folder': {
+        'de': 'Ordner öffnen',
+        'es': 'Abrir carpeta',
+        'fr': 'Ouvrir le dossier',
+        'it': 'Apri cartella',
+    },
+    'Log file: {path}': {
+        'de': 'Protokolldatei: {path}',
+        'es': 'Archivo de registro: {path}',
+        'fr': 'Fichier journal : {path}',
+        'it': 'File di registro: {path}',
+    },
+    'Log copied to clipboard.': {
+        'de': 'Protokoll in die Zwischenablage kopiert.',
+        'es': 'Registro copiado al portapapeles.',
+        'fr': 'Journal copié dans le presse-papiers.',
+        'it': 'Registro copiato negli appunti.',
+    },
+    'Files (shared with the MediaWiki tab):': {
+        'de': 'Dateien (gemeinsam mit dem MediaWiki-Tab):',
+        'es': 'Archivos (compartidos con la pestaña MediaWiki):',
+        'fr': 'Fichiers (partagés avec l’onglet MediaWiki) :',
+        'it': 'File (condivisi con la scheda MediaWiki):',
+    },
+    'Refresh list': {
+        'de': 'Liste aktualisieren',
+        'es': 'Actualizar lista',
+        'fr': 'Actualiser la liste',
+        'it': 'Aggiorna elenco',
+    },
+    'IPTC fields of the selected file': {
+        'de': 'IPTC-Felder der ausgewählten Datei',
+        'es': 'Campos IPTC del archivo seleccionado',
+        'fr': 'Champs IPTC du fichier sélectionné',
+        'it': 'Campi IPTC del file selezionato',
+    },
+    'separated by ;': {
+        'de': 'durch ; getrennt',
+        'es': 'separado por ;',
+        'fr': 'séparé par ;',
+        'it': 'separati da ;',
+    },
+    'Read IPTC from file': {
+        'de': 'IPTC aus Datei lesen',
+        'es': 'Leer IPTC del archivo',
+        'fr': 'Lire l’IPTC du fichier',
+        'it': 'Leggi IPTC dal file',
+    },
+    'Fill from MediaWiki data': {
+        'de': 'Aus MediaWiki-Daten füllen',
+        'es': 'Rellenar con datos de MediaWiki',
+        'fr': 'Remplir depuis les données MediaWiki',
+        'it': 'Compila dai dati MediaWiki',
+    },
+    'caption -> Caption/Headline, categories -> Keywords, author -> Creator, date -> Date created, target filename -> Title. QIDs are not resolved to names (that would need a Wikidata lookup).': {
+        'de': 'caption -> Caption/Headline, Kategorien -> Keywords, Autor -> Creator, Datum -> Date created, Zieldateiname -> Title. QIDs werden nicht in Namen aufgelöst (das bräuchte eine Wikidata-Abfrage).',
+        'es': 'caption -> Caption/Headline, categorías -> Keywords, autor -> Creator, fecha -> Date created, nombre de destino -> Title. Los QID no se resuelven a nombres (haría falta una consulta a Wikidata).',
+        'fr': 'caption -> Caption/Headline, catégories -> Keywords, auteur -> Creator, date -> Date created, nom de fichier cible -> Title. Les QID ne sont pas résolus en noms (cela nécessiterait une requête Wikidata).',
+        'it': 'caption -> Caption/Headline, categorie -> Keywords, autore -> Creator, data -> Date created, nome file di destinazione -> Title. I QID non vengono risolti in nomi (servirebbe una query a Wikidata).',
+    },
+    'Caption -> Wikitext as': {
+        'de': 'Caption -> Wikitext als',
+        'es': 'Caption -> Wikitexto como',
+        'fr': 'Caption -> Wikitexte comme',
+        'it': 'Caption -> Wikitesto come',
+    },
+    "Copies the IPTC caption into the file's description as caption_<language>.": {
+        'de': 'Kopiert die IPTC-Caption als caption_<Sprache> in die Beschreibung der Datei.',
+        'es': 'Copia la leyenda IPTC en la descripción del archivo como caption_<idioma>.',
+        'fr': 'Copie la légende IPTC dans la description du fichier sous la forme caption_<langue>.',
+        'it': 'Copia la didascalia IPTC nella descrizione del file come caption_<lingua>.',
+    },
+    'IPTC writing': {
+        'de': 'IPTC-Schreiben',
+        'es': 'Escritura IPTC',
+        'fr': 'Écriture IPTC',
+        'it': 'Scrittura IPTC',
+    },
+    'Write into the ORIGINAL files (default: copies in the export folder below)': {
+        'de': 'In die ORIGINALDATEIEN schreiben (Vorgabe: Kopien im Exportordner unten)',
+        'es': 'Escribir en los archivos ORIGINALES (por defecto: copias en la carpeta de exportación de abajo)',
+        'fr': 'Écrire dans les fichiers ORIGINAUX (par défaut : copies dans le dossier d’export ci-dessous)',
+        'it': 'Scrivere nei file ORIGINALI (predefinito: copie nella cartella di esportazione qui sotto)',
+    },
+    'Export folder for copies': {
+        'de': 'Exportordner für Kopien',
+        'es': 'Carpeta de exportación para las copias',
+        'fr': 'Dossier d’export pour les copies',
+        'it': 'Cartella di esportazione per le copie',
+    },
+    'Export folder': {
+        'de': 'Exportordner',
+        'es': 'Carpeta de exportación',
+        'fr': 'Dossier d’export',
+        'it': 'Cartella di esportazione',
+    },
+    'Write IPTC (all files with data)': {
+        'de': 'IPTC schreiben (alle Dateien mit Daten)',
+        'es': 'Escribir IPTC (todos los archivos con datos)',
+        'fr': 'Écrire l’IPTC (tous les fichiers avec des données)',
+        'it': 'Scrivi IPTC (tutti i file con dati)',
+    },
+    'The caption field is empty.': {
+        'de': 'Das Caption-Feld ist leer.',
+        'es': 'El campo de leyenda está vacío.',
+        'fr': 'Le champ de légende est vide.',
+        'it': 'Il campo didascalia è vuoto.',
+    },
+    'Choose an export folder, or enable writing into the original files.': {
+        'de': 'Wähle einen Exportordner, oder aktiviere das Schreiben in die Originaldateien.',
+        'es': 'Elija una carpeta de exportación o active la escritura en los archivos originales.',
+        'fr': 'Choisissez un dossier d’export, ou activez l’écriture dans les fichiers originaux.',
+        'it': 'Scegli una cartella di esportazione oppure attiva la scrittura nei file originali.',
+    },
+    'No file has any IPTC data yet.': {
+        'de': 'Noch keine Datei hat IPTC-Daten.',
+        'es': 'Ningún archivo tiene todavía datos IPTC.',
+        'fr': 'Aucun fichier n’a encore de données IPTC.',
+        'it': 'Nessun file ha ancora dati IPTC.',
+    },
+    'IPTC written: {written} file(s), {failed} failed.': {
+        'de': 'IPTC geschrieben: {written} Datei(en), {failed} fehlgeschlagen.',
+        'es': 'IPTC escrito: {written} archivo(s), {failed} fallidos.',
+        'fr': 'IPTC écrit : {written} fichier(s), {failed} en échec.',
+        'it': 'IPTC scritto: {written} file, {failed} non riusciti.',
+    },
+    'Filled {n} field(s) from MediaWiki data for "{name}".': {
+        'de': '{n} Feld(er) aus MediaWiki-Daten für „{name}“ gefüllt.',
+        'es': '{n} campo(s) rellenados con datos de MediaWiki para «{name}».',
+        'fr': '{n} champ(s) remplis depuis les données MediaWiki pour « {name} ».',
+        'it': '{n} campo/i compilati dai dati MediaWiki per "{name}".',
+    },
+    'Caption copied to caption_{lang} for "{name}".': {
+        'de': 'Caption nach caption_{lang} kopiert für „{name}“.',
+        'es': 'Leyenda copiada a caption_{lang} para «{name}».',
+        'fr': 'Légende copiée dans caption_{lang} pour « {name} ».',
+        'it': 'Didascalia copiata in caption_{lang} per "{name}".',
+    },
+    'IPTC write failed, file skipped: "{name}": {e}': {
+        'de': 'IPTC-Schreiben fehlgeschlagen, Datei übersprungen: „{name}“: {e}',
+        'es': 'Fallo al escribir IPTC, archivo omitido: «{name}»: {e}',
+        'fr': 'Échec de l’écriture IPTC, fichier ignoré : « {name} » : {e}',
+        'it': 'Scrittura IPTC non riuscita, file ignorato: "{name}": {e}',
+    },
+    'Title / object name': {
+        'de': 'Titel / Objektname',
+        'es': 'Título / nombre del objeto',
+        'fr': 'Titre / nom de l’objet',
+        'it': 'Titolo / nome oggetto',
+    },
+    'Headline': {
+        'de': 'Schlagzeile',
+        'es': 'Titular',
+        'fr': 'Titre',
+        'it': 'Titolo',
+    },
+    'Caption / description': {
+        'de': 'Bildunterschrift / Beschreibung',
+        'es': 'Leyenda / descripción',
+        'fr': 'Légende / description',
+        'it': 'Didascalia / descrizione',
+    },
+    'Keywords': {
+        'de': 'Schlagwörter',
+        'es': 'Palabras clave',
+        'fr': 'Mots-clés',
+        'it': 'Parole chiave',
+    },
+    'Creator (by-line)': {
+        'de': 'Urheber (By-line)',
+        'es': 'Creador (by-line)',
+        'fr': 'Créateur (by-line)',
+        'it': 'Autore (by-line)',
+    },
+    'Copyright notice': {
+        'de': 'Urheberrechtshinweis',
+        'es': 'Aviso de copyright',
+        'fr': 'Mention de droit d’auteur',
+        'it': 'Nota di copyright',
+    },
+    'Credit': {
+        'de': 'Credit',
+        'es': 'Crédito',
+        'fr': 'Crédit',
+        'it': 'Credito',
+    },
+    'Source': {
+        'de': 'Quelle',
+        'es': 'Fuente',
+        'fr': 'Source',
+        'it': 'Fonte',
+    },
+    'City': {
+        'de': 'Stadt',
+        'es': 'Ciudad',
+        'fr': 'Ville',
+        'it': 'Città',
+    },
+    'Province / state': {
+        'de': 'Bundesland / Provinz',
+        'es': 'Provincia / estado',
+        'fr': 'Province / état',
+        'it': 'Provincia / stato',
+    },
+    'Country': {
+        'de': 'Land',
+        'es': 'País',
+        'fr': 'Pays',
+        'it': 'Paese',
+    },
+    'Date created (YYYY-MM-DD)': {
+        'de': 'Aufnahmedatum (JJJJ-MM-TT)',
+        'es': 'Fecha de creación (AAAA-MM-DD)',
+        'fr': 'Date de création (AAAA-MM-JJ)',
+        'it': 'Data di creazione (AAAA-MM-GG)',
+    },
+    'FTP server': {
+        'de': 'FTP-Server',
+        'es': 'Servidor FTP',
+        'fr': 'Serveur FTP',
+        'it': 'Server FTP',
+    },
+    'FTP upload': {
+        'de': 'FTP-Upload',
+        'es': 'Subida FTP',
+        'fr': 'Envoi FTP',
+        'it': 'Caricamento FTP',
+    },
+    'Protocol:': {
+        'de': 'Protokoll:',
+        'es': 'Protocolo:',
+        'fr': 'Protocole :',
+        'it': 'Protocollo:',
+    },
+    'Host:': {
+        'de': 'Host:',
+        'es': 'Servidor:',
+        'fr': 'Hôte :',
+        'it': 'Host:',
+    },
+    'Port:': {
+        'de': 'Port:',
+        'es': 'Puerto:',
+        'fr': 'Port :',
+        'it': 'Porta:',
+    },
+    'User:': {
+        'de': 'Benutzer:',
+        'es': 'Usuario:',
+        'fr': 'Utilisateur :',
+        'it': 'Utente:',
+    },
+    'empty = default port': {
+        'de': 'leer = Standardport',
+        'es': 'vacío = puerto predeterminado',
+        'fr': 'vide = port par défaut',
+        'it': 'vuoto = porta predefinita',
+    },
+    'Store password in settings (PLAIN TEXT - unsafe)': {
+        'de': 'Passwort in den Einstellungen speichern (KLARTEXT – unsicher)',
+        'es': 'Guardar la contraseña en los ajustes (TEXTO PLANO: inseguro)',
+        'fr': 'Enregistrer le mot de passe dans les réglages (TEXTE EN CLAIR – non sécurisé)',
+        'it': 'Salvare la password nelle impostazioni (TESTO IN CHIARO – non sicuro)',
+    },
+    'Remote directory:': {
+        'de': 'Zielverzeichnis:',
+        'es': 'Directorio remoto:',
+        'fr': 'Répertoire distant :',
+        'it': 'Directory remota:',
+    },
+    'Files and IPTC data come from the IPTC tab. Write settings (export folder) are in the IPTC tab.': {
+        'de': 'Dateien und IPTC-Daten stammen aus dem IPTC-Tab. Die Schreib-Einstellungen (Exportordner) stehen ebenfalls dort.',
+        'es': 'Los archivos y los datos IPTC vienen de la pestaña IPTC. Los ajustes de escritura (carpeta de exportación) están allí.',
+        'fr': 'Les fichiers et les données IPTC proviennent de l’onglet IPTC. Les réglages d’écriture (dossier d’export) s’y trouvent aussi.',
+        'it': 'I file e i dati IPTC provengono dalla scheda IPTC. Le impostazioni di scrittura (cartella di esportazione) sono lì.',
+    },
+    'Write IPTC + upload all': {
+        'de': 'IPTC schreiben + alle hochladen',
+        'es': 'Escribir IPTC + subir todo',
+        'fr': 'Écrire l’IPTC + tout envoyer',
+        'it': 'Scrivi IPTC + carica tutto',
+    },
+    'The IPTC tab is disabled, so the "Write IPTC + upload" workflow is unavailable. These server settings are used by the Culling tab ("-> FTP").': {
+        'de': 'Der IPTC-Tab ist abgeschaltet, daher steht der Ablauf „IPTC schreiben + hochladen“ nicht zur Verfügung. Diese Servereinstellungen nutzt der Sichtungs-Tab („-> FTP“).',
+        'es': 'La pestaña IPTC está desactivada, así que el flujo «Escribir IPTC + subir» no está disponible. La pestaña de selección usa estos ajustes del servidor («-> FTP»).',
+        'fr': 'L’onglet IPTC est désactivé : le flux « Écrire l’IPTC + envoyer » n’est pas disponible. Ces réglages de serveur sont utilisés par l’onglet de tri (« -> FTP »).',
+        'it': 'La scheda IPTC è disattivata, quindi il flusso "Scrivi IPTC + carica" non è disponibile. Queste impostazioni del server sono usate dalla scheda di selezione ("-> FTP").',
+    },
+    'Host is missing.': {
+        'de': 'Der Host fehlt.',
+        'es': 'Falta el servidor.',
+        'fr': 'L’hôte est manquant.',
+        'it': 'Manca l’host.',
+    },
+    'Host is missing (FTP tab or Settings tab).': {
+        'de': 'Der Host fehlt (FTP-Tab oder Einstellungen).',
+        'es': 'Falta el servidor (pestaña FTP o Ajustes).',
+        'fr': 'L’hôte est manquant (onglet FTP ou Réglages).',
+        'it': 'Manca l’host (scheda FTP o Impostazioni).',
+    },
+    'Password is missing (it is asked per session unless you chose to store it).': {
+        'de': 'Das Passwort fehlt (es wird pro Sitzung abgefragt, sofern es nicht gespeichert wird).',
+        'es': 'Falta la contraseña (se pide por sesión salvo que elija guardarla).',
+        'fr': 'Le mot de passe est manquant (il est demandé à chaque session, sauf si vous l’enregistrez).',
+        'it': 'Manca la password (viene richiesta a ogni sessione, a meno che tu non scelga di salvarla).',
+    },
+    'No file could be prepared.': {
+        'de': 'Keine Datei konnte vorbereitet werden.',
+        'es': 'No se pudo preparar ningún archivo.',
+        'fr': 'Aucun fichier n’a pu être préparé.',
+        'it': 'Non è stato possibile preparare alcun file.',
+    },
+    'Connection failed: {e}': {
+        'de': 'Verbindung fehlgeschlagen: {e}',
+        'es': 'Fallo de conexión: {e}',
+        'fr': 'Échec de la connexion : {e}',
+        'it': 'Connessione non riuscita: {e}',
+    },
+    'Failed: could not connect to {host}.': {
+        'de': 'Fehlgeschlagen: keine Verbindung zu {host}.',
+        'es': 'Fallo: no se pudo conectar con {host}.',
+        'fr': 'Échec : impossible de se connecter à {host}.',
+        'it': 'Non riuscito: impossibile connettersi a {host}.',
+    },
+    'Remote directory: {e}': {
+        'de': 'Zielverzeichnis: {e}',
+        'es': 'Directorio remoto: {e}',
+        'fr': 'Répertoire distant : {e}',
+        'it': 'Directory remota: {e}',
+    },
+    'Failed: remote directory "{dir}".': {
+        'de': 'Fehlgeschlagen: Zielverzeichnis „{dir}“.',
+        'es': 'Fallo: directorio remoto «{dir}».',
+        'fr': 'Échec : répertoire distant « {dir} ».',
+        'it': 'Non riuscito: directory remota "{dir}".',
+    },
+    'Sent': {
+        'de': 'Gesendet',
+        'es': 'Enviado',
+        'fr': 'Envoyé',
+        'it': 'Inviato',
+    },
+    'Done: {ok}/{total} file(s) sent.': {
+        'de': 'Fertig: {ok}/{total} Datei(en) gesendet.',
+        'es': 'Listo: {ok}/{total} archivo(s) enviados.',
+        'fr': 'Terminé : {ok}/{total} fichier(s) envoyés.',
+        'it': 'Fatto: {ok}/{total} file inviati.',
+    },
+    'Cancelled: {ok}/{total} file(s) sent, {skipped} not started.': {
+        'de': 'Abgebrochen: {ok}/{total} Datei(en) gesendet, {skipped} nicht begonnen.',
+        'es': 'Cancelado: {ok}/{total} archivo(s) enviados, {skipped} sin iniciar.',
+        'fr': 'Annulé : {ok}/{total} fichier(s) envoyés, {skipped} non commencés.',
+        'it': 'Annullato: {ok}/{total} file inviati, {skipped} non avviati.',
+    },
+    'Open folder…': {
+        'de': 'Ordner öffnen…',
+        'es': 'Abrir carpeta…',
+        'fr': 'Ouvrir un dossier…',
+        'it': 'Apri cartella…',
+    },
+    'Number keys 1-5 set stars or colors; M toggles the mode.': {
+        'de': 'Zifferntasten 1–5 setzen Sterne oder Farben; M schaltet den Modus um.',
+        'es': 'Las teclas 1-5 asignan estrellas o colores; M cambia el modo.',
+        'fr': 'Les touches 1-5 attribuent des étoiles ou des couleurs ; M bascule le mode.',
+        'it': 'I tasti 1-5 assegnano stelle o colori; M cambia modalità.',
+    },
+    'numbers = STARS': {
+        'de': 'Zahlen = STERNE',
+        'es': 'números = ESTRELLAS',
+        'fr': 'chiffres = ÉTOILES',
+        'it': 'numeri = STELLE',
+    },
+    'numbers = COLORS': {
+        'de': 'Zahlen = FARBEN',
+        'es': 'números = COLORES',
+        'fr': 'chiffres = COULEURS',
+        'it': 'numeri = COLORI',
+    },
+    'Zoom:': {
+        'de': 'Zoom:',
+        'es': 'Zoom:',
+        'fr': 'Zoom :',
+        'it': 'Zoom:',
+    },
+    'One zoom step out (Cmd/Ctrl -)': {
+        'de': 'Eine Zoomstufe heraus (Cmd/Strg -)',
+        'es': 'Un paso de zoom hacia fuera (Cmd/Ctrl -)',
+        'fr': 'Un cran de zoom arrière (Cmd/Ctrl -)',
+        'it': 'Uno scatto di zoom indietro (Cmd/Ctrl -)',
+    },
+    'One zoom step in (Cmd/Ctrl +)': {
+        'de': 'Eine Zoomstufe hinein (Cmd/Strg +)',
+        'es': 'Un paso de zoom hacia dentro (Cmd/Ctrl +)',
+        'fr': 'Un cran de zoom avant (Cmd/Ctrl +)',
+        'it': 'Uno scatto di zoom avanti (Cmd/Ctrl +)',
+    },
+    'Grid': {
+        'de': 'Raster',
+        'es': 'Cuadrícula',
+        'fr': 'Grille',
+        'it': 'Griglia',
+    },
+    'Grid view (G): thumbnails instead of the large image.': {
+        'de': 'Rasteransicht (G): Miniaturen statt des großen Bildes.',
+        'es': 'Vista de cuadrícula (G): miniaturas en lugar de la imagen grande.',
+        'fr': 'Vue en grille (G) : vignettes au lieu de la grande image.',
+        'it': 'Vista a griglia (G): miniature invece dell’immagine grande.',
+    },
+    'Show:': {
+        'de': 'Zeigen:',
+        'es': 'Mostrar:',
+        'fr': 'Afficher :',
+        'it': 'Mostra:',
+    },
+    'all': {
+        'de': 'alle',
+        'es': 'todas',
+        'fr': 'toutes',
+        'it': 'tutte',
+    },
+    'incl. rejects': {
+        'de': 'inkl. Ausschuss',
+        'es': 'incl. rechazadas',
+        'fr': 'y compris les rejets',
+        'it': 'incl. scarti',
+    },
+    'Send to:': {
+        'de': 'Senden an:',
+        'es': 'Enviar a:',
+        'fr': 'Envoyer vers :',
+        'it': 'Invia a:',
+    },
+    'Folder…': {
+        'de': 'Ordner…',
+        'es': 'Carpeta…',
+        'fr': 'Dossier…',
+        'it': 'Cartella…',
+    },
+    'Adds the selected images to the MediaWiki tab; with no selection, every image passing the filter. Images can also be dragged onto the MediaWiki tab directly.': {
+        'de': 'Fügt die ausgewählten Bilder dem MediaWiki-Tab hinzu; ohne Auswahl alle Bilder, die den Filter passieren. Bilder lassen sich auch direkt auf den MediaWiki-Tab ziehen.',
+        'es': 'Añade las imágenes seleccionadas a la pestaña MediaWiki; sin selección, todas las que pasen el filtro. También se pueden arrastrar directamente a la pestaña MediaWiki.',
+        'fr': 'Ajoute les images sélectionnées à l’onglet MediaWiki ; sans sélection, toutes celles qui passent le filtre. Les images peuvent aussi être glissées directement sur l’onglet MediaWiki.',
+        'it': 'Aggiunge le immagini selezionate alla scheda MediaWiki; senza selezione, tutte quelle che passano il filtro. Le immagini si possono anche trascinare direttamente sulla scheda MediaWiki.',
+    },
+    'Uploads the selected images (as they are, no IPTC writing) to the server configured in the FTP tab / Settings.': {
+        'de': 'Lädt die ausgewählten Bilder unverändert (ohne IPTC-Schreiben) auf den im FTP-Tab bzw. in den Einstellungen konfigurierten Server.',
+        'es': 'Sube las imágenes seleccionadas tal cual (sin escribir IPTC) al servidor configurado en la pestaña FTP / Ajustes.',
+        'fr': 'Envoie les images sélectionnées telles quelles (sans écriture IPTC) vers le serveur configuré dans l’onglet FTP / Réglages.',
+        'it': 'Carica le immagini selezionate così come sono (senza scrittura IPTC) sul server configurato nella scheda FTP / Impostazioni.',
+    },
+    'Copies the selected images into a local folder. RAW files bring their .xmp sidecar along; existing files in the target folder are never overwritten.': {
+        'de': 'Kopiert die ausgewählten Bilder in einen lokalen Ordner. RAW-Dateien bringen ihre .xmp-Sidecar-Datei mit; vorhandene Dateien im Zielordner werden nie überschrieben.',
+        'es': 'Copia las imágenes seleccionadas a una carpeta local. Los RAW llevan consigo su sidecar .xmp; los archivos existentes en la carpeta de destino nunca se sobrescriben.',
+        'fr': 'Copie les images sélectionnées dans un dossier local. Les RAW emportent leur fichier annexe .xmp ; les fichiers existants dans le dossier cible ne sont jamais écrasés.',
+        'it': 'Copia le immagini selezionate in una cartella locale. I RAW portano con sé il sidecar .xmp; i file già presenti nella cartella di destinazione non vengono mai sovrascritti.',
+    },
+    'No folder open. Open one to start culling.': {
+        'de': 'Kein Ordner geöffnet. Öffne einen, um mit der Sichtung zu beginnen.',
+        'es': 'No hay ninguna carpeta abierta. Abra una para empezar la selección.',
+        'fr': 'Aucun dossier ouvert. Ouvrez-en un pour commencer le tri.',
+        'it': 'Nessuna cartella aperta. Aprine una per iniziare la selezione.',
+    },
+    '{pos}/{shown} shown ({total} in folder)': {
+        'de': '{pos}/{shown} angezeigt ({total} im Ordner)',
+        'es': '{pos}/{shown} mostradas ({total} en la carpeta)',
+        'fr': '{pos}/{shown} affichées ({total} dans le dossier)',
+        'it': '{pos}/{shown} mostrate ({total} nella cartella)',
+    },
+    'Nothing passes the current filter.': {
+        'de': 'Nichts passiert den aktuellen Filter.',
+        'es': 'Nada pasa el filtro actual.',
+        'fr': 'Rien ne passe le filtre actuel.',
+        'it': 'Niente supera il filtro attuale.',
+    },
+    '{added} file(s) added to the table, {dupes} duplicate(s) skipped, {failed} failed.': {
+        'de': '{added} Datei(en) zur Tabelle hinzugefügt, {dupes} Duplikat(e) übersprungen, {failed} fehlgeschlagen.',
+        'es': '{added} archivo(s) añadidos a la tabla, {dupes} duplicado(s) omitido(s), {failed} fallidos.',
+        'fr': '{added} fichier(s) ajoutés au tableau, {dupes} doublon(s) ignoré(s), {failed} en échec.',
+        'it': '{added} file aggiunti alla tabella, {dupes} duplicato/i ignorato/i, {failed} non riusciti.',
+    },
+    '[P] RAW+JPEG pair (one picture, two files)': {
+        'de': '[P] RAW+JPEG-Paar (ein Bild, zwei Dateien)',
+        'es': '[P] Par RAW+JPEG (una imagen, dos archivos)',
+        'fr': '[P] Paire RAW+JPEG (une image, deux fichiers)',
+        'it': '[P] Coppia RAW+JPEG (un’immagine, due file)',
+    },
+    '[T] already in the file table': {
+        'de': '[T] bereits in der Dateitabelle',
+        'es': '[T] ya está en la tabla de archivos',
+        'fr': '[T] déjà dans le tableau des fichiers',
+        'it': '[T] già nella tabella dei file',
+    },
+    'Auto-advance:': {
+        'de': 'Automatisch weiter:',
+        'es': 'Avance automático:',
+        'fr': 'Avance automatique :',
+        'it': 'Avanzamento automatico:',
+    },
+    'Advance to the next image after rating/labeling': {
+        'de': 'Nach Bewertung/Farbmarkierung zum nächsten Bild springen',
+        'es': 'Pasar a la siguiente imagen tras valorar/etiquetar',
+        'fr': 'Passer à l’image suivante après notation/étiquetage',
+        'it': 'Passare all’immagine successiva dopo valutazione/etichetta',
+    },
+    'Color label set:': {
+        'de': 'Farbmarkierungs-Satz:',
+        'es': 'Conjunto de etiquetas de color:',
+        'fr': 'Jeu d’étiquettes de couleur :',
+        'it': 'Set di etichette colore:',
+    },
+    'Language of the label TEXT written to XMP - must match the color label set of your Lightroom, or LR shows the label in white.': {
+        'de': 'Sprache des in XMP geschriebenen Farbmarkierungs-TEXTES – muss zum Farbmarkierungssatz deines Lightroom passen, sonst zeigt LR die Markierung weiß an.',
+        'es': 'Idioma del TEXTO de la etiqueta escrito en XMP: debe coincidir con el conjunto de etiquetas de color de su Lightroom, o LR mostrará la etiqueta en blanco.',
+        'fr': 'Langue du TEXTE d’étiquette écrit dans le XMP – doit correspondre au jeu d’étiquettes de couleur de votre Lightroom, sinon LR affiche l’étiquette en blanc.',
+        'it': 'Lingua del TESTO dell’etichetta scritto nell’XMP: deve corrispondere al set di etichette colore del tuo Lightroom, altrimenti LR mostra l’etichetta in bianco.',
+    },
+    'RAW+JPEG pairs:': {
+        'de': 'RAW+JPEG-Paare:',
+        'es': 'Pares RAW+JPEG:',
+        'fr': 'Paires RAW+JPEG :',
+        'it': 'Coppie RAW+JPEG:',
+    },
+    'pair: JPEG': {
+        'de': 'Paar: JPEG',
+        'es': 'par: JPEG',
+        'fr': 'paire : JPEG',
+        'it': 'coppia: JPEG',
+    },
+    'pair: RAW': {
+        'de': 'Paar: RAW',
+        'es': 'par: RAW',
+        'fr': 'paire : RAW',
+        'it': 'coppia: RAW',
+    },
+    'pair: both': {
+        'de': 'Paar: beide',
+        'es': 'par: ambos',
+        'fr': 'paire : les deux',
+        'it': 'coppia: entrambi',
+    },
+    'Which file of a RAW+JPEG pair goes to the file table (button and drag-and-drop).': {
+        'de': 'Welche Datei eines RAW+JPEG-Paares in die Dateitabelle wandert (Schaltfläche und Drag-and-drop).',
+        'es': 'Qué archivo de un par RAW+JPEG va a la tabla de archivos (botón y arrastrar y soltar).',
+        'fr': 'Quel fichier d’une paire RAW+JPEG va dans le tableau des fichiers (bouton et glisser-déposer).',
+        'it': 'Quale file di una coppia RAW+JPEG finisce nella tabella dei file (pulsante e trascinamento).',
+    },
+    'Copy selection to folder': {
+        'de': 'Auswahl in Ordner kopieren',
+        'es': 'Copiar la selección a una carpeta',
+        'fr': 'Copier la sélection dans un dossier',
+        'it': 'Copia la selezione in una cartella',
+    },
+    'Copy to folder': {
+        'de': 'In Ordner kopieren',
+        'es': 'Copiar a carpeta',
+        'fr': 'Copier dans le dossier',
+        'it': 'Copia nella cartella',
+    },
+    'Copied': {
+        'de': 'Kopiert',
+        'es': 'Copiado',
+        'fr': 'Copié',
+        'it': 'Copiato',
+    },
+    'Skipped (exists)': {
+        'de': 'Übersprungen (vorhanden)',
+        'es': 'Omitido (ya existe)',
+        'fr': 'Ignoré (existe déjà)',
+        'it': 'Ignorato (già presente)',
+    },
+    'Done: {ok}/{total} file(s) copied': {
+        'de': 'Fertig: {ok}/{total} Datei(en) kopiert',
+        'es': 'Listo: {ok}/{total} archivo(s) copiados',
+        'fr': 'Terminé : {ok}/{total} fichier(s) copiés',
+        'it': 'Fatto: {ok}/{total} file copiati',
+    },
+    '{n} skipped (already there)': {
+        'de': '{n} übersprungen (schon vorhanden)',
+        'es': '{n} omitido(s) (ya estaban)',
+        'fr': '{n} ignoré(s) (déjà présents)',
+        'it': '{n} ignorato/i (già presenti)',
+    },
+    '{n} failed': {
+        'de': '{n} fehlgeschlagen',
+        'es': '{n} fallidos',
+        'fr': '{n} en échec',
+        'it': '{n} non riusciti',
+    },
+    'Cancelled: {ok}/{total} file(s) copied, {n} not started.': {
+        'de': 'Abgebrochen: {ok}/{total} Datei(en) kopiert, {n} nicht begonnen.',
+        'es': 'Cancelado: {ok}/{total} archivo(s) copiados, {n} sin iniciar.',
+        'fr': 'Annulé : {ok}/{total} fichier(s) copiés, {n} non commencés.',
+        'it': 'Annullato: {ok}/{total} file copiati, {n} non avviati.',
+    },
+    'About': {
+        'de': 'Über',
+        'es': 'Acerca de',
+        'fr': 'À propos',
+        'it': 'Informazioni',
+    },
+    'A WikiPortraits tool by Harald Krichel': {
+        'de': 'Ein WikiPortraits-Tool von Harald Krichel',
+        'es': 'Una herramienta de WikiPortraits de Harald Krichel',
+        'fr': 'Un outil WikiPortraits de Harald Krichel',
+        'it': 'Uno strumento WikiPortraits di Harald Krichel',
+    },
+    'Version {version}': {
+        'de': 'Version {version}',
+        'es': 'Versión {version}',
+        'fr': 'Version {version}',
+        'it': 'Versione {version}',
+    },
+    'License:': {
+        'de': 'Lizenz:',
+        'es': 'Licencia:',
+        'fr': 'Licence :',
+        'it': 'Licenza:',
+    },
+    'Built with:': {
+        'de': 'Erstellt mit:',
+        'es': 'Creado con:',
+        'fr': 'Créé avec :',
+        'it': 'Creato con:',
+    },
+    '{n} file(s)': {
+        'de': '{n} Datei(en)',
+        'es': '{n} archivo(s)',
+        'fr': '{n} fichier(s)',
+        'it': '{n} file',
+    },
+    '{n} selected': {
+        'de': '{n} ausgewählt',
+        'es': '{n} seleccionados',
+        'fr': '{n} sélectionné(s)',
+        'it': '{n} selezionati',
+    },
+    '{sel} of {total} selected': {
+        'de': '{sel} von {total} ausgewählt',
+        'es': '{sel} de {total} seleccionados',
+        'fr': '{sel} sur {total} sélectionnés',
+        'it': '{sel} di {total} selezionati',
+    },
+    'Flickr account': {
+        'de': 'Flickr-Konto',
+        'es': 'Cuenta de Flickr',
+        'fr': 'Compte Flickr',
+        'it': 'Account Flickr',
+    },
+    'Flickr upload': {
+        'de': 'Flickr-Upload',
+        'es': 'Subida a Flickr',
+        'fr': 'Envoi Flickr',
+        'it': 'Caricamento su Flickr',
+    },
+    'API key:': {
+        'de': 'API-Schlüssel:',
+        'es': 'Clave de API:',
+        'fr': 'Clé API :',
+        'it': 'Chiave API:',
+    },
+    'API secret:': {
+        'de': 'API-Secret:',
+        'es': 'Secreto de API:',
+        'fr': 'Secret API :',
+        'it': 'Segreto API:',
+    },
+    'Create a key/secret pair at flickr.com/services/apps/create. Both are stored in the settings.': {
+        'de': 'Schlüssel/Secret unter flickr.com/services/apps/create anlegen. Beide werden in den Einstellungen gespeichert.',
+        'es': 'Cree el par clave/secreto en flickr.com/services/apps/create. Ambos se guardan en los ajustes.',
+        'fr': 'Créez la paire clé/secret sur flickr.com/services/apps/create. Les deux sont enregistrés dans les réglages.',
+        'it': 'Crea la coppia chiave/segreto su flickr.com/services/apps/create. Entrambi vengono salvati nelle impostazioni.',
+    },
+    '1. Open authorization page': {
+        'de': '1. Autorisierungsseite öffnen',
+        'es': '1. Abrir la página de autorización',
+        'fr': '1. Ouvrir la page d’autorisation',
+        'it': '1. Apri la pagina di autorizzazione',
+    },
+    '2. Complete authorization': {
+        'de': '2. Autorisierung abschließen',
+        'es': '2. Completar la autorización',
+        'fr': '2. Terminer l’autorisation',
+        'it': '2. Completa l’autorizzazione',
+    },
+    'Verification code from the browser (nnn-nnn-nnn)': {
+        'de': 'Bestätigungscode aus dem Browser (nnn-nnn-nnn)',
+        'es': 'Código de verificación del navegador (nnn-nnn-nnn)',
+        'fr': 'Code de vérification du navigateur (nnn-nnn-nnn)',
+        'it': 'Codice di verifica dal browser (nnn-nnn-nnn)',
+    },
+    'Authorization page opened in the browser. Grant access, then paste the code below.': {
+        'de': 'Autorisierungsseite im Browser geöffnet. Zugriff gewähren, dann den Code unten einfügen.',
+        'es': 'Página de autorización abierta en el navegador. Conceda el acceso y pegue el código abajo.',
+        'fr': 'Page d’autorisation ouverte dans le navigateur. Accordez l’accès, puis collez le code ci-dessous.',
+        'it': 'Pagina di autorizzazione aperta nel browser. Concedi l’accesso, poi incolla il codice qui sotto.',
+    },
+    'Authorized as {username}.': {
+        'de': 'Autorisiert als {username}.',
+        'es': 'Autorizado como {username}.',
+        'fr': 'Autorisé en tant que {username}.',
+        'it': 'Autorizzato come {username}.',
+    },
+    'Not authorized.': {
+        'de': 'Nicht autorisiert.',
+        'es': 'No autorizado.',
+        'fr': 'Non autorisé.',
+        'it': 'Non autorizzato.',
+    },
+    'Not authorized yet - run the two authorization steps first.': {
+        'de': 'Noch nicht autorisiert – zuerst die beiden Autorisierungsschritte ausführen.',
+        'es': 'Aún no autorizado: ejecute primero los dos pasos de autorización.',
+        'fr': 'Pas encore autorisé – effectuez d’abord les deux étapes d’autorisation.',
+        'it': 'Non ancora autorizzato: esegui prima i due passaggi di autorizzazione.',
+    },
+    'Run step 1 first (the code belongs to that request).': {
+        'de': 'Zuerst Schritt 1 ausführen (der Code gehört zu dieser Anfrage).',
+        'es': 'Ejecute primero el paso 1 (el código pertenece a esa solicitud).',
+        'fr': 'Effectuez d’abord l’étape 1 (le code appartient à cette demande).',
+        'it': 'Esegui prima il passaggio 1 (il codice appartiene a quella richiesta).',
+    },
+    'The verification code is missing.': {
+        'de': 'Der Bestätigungscode fehlt.',
+        'es': 'Falta el código de verificación.',
+        'fr': 'Le code de vérification est manquant.',
+        'it': 'Manca il codice di verifica.',
+    },
+    'API key and secret are missing (create them at flickr.com/services/apps/create).': {
+        'de': 'API-Schlüssel und -Secret fehlen (unter flickr.com/services/apps/create anlegen).',
+        'es': 'Faltan la clave y el secreto de API (créelos en flickr.com/services/apps/create).',
+        'fr': 'La clé et le secret API sont manquants (créez-les sur flickr.com/services/apps/create).',
+        'it': 'Mancano chiave e segreto API (creali su flickr.com/services/apps/create).',
+    },
+    'Files are uploaded as they are; the Flickr title is the target filename. Privacy follows your account upload defaults.': {
+        'de': 'Die Dateien werden unverändert hochgeladen; der Flickr-Titel ist der Zieldateiname. Die Sichtbarkeit folgt den Upload-Voreinstellungen deines Kontos.',
+        'es': 'Los archivos se suben tal cual; el título en Flickr es el nombre de destino. La privacidad sigue los ajustes predeterminados de subida de su cuenta.',
+        'fr': 'Les fichiers sont envoyés tels quels ; le titre Flickr est le nom de fichier cible. La confidentialité suit les réglages d’envoi par défaut de votre compte.',
+        'it': 'I file vengono caricati così come sono; il titolo su Flickr è il nome file di destinazione. La privacy segue le impostazioni di caricamento predefinite del tuo account.',
+    },
+    'Upload to Flickr': {
+        'de': 'Zu Flickr hochladen',
+        'es': 'Subir a Flickr',
+        'fr': 'Envoyer vers Flickr',
+        'it': 'Carica su Flickr',
+    },
+    'Uploads the selected images (as they are) to the Flickr account authorized in the Flickr tab.': {
+        'de': 'Lädt die ausgewählten Bilder unverändert auf das im Flickr-Tab autorisierte Konto hoch.',
+        'es': 'Sube las imágenes seleccionadas tal cual a la cuenta de Flickr autorizada en la pestaña Flickr.',
+        'fr': 'Envoie les images sélectionnées telles quelles vers le compte Flickr autorisé dans l’onglet Flickr.',
+        'it': 'Carica le immagini selezionate così come sono sull’account Flickr autorizzato nella scheda Flickr.',
+    },
+    'Write IPTC + upload': {
+        'de': 'IPTC schreiben + hochladen',
+        'es': 'Escribir IPTC + subir',
+        'fr': 'Écrire l’IPTC + envoyer',
+        'it': 'Scrivi IPTC + carica',
+    },
+    'Uploads the SELECTED files (or all, when nothing is selected). IPTC data is written first; files without IPTC data are skipped. Write settings (export folder) are in the IPTC tab.': {
+        'de': 'Lädt die AUSGEWÄHLTEN Dateien hoch (oder alle, wenn nichts ausgewählt ist). Zuerst wird IPTC geschrieben; Dateien ohne IPTC-Daten werden übersprungen. Die Schreib-Einstellungen (Exportordner) stehen im IPTC-Tab.',
+        'es': 'Sube los archivos SELECCIONADOS (o todos, si no hay selección). Primero se escribe el IPTC; los archivos sin datos IPTC se omiten. Los ajustes de escritura (carpeta de exportación) están en la pestaña IPTC.',
+        'fr': 'Envoie les fichiers SÉLECTIONNÉS (ou tous, si rien n’est sélectionné). L’IPTC est écrit d’abord ; les fichiers sans données IPTC sont ignorés. Les réglages d’écriture (dossier d’export) sont dans l’onglet IPTC.',
+        'it': 'Carica i file SELEZIONATI (o tutti, se non c’è selezione). Prima viene scritto l’IPTC; i file senza dati IPTC vengono ignorati. Le impostazioni di scrittura (cartella di esportazione) sono nella scheda IPTC.',
+    },
+    'The IPTC tab is disabled: the selected files (or all, when nothing is selected) are uploaded AS THEY ARE, without IPTC writing.': {
+        'de': 'Der IPTC-Tab ist abgeschaltet: Die ausgewählten Dateien (oder alle, wenn nichts ausgewählt ist) werden UNVERÄNDERT hochgeladen, ohne IPTC-Schreiben.',
+        'es': 'La pestaña IPTC está desactivada: los archivos seleccionados (o todos, si no hay selección) se suben TAL CUAL, sin escribir IPTC.',
+        'fr': 'L’onglet IPTC est désactivé : les fichiers sélectionnés (ou tous, si rien n’est sélectionné) sont envoyés TELS QUELS, sans écriture IPTC.',
+        'it': 'La scheda IPTC è disattivata: i file selezionati (o tutti, se non c’è selezione) vengono caricati COSÌ COME SONO, senza scrittura IPTC.',
+    },
+    'The authorization steps are on the Flickr tab.': {
+        'de': 'Die Autorisierungsschritte stehen im Flickr-Tab.',
+        'es': 'Los pasos de autorización están en la pestaña Flickr.',
+        'fr': 'Les étapes d’autorisation se trouvent dans l’onglet Flickr.',
+        'it': 'I passaggi di autorizzazione sono nella scheda Flickr.',
+    },
+    'Account default': {
+        'de': 'Konto-Voreinstellung',
+        'es': 'Predeterminado de la cuenta',
+        'fr': 'Réglage par défaut du compte',
+        'it': 'Predefinito dell’account',
+    },
+    'All rights reserved': {
+        'de': 'Alle Rechte vorbehalten',
+        'es': 'Todos los derechos reservados',
+        'fr': 'Tous droits réservés',
+        'it': 'Tutti i diritti riservati',
+    },
+    'No Wikidata item': {
+        'de': 'Kein Wikidata-Objekt',
+        'es': 'Sin elemento de Wikidata',
+        'fr': 'Pas d’élément Wikidata',
+        'it': 'Nessun elemento Wikidata',
+    },
+    'Not applicable': {
+        'de': 'Nicht anwendbar',
+        'es': 'No aplicable',
+        'fr': 'Non applicable',
+        'it': 'Non applicabile',
+    },
+    'Unidentified': {
+        'de': 'Unidentifiziert',
+        'es': 'Sin identificar',
+        'fr': 'Non identifié',
+        'it': 'Non identificato',
+    },
+    'Depicts is missing': {
+        'de': 'Depicts fehlt',
+        'es': 'Falta depicts',
+        'fr': 'Depicts manquant',
+        'it': 'Depicts mancante',
+    },
+    'depicts (P180) is mandatory. Enter a QID, or check one of the overrides ("No Wikidata item", "Not applicable", "Unidentified") for these files:': {
+        'de': 'depicts (P180) ist Pflicht. Gib eine QID ein oder setze für diese Dateien eine der Ausnahmen („Kein Wikidata-Objekt“, „Nicht anwendbar“, „Unidentifiziert“):',
+        'es': 'depicts (P180) es obligatorio. Escriba un QID o marque una de las excepciones («Sin elemento de Wikidata», «No aplicable», «Sin identificar») para estos archivos:',
+        'fr': 'depicts (P180) est obligatoire. Saisissez un QID ou cochez l’une des exceptions (« Pas d’élément Wikidata », « Non applicable », « Non identifié ») pour ces fichiers :',
+        'it': 'depicts (P180) è obbligatorio. Inserisci un QID oppure spunta una delle eccezioni ("Nessun elemento Wikidata", "Non applicabile", "Non identificato") per questi file:',
+    },
+    'Suggest': {
+        'de': 'Vorschlagen',
+        'es': 'Sugerir',
+        'fr': 'Suggérer',
+        'it': 'Suggerisci',
+    },
+    'Suggests categories from the depicts entries and the "created during" event (Commons category P373, or the label; a missing year is taken from the Date column).': {
+        'de': 'Schlägt Kategorien aus den Depicts-Einträgen und dem „Entstanden während“-Ereignis vor (Commons-Kategorie P373, sonst das Label; ein fehlendes Jahr kommt aus der Datumsspalte).',
+        'es': 'Sugiere categorías a partir de las entradas de depicts y del evento «creado durante» (categoría de Commons P373, o la etiqueta; un año que falte se toma de la columna Fecha).',
+        'fr': 'Suggère des catégories à partir des entrées depicts et de l’événement « créé lors de » (catégorie Commons P373, sinon le libellé ; une année manquante est reprise de la colonne Date).',
+        'it': 'Suggerisce categorie dalle voci depicts e dall’evento "creato durante" (categoria Commons P373, altrimenti l’etichetta; un anno mancante viene preso dalla colonna Data).',
+    },
+    'Categories': {
+        'de': 'Kategorien',
+        'es': 'Categorías',
+        'fr': 'Catégories',
+        'it': 'Categorie',
+    },
+    'No QIDs found - fill depicts or "created during" first.': {
+        'de': 'Keine QIDs gefunden – zuerst Depicts oder „Entstanden während“ ausfüllen.',
+        'es': 'No se encontraron QID: rellene primero depicts o «creado durante».',
+        'fr': 'Aucun QID trouvé – remplissez d’abord depicts ou « créé lors de ».',
+        'it': 'Nessun QID trovato: compila prima depicts o "creato durante".',
+    },
+    'Wikidata request failed: {e}': {
+        'de': 'Wikidata-Anfrage fehlgeschlagen: {e}',
+        'es': 'La solicitud a Wikidata falló: {e}',
+        'fr': 'La requête Wikidata a échoué : {e}',
+        'it': 'Richiesta a Wikidata non riuscita: {e}',
+    },
+    'No new category suggestions found.': {
+        'de': 'Keine neuen Kategorievorschläge gefunden.',
+        'es': 'No se encontraron nuevas sugerencias de categorías.',
+        'fr': 'Aucune nouvelle suggestion de catégorie trouvée.',
+        'it': 'Nessun nuovo suggerimento di categoria trovato.',
+    },
+    '{n} category suggestion(s) added.': {
+        'de': '{n} Kategorievorschlag/-vorschläge hinzugefügt.',
+        'es': '{n} sugerencia(s) de categoría añadida(s).',
+        'fr': '{n} suggestion(s) de catégorie ajoutée(s).',
+        'it': '{n} suggerimento/i di categoria aggiunti.',
+    },
+    'depicts is set (required)': {
+        'de': 'depicts ist gesetzt (Pflicht)',
+        'es': 'depicts está definido (obligatorio)',
+        'fr': 'depicts est renseigné (obligatoire)',
+        'it': 'depicts è impostato (obbligatorio)',
+    },
+    'If no depicts:': {
+        'de': 'Falls kein depicts:',
+        'es': 'Si no hay depicts:',
+        'fr': 'Si pas de depicts :',
+        'it': 'Se manca depicts:',
+    },
+    'Suggest category': {
+        'de': 'Kategorie vorschlagen',
+        'es': 'Sugerir categoría',
+        'fr': 'Suggérer une catégorie',
+        'it': 'Suggerisci categoria',
+    },
+    'Adds a base category from the "created during" event (Commons category P373, or the label; a missing year is taken from the Date column).': {
+        'de': 'Fügt eine Basiskategorie aus dem „Entstanden während“-Ereignis hinzu (Commons-Kategorie P373, sonst das Label; ein fehlendes Jahr kommt aus der Datumsspalte).',
+        'es': 'Añade una categoría base a partir del evento «creado durante» (categoría de Commons P373, o la etiqueta; un año que falte se toma de la columna Fecha).',
+        'fr': 'Ajoute une catégorie de base à partir de l’événement « créé lors de » (catégorie Commons P373, sinon le libellé ; une année manquante est reprise de la colonne Date).',
+        'it': 'Aggiunge una categoria base dall’evento "creato durante" (categoria Commons P373, altrimenti l’etichetta; un anno mancante viene preso dalla colonna Data).',
+    },
+    'No depicts QIDs found - fill depicts first.': {
+        'de': 'Keine depicts-QIDs gefunden – zuerst depicts ausfüllen.',
+        'es': 'No se encontraron QID de depicts: rellene depicts primero.',
+        'fr': 'Aucun QID depicts trouvé – remplissez d’abord depicts.',
+        'it': 'Nessun QID depicts trovato: compila prima depicts.',
+    },
+    'Enter a "created during" QID first.': {
+        'de': 'Zuerst eine „Entstanden während“-QID eingeben.',
+        'es': 'Introduzca primero un QID de «creado durante».',
+        'fr': 'Saisissez d’abord un QID « créé lors de ».',
+        'it': 'Inserisci prima un QID "creato durante".',
+    },
+    'Information from caption': {
+        'de': 'Information aus Bildunterschrift',
+        'es': 'Information desde la leyenda',
+        'fr': 'Information depuis la légende',
+        'it': 'Information dalla didascalia',
+    },
+    'Fills the Information wikitext of each language with its caption text, where the Information field is still empty.': {
+        'de': 'Füllt den Information-Wikitext jeder Sprache mit deren Bildunterschrift, sofern das Information-Feld noch leer ist.',
+        'es': 'Rellena el wikitexto Information de cada idioma con su leyenda, cuando el campo Information aún está vacío.',
+        'fr': 'Remplit le wikitexte Information de chaque langue avec sa légende, lorsque le champ Information est encore vide.',
+        'it': 'Riempie il wikitesto Information di ogni lingua con la sua didascalia, quando il campo Information è ancora vuoto.',
+    },
+    'Adds categories from the depicts entries (Commons category P373, or the label).': {
+        'de': 'Fügt Kategorien aus den Depicts-Einträgen hinzu (Commons-Kategorie P373, sonst das Label).',
+        'es': 'Añade categorías a partir de las entradas de depicts (categoría de Commons P373, o la etiqueta).',
+        'fr': 'Ajoute des catégories à partir des entrées depicts (catégorie Commons P373, sinon le libellé).',
+        'it': 'Aggiunge categorie dalle voci depicts (categoria Commons P373, altrimenti l’etichetta).',
+    },
+    'Clear base description': {
+        'de': 'Basisbeschreibung leeren',
+        'es': 'Vaciar la descripción base',
+        'fr': 'Effacer la description de base',
+        'it': 'Svuota la descrizione base',
+    },
+    'Really clear the whole base description? This updates the wikitext of every file.': {
+        'de': 'Wirklich die gesamte Basisbeschreibung leeren? Das aktualisiert den Wikitext aller Dateien.',
+        'es': '¿Vaciar realmente toda la descripción base? Esto actualiza el wikitexto de todos los archivos.',
+        'fr': 'Vraiment effacer toute la description de base ? Cela met à jour le wikitexte de tous les fichiers.',
+        'it': 'Svuotare davvero l’intera descrizione base? Questo aggiorna il wikitesto di tutti i file.',
+    },
+    'MediaWiki account': {
+        'de': 'MediaWiki-Konto',
+        'es': 'Cuenta de MediaWiki',
+        'fr': 'Compte MediaWiki',
+        'it': 'Account MediaWiki',
+    },
+    'BotPassword recommended (Special:BotPasswords). The password is stored in PLAIN TEXT - leave it empty to be asked at login instead.': {
+        'de': 'BotPassword empfohlen (Special:BotPasswords). Das Passwort wird im KLARTEXT gespeichert – leer lassen, um stattdessen beim Anmelden gefragt zu werden.',
+        'es': 'Se recomienda una BotPassword (Special:BotPasswords). La contraseña se guarda en TEXTO PLANO: déjela vacía para que se pida al iniciar sesión.',
+        'fr': 'BotPassword recommandé (Special:BotPasswords). Le mot de passe est enregistré en TEXTE CLAIR – laissez-le vide pour qu’il soit demandé à la connexion.',
+        'it': 'BotPassword consigliata (Special:BotPasswords). La password è salvata in TESTO IN CHIARO: lasciala vuota per farla chiedere all’accesso.',
+    },
+}

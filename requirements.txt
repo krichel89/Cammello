@@ -1,3 +1,6 @@
 PyQt5>=5.15.0
 requests>=2.28.0
 Pillow>=9.0.0
+pyexiv2>=2.15
+paramiko>=3.0
+rawpy>=0.27

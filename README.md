@@ -101,3 +101,72 @@ lives in the base description or in Upload settings.
 ## License
 
 CC0.
+
+## macOS note
+
+The `pyexiv2` wheel links against Homebrew libraries. If `import pyexiv2` fails with `Library not loaded: /opt/homebrew/...`, run `brew install exiv2` (pulls brotli, gettext and friends). Without pyexiv2 the IPTC and Culling tabs are hidden; the MediaWiki side works regardless.
+
+## UI language
+
+The interface is available in English, Deutsch, Español, Français and
+Italiano. Pick one under **Settings → Language**; the change takes effect
+after a restart (it is stored as `ui_language` in QSettings). On the first
+start the system locale decides if it is one of the five, otherwise English
+is used. Log messages stay English on purpose, so a log file remains readable
+when reporting an issue.
+
+Adding a string: wrap it in `tr('…')` (English text = the key) and add an
+entry to `TRANSLATIONS` in `cammello/i18n.py`. `test_i18n.py` fails if a key
+is missing, a language is incomplete, or a `{placeholder}` was lost in
+translation.
+
+## Mandatory depicts & category suggestions
+
+depicts (P180) is mandatory for the MediaWiki upload: every file needs a QID,
+or one of the three override checkboxes under the depicts field ("No Wikidata
+item", "Not applicable", "Unidentified"). In a WikiPortraits context (a
+{{WikiPortraits ...}} template or a WikiPortraits category) the override adds
+the matching maintenance category automatically.
+
+The "Suggest" button next to the per-file categories fills in Commons
+categories derived from the depicts entries and the "created during" event
+(Wikidata P373, label as fallback); an event without a year in its name gets
+the year from the Date column appended.
+
+## FTP / Flickr
+
+FTP and Flickr share one tab: the file list on the left and the status area
+serve both services. The Flickr part uploads the files from the table (selection, or all) to your
+Flickr account; the Culling tab gets a `-> Flickr` send target. One-time
+setup: create an API key/secret at flickr.com/services/apps/create, enter
+both on the Flickr tab (or the Settings mirror), then run the two
+authorization steps (browser opens, paste the verification code). Files are
+uploaded as they are; the Flickr title is the target filename; privacy
+follows your account's upload defaults. A license picked in the upload group
+(CC BY-SA, CC0, Public Domain Mark, ...) is applied per photo right after
+the upload - 'Account default' leaves your Flickr setting untouched.
+
+The IPTC tab is hidden in the release default; start once with
+`--enable-tab iptc` to bring it back (the choice persists).
+
+## Application icon
+
+Drop `icon.png` into `cammello/assets/` for the runtime window/Dock icon and
+the About tab logo. A real macOS Finder icon needs an app bundle
+(PyInstaller with `--icon cammello/assets/icon.icns`).
+
+## Hidden per-tab switches
+
+The Culling, IPTC and FTP tabs can be switched off individually (including
+their references elsewhere: the Settings-tab sections, the Culling "-> FTP"
+button, the FTP tab's IPTC-driven upload button). There is no UI for this;
+flip a switch once from the command line and it is persisted:
+
+```bash
+python Cammello.py --disable-tab ftp      # names: culling, iptc, ftp
+python Cammello.py --enable-tab ftp
+```
+
+The app then starts normally; the flags live in QSettings as
+`feature_culling` / `feature_iptc` / `feature_ftp` / `feature_flickr` (default: on). A missing
+pyexiv2 still disables all three regardless of the flags.

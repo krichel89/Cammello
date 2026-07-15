@@ -18,6 +18,8 @@ from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
 from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
+from .i18n import tr
+from .sdc import extract_structured_data, DEPICTS_OVERRIDES
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
@@ -48,16 +50,18 @@ class MWUploadMixin:
         total = self.table.rowCount()
         selected = {idx.row() for idx in self.table.selectedIndexes()}
         if selected:
-            self.upload_btn.setText(f'Upload selected ({len(selected)})')
+            self.upload_btn.setText(
+                tr('Upload selected ({n})').format(n=len(selected)))
             self.upload_btn.setToolTip(
-                'Uploads the selected rows. Deselect everything to upload all '
-                'files.')
+                tr('Uploads the selected rows. Deselect everything to upload all '
+                'files.'))
         else:
-            self.upload_btn.setText(f'Upload all ({total})' if total
-                                    else 'Upload all')
+            self.upload_btn.setText(
+                tr('Upload all ({n})').format(n=total) if total
+                else tr('Upload all'))
             self.upload_btn.setToolTip(
-                'Nothing is selected, so all files are uploaded. Select rows '
-                'to upload only those.')
+                tr('Nothing is selected, so all files are uploaded. Select rows '
+                'to upload only those.'))
 
     def _qid_problems(self, rows=None):
         """Collect fields whose Wikidata value is not a valid QID.
@@ -97,16 +101,38 @@ class MWUploadMixin:
                     sd.get('created_during', ''))
         return problems
 
+    def _depicts_problems(self, upload_rows):
+        """Rows without depicts AND without an override checkbox.
+
+        depicts is mandatory (WikiPortraits QA): either the file has at
+        least one P180 QID (its own or inherited from a depicts= line in the
+        base description), or one of the per-file overrides ('No Wikidata
+        item' / 'Not applicable' / 'Unidentified') is set."""
+        base_sd, _ = extract_structured_data(self.base_text_edit.toPlainText())
+        base_depicts = (base_sd.get('depicts') or '').strip()
+        problems = []
+        for r in upload_rows:
+            item = self.table.item(r, self.COL_DESC)
+            sd, _ = extract_structured_data(item.text() if item else '')
+            has_depicts = bool((sd.get('depicts') or '').strip()
+                               or base_depicts)
+            override = (sd.get('depicts_override') or '').strip().lower()
+            if has_depicts or override in DEPICTS_OVERRIDES:
+                continue
+            name_item = self.table.item(r, self.COL_FILENAME)
+            problems.append(name_item.text() if name_item else f'#{r + 1}')
+        return problems
+
     def start_upload(self):
         # These early exits used to be silent in the log, which made an
         # apparently dead Upload button impossible to diagnose from the Log tab.
         if not self.api:
             self.logger.info('Upload aborted: not logged in.')
-            QMessageBox.warning(self, 'Not logged in', 'Please log in first.')
+            QMessageBox.warning(self, tr('Not logged in'), tr('Please log in first.'))
             return
         if self.table.rowCount() == 0:
             self.logger.info('Upload aborted: the file table is empty.')
-            QMessageBox.warning(self, 'No files', 'Please add files first.')
+            QMessageBox.warning(self, tr('No files'), tr('Please add files first.'))
             return
 
         # Flush any not-yet-committed edit in the per-file editor to the table
@@ -126,12 +152,28 @@ class MWUploadMixin:
                              len(problems))
             shown = '\n'.join(problems[:15])
             if len(problems) > 15:
-                shown += f'\n… (+{len(problems) - 15} more)'
+                shown += '\n' + tr('… (+{n} more)').format(n=len(problems) - 15)
             QMessageBox.warning(
-                self, 'Invalid Wikidata IDs',
-                'The following fields must contain Wikidata QIDs (e.g. Q640).\n'
-                'Pick an entry from the suggestion list or enter a valid QID:\n\n'
-                + shown)
+                self, tr('Invalid Wikidata IDs'),
+                tr('The following fields must contain Wikidata QIDs (e.g. Q640).\n'
+                'Pick an entry from the suggestion list or enter a valid QID:')
+                + '\n\n' + shown)
+            return
+
+        # depicts is mandatory: block files that have neither a P180 QID nor
+        # one of the three override checkboxes.
+        missing = self._depicts_problems(upload_rows)
+        if missing:
+            shown = '\n'.join(missing[:15])
+            if len(missing) > 15:
+                shown += '\n' + tr('… (+{n} more)').format(n=len(missing) - 15)
+            self.logger.info('Upload aborted: %d file(s) without depicts or '
+                             'override.', len(missing))
+            QMessageBox.warning(
+                self, tr('Depicts is missing'),
+                tr('depicts (P180) is mandatory. Enter a QID, or check one '
+                   'of the overrides ("No Wikidata item", "Not applicable", '
+                   '"Unidentified") for these files:') + '\n\n' + shown)
             return
 
         self._save_settings()
@@ -220,7 +262,8 @@ class MWUploadMixin:
             item.setText(status)
         total = len(getattr(self, 'upload_row_map', []) or []) or self.table.rowCount()
         self.progress_bar.setValue(index + 1)
-        self.status_bar.showMessage(f'Uploading {index + 1}/{total}…')
+        self.status_bar.showMessage(
+            tr('Uploading {i}/{total}…').format(i=index + 1, total=total))
         # The bar counts finished files, not started ones.
         if status.startswith(('✓', '✗')):
             self._done_count = getattr(self, '_done_count', 0) + 1

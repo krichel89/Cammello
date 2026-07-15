@@ -132,8 +132,8 @@ def extract_structured_data(text, logger=None):
 
 # Keys that look like a structured-data tag when they appear at the start of a line.
 
-_LINT_KEYS_RE = (r'(?:creator|copyright|license|depicts|created_during|'
-                 r'gallery_suffix|caption_[a-z]{2,3})')
+_LINT_KEYS_RE = (r'(?:creator|copyright|license|depicts|depicts_override|'
+                 r'created_during|gallery_suffix|caption_[a-z]{2,3})')
 
 
 def find_description_issues(text):
@@ -238,6 +238,31 @@ def normalize_commons_filename(target, source_path):
 # ── MediaWiki API ──────────────────────────────────────────────────────────────
 
 
+# 'depicts is mandatory' can be waived per file with one of these override
+# values; when the upload lands in a WikiPortraits context, the matching
+# maintenance category is added (requested 2026-07-15).
+DEPICTS_OVERRIDES = {
+    'no_item': 'WikiPortraits photos needing Wikidata item',
+    'no_person': 'WikiPortraits photos without identifiable person',
+    'unidentified': 'WikiPortraits photos needing identification',
+}
+
+
+def wikiportraits_maintenance_category(sd, context_text):
+    """'[[Category:...]]' for the file's depicts override, or None.
+
+    Applied only when the upload is in a WikiPortraits context: the assembled
+    categories or templates mention WikiPortraits (a {{WikiPortraits ...}}
+    template or a WikiPortraits (sub)category)."""
+    override = (sd.get('depicts_override') or '').strip().lower()
+    cat = DEPICTS_OVERRIDES.get(override)
+    if not cat:
+        return None
+    if 'wikiportraits' not in (context_text or '').lower():
+        return None
+    return f'[[Category:{cat}]]'
+
+
 _CATEGORY_RE = re.compile(r'\[\[\s*Category:\s*([^\]|]+?)\s*\]\]', re.IGNORECASE)
 
 
@@ -270,7 +295,8 @@ def split_categories(text):
 
 
 _ASSIGN_RE = re.compile(
-    r'^\s*(?:caption_[a-z]{2,3}|creator|copyright|license|depicts|gallery_suffix)\s*=',
+    r'^\s*(?:caption_[a-z]{2,3}|creator|copyright|license|depicts|'
+    r'depicts_override|created_during|gallery_suffix)\s*=',
     re.IGNORECASE)
 
 

@@ -3,6 +3,7 @@ that combines these mixins. Mixins are plain classes holding grouped methods;
 they rely on attributes created in MainWindow.__init__ / _build_* and on the
 COL_* / COLS class attributes defined on MainWindow."""
 import os
+import re
 import sys
 import traceback
 from PyQt5.QtWidgets import (
@@ -18,6 +19,9 @@ from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
 from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
+from .wikidata import (fetch_commons_categories,
+                       category_suggestions)
+from .i18n import tr
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
@@ -113,9 +117,9 @@ class MWEditorMixin:
         rows = sorted(set(i.row() for i in self.table.selectedItems()))
         if not rows:
             QMessageBox.information(
-                self, 'No selection',
-                'Please select one or more rows first '
-                '(Ctrl/Shift-click to select several).')
+                self, tr('No selection'),
+                tr('Please select one or more rows first '
+                '(Ctrl/Shift-click to select several).'))
             return
         dlg = BulkEditDialog(len(rows), self)
         if dlg.exec_() != QDialog.Accepted:
@@ -138,7 +142,8 @@ class MWEditorMixin:
         self._editor_item = None
         self.on_row_selected()
         self.status_bar.showMessage(
-            f'Applied "{key}" to {len(rows)} file(s).', 6000)
+            tr('Applied "{key}" to {n} file(s).').format(key=key, n=len(rows)),
+            6000)
 
     def _apply_bulk_field(self, row, key, value):
         """Apply one (key, value) to a single row."""
@@ -196,7 +201,7 @@ class MWEditorMixin:
         if row is None:
             self._editor_item = None
             self.file_desc_edit.setPlaceholderText(
-                'Select a single file to edit its description.')
+                tr('Select a single file to edit its description.'))
             return
 
         self._load_selected_desc()
@@ -228,6 +233,85 @@ class MWEditorMixin:
         # correct after sorting or row removal.
         self._editor_item = (self.table.item(row, self.COL_FILENAME)
                              if row is not None else None)
+
+    def _date_text_for_current(self):
+        """Date column text of the row loaded in the per-file editor (for the
+        'missing year' fill-in), or '' if nothing is loaded."""
+        if self._editor_item is not None and self._editor_item.row() >= 0:
+            date_item = self.table.item(self._editor_item.row(), self.COL_DATE)
+            return date_item.text() if date_item else ''
+        return ''
+
+    def _fetch_categories_or_warn(self, qids):
+        """One wbgetentities call; returns the dict or None (after warning)."""
+        try:
+            return fetch_commons_categories(qids)
+        except Exception as e:
+            self.logger.error('Category suggestion failed: %s', e)
+            QMessageBox.warning(self, tr('Categories'),
+                                tr('Wikidata request failed: {e}').format(e=e))
+            return None
+
+    def _suggest_depicts_categories(self):
+        """Per-file 'Suggest category' next to the categories: Commons
+        categories from the depicts QIDs (Wikidata P373, label as fallback).
+        Synchronous, one request with an 8 s timeout."""
+        depicts_qids = [q.strip() for q in
+                        self.file_struct.depicts.text().split(';')
+                        if re.fullmatch(r'Q\d+', q.strip())]
+        if not depicts_qids:
+            QMessageBox.information(
+                self, tr('Categories'),
+                tr('No depicts QIDs found - fill depicts first.'))
+            return
+        fetched = self._fetch_categories_or_warn(depicts_qids)
+        if fetched is None:
+            return
+        existing = self.file_struct.categories.text().split(';')
+        new = category_suggestions(depicts_qids, '', fetched,
+                                   self._date_text_for_current(), existing)
+        if not new:
+            self.status_bar.showMessage(
+                tr('No new category suggestions found.'), 5000)
+            return
+        merged = [c.strip() for c in existing if c.strip()] + new
+        self.file_struct.categories.setText('; '.join(merged))
+        self._commit_editor()
+        self.status_bar.showMessage(
+            tr('{n} category suggestion(s) added.').format(n=len(new)), 5000)
+        self.logger.info('Depicts category suggestions added: %s',
+                         ', '.join(new))
+
+    def _suggest_created_during_category(self):
+        """Base 'Suggest category' next to 'created during': one Commons
+        category from the event (P373, label fallback; a missing year comes
+        from the loaded file's Date column). Writes into the BASE categories
+        field."""
+        created_qid = self.base_struct.created_during.text().strip()
+        if not re.fullmatch(r'Q\d+', created_qid or ''):
+            QMessageBox.information(
+                self, tr('Categories'),
+                tr('Enter a "created during" QID first.'))
+            return
+        fetched = self._fetch_categories_or_warn([created_qid])
+        if fetched is None:
+            return
+        existing = self.base_struct.categories.text().split(';')
+        new = category_suggestions([], created_qid, fetched,
+                                   self._date_text_for_current(), existing)
+        if not new:
+            self.status_bar.showMessage(
+                tr('No new category suggestions found.'), 5000)
+            return
+        merged = [c.strip() for c in existing if c.strip()] + new
+        self.base_struct.categories.setText('; '.join(merged))
+        # The base editor has no per-row commit; its change signal drives the
+        # live sync into every row.
+        self.base_struct.changed.emit()
+        self.status_bar.showMessage(
+            tr('{n} category suggestion(s) added.').format(n=len(new)), 5000)
+        self.logger.info('Created-during category suggestion added: %s',
+                         ', '.join(new))
 
     def _commit_editor(self, expert=None):
         """Write the per-file editor's current content to the row it was loaded

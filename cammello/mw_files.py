@@ -11,13 +11,15 @@ from PyQt5.QtWidgets import (
     QTextEdit, QFileDialog, QMessageBox, QProgressBar, QSplitter,
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
     QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit,
-    QStyledItemDelegate, QComboBox, QScrollArea, QCompleter)
+    QStyledItemDelegate, QComboBox, QScrollArea, QCompleter,
+    QListWidgetItem)
 from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
                           QSize, QRegExp, QTimer, QStringListModel, QEvent,
                           QItemSelectionModel)
 from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
+from .i18n import tr
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
@@ -55,7 +57,7 @@ class MWFilesMixin:
         self.test_btn.setEnabled(True)
         self.login_label.setText(f'✓ Logged in as {username}')
         self.login_label.setStyleSheet('color: green')
-        self.status_bar.showMessage(f'Logged in as {username}')
+        self.status_bar.showMessage(tr('Logged in as {username}').format(username=username))
 
     def _on_login_failure(self, error_msg):
         self.login_btn.setEnabled(True)
@@ -67,7 +69,7 @@ class MWFilesMixin:
         if not self.api:
             return
         self.test_btn.setEnabled(False)
-        self.status_bar.showMessage('Testing connection…')
+        self.status_bar.showMessage(tr('Testing connection…'))
         self._test_worker = TestWorker(self.api)
         self._test_worker.done.connect(self._on_test_done)
         self._test_worker.fail.connect(self._on_test_fail)
@@ -76,7 +78,7 @@ class MWFilesMixin:
     def _on_test_done(self, info):
         self.test_btn.setEnabled(True)
         self.logger.info('Connection OK: %s', info)
-        self.status_bar.showMessage(f'Connection OK: {info}', 8000)
+        self.status_bar.showMessage(tr('Connection OK: {info}').format(info=info), 8000)
         QMessageBox.information(self, 'Connection OK', f'Logged in as:\n{info}')
 
     def _on_test_fail(self, msg):
@@ -90,7 +92,8 @@ class MWFilesMixin:
     def add_files(self):
         pattern = ' '.join('*' + ext for ext in IMAGE_EXTS)
         files, _ = QFileDialog.getOpenFileNames(
-            self, 'Select image files', '', f'Images ({pattern})'
+            self, tr('Select image files'), '',
+            tr('Images') + f' ({pattern})'
         )
         added, dups, failed = self._add_paths(files)
         if added:
@@ -111,6 +114,35 @@ class MWFilesMixin:
             self.logger.debug('%d file(s) added via drag-and-drop.', added)
         self._report_add_result(added, dups, failed)
 
+    def _selection_count_text(self, selected, total):
+        """Uniform 'n of m selected' / 'm file(s)' label text."""
+        if selected:
+            return tr('{sel} of {total} selected').format(
+                sel=selected, total=total)
+        return tr('{n} file(s)').format(n=total)
+
+    def _populate_shared_list(self, list_widget, keep_path=None):
+        """Fill a QListWidget with the main table's files: icon copied
+        from the table (zero decoding), path in UserRole, target name in
+        UserRole+1. Used by the IPTC, FTP and Flickr tabs so the three
+        lists look and behave identically."""
+        list_widget.blockSignals(True)
+        list_widget.clear()
+        restored = None
+        for path, name, target, r in self._iptc_paths():
+            it = QListWidgetItem(name)
+            it.setData(Qt.UserRole, path)
+            it.setData(Qt.UserRole + 1, target)
+            thumb_item = self.table.item(r, self.COL_THUMB)
+            if thumb_item is not None and not thumb_item.icon().isNull():
+                it.setIcon(thumb_item.icon())
+            it.setSizeHint(QSize(0, 70))
+            list_widget.addItem(it)
+            if keep_path is not None and path == keep_path:
+                restored = it
+        list_widget.blockSignals(False)
+        return restored
+
     def _add_paths(self, paths):
         """Add the given files to the table, skipping duplicates.
 
@@ -120,6 +152,12 @@ class MWFilesMixin:
         """
         was_sorting = self.table.isSortingEnabled()
         self.table.setSortingEnabled(False)
+        # Batch mode: without this, every inserted row triggered a relayout of
+        # ALL row heights (ResizeToContents) plus a repaint - adding a few
+        # hundred files froze the GUI for many seconds (quadratic cost).
+        header = self.table.verticalHeader()
+        self.table.setUpdatesEnabled(False)
+        header.setSectionResizeMode(QHeaderView.Fixed)
         seen = self._current_filepaths()
         added = duplicates = failed = 0
         try:
@@ -134,6 +172,8 @@ class MWFilesMixin:
                     failed += 1
                     self.logger.warning('Failed to add file %r: %s', filepath, e)
         finally:
+            header.setSectionResizeMode(QHeaderView.ResizeToContents)
+            self.table.setUpdatesEnabled(True)
             self.table.setSortingEnabled(was_sorting)
         self._update_upload_btn()   # the row count changed
         return added, duplicates, failed
@@ -141,11 +181,11 @@ class MWFilesMixin:
     def _report_add_result(self, added, duplicates, failed):
         parts = []
         if added:
-            parts.append(f'{added} added')
+            parts.append(tr('{n} added').format(n=added))
         if duplicates:
-            parts.append(f'{duplicates} duplicate(s) skipped')
+            parts.append(tr('{n} duplicate(s) skipped').format(n=duplicates))
         if failed:
-            parts.append(f'{failed} skipped (see log)')
+            parts.append(tr('{n} skipped (see log)').format(n=failed))
         if parts:
             self.status_bar.showMessage(', '.join(parts) + '.', 6000)
 
@@ -176,7 +216,7 @@ class MWFilesMixin:
         fp = item.data(Qt.UserRole) if item else None
         return os.path.splitext(fp)[1] if fp else ''
 
-    def _make_thumbnail(self, filepath, w=THUMB_W, h=THUMB_H):
+    def _make_thumbnail(self, filepath, w=THUMB_SRC_W, h=THUMB_SRC_H):
         """Create a downscaled preview efficiently (without full resolution)."""
         try:
             reader = QImageReader(filepath)

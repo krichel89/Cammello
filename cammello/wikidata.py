@@ -1,5 +1,6 @@
 """Wikidata entity search, completer and field styling."""
 import re
+import weakref
 import requests
 from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QObject, QTimer,
                           QStringListModel)
@@ -7,6 +8,40 @@ from PyQt5.QtWidgets import QCompleter
 from PyQt5.QtGui import QRegExpValidator
 from .constants import *
 from .constants import _WD_SINGLE_RE, _WD_LIST_RE
+
+
+_WD_FIELDS = weakref.WeakSet()
+
+
+def wd_field_style():
+    """Wikidata-field stylesheet: a BLUE BORDER only.
+
+    0.11.0 removes the field-specific background/text color entirely: the
+    special background was the last field-level color in the app and kept
+    producing wrongly colored fields on macOS (renderer behavior we cannot
+    reproduce in CI). With no background/color property of their own, the WD
+    fields inherit exactly what every other input field shows - the blue
+    border alone marks them as Wikidata fields."""
+    if current_style_is_dark():
+        border, focus = '#5a8fc0', '#4a9fe0'
+    else:
+        border, focus = '#2a6db0', '#1d4f85'
+    return (
+        f'QLineEdit {{'
+        f' border: 1px solid {border}; border-radius: 3px;'
+        f' padding: 2px 4px; }}'
+        f'QLineEdit:focus {{ border: 2px solid {focus};'
+        f' padding: 1px 3px; }}')
+
+
+def refresh_wd_fields():
+    """Re-style every live Wikidata field; called by _apply_color_scheme
+    after a scheme switch."""
+    for edit in list(_WD_FIELDS):
+        try:
+            edit.setStyleSheet(wd_field_style())
+        except RuntimeError:
+            pass                          # C++ side already gone
 
 
 def _style_wd_field(edit, multi=False, searchable=False):
@@ -19,10 +54,8 @@ def _style_wd_field(edit, multi=False, searchable=False):
     Non-searchable fields keep the strict QID validator. Fields grow with the
     form (no fixed width cap) so the 30:70 label/field split holds.
     """
-    edit.setStyleSheet(
-        f'QLineEdit {{ background: {WD_BG}; color: #1a1a1a;'
-        ' border: 1px solid #7a8ea6; border-radius: 3px; padding: 2px 4px; }'
-        'QLineEdit:focus { border: 1px solid #2a6db0; }')
+    edit.setStyleSheet(wd_field_style())
+    _WD_FIELDS.add(edit)
     if not searchable:
         edit.setValidator(QRegExpValidator(_WD_LIST_RE if multi else _WD_SINGLE_RE,
                                            edit))
@@ -105,11 +138,19 @@ class WikidataCompleter(QCompleter):
         self.setCaseSensitivity(Qt.CaseInsensitive)
         # Make the suggestion list a bit bigger / more readable.
         self.setMaxVisibleItems(12)
-        popup = self.popup()
-        popup.setMinimumWidth(420)
-        popup.setStyleSheet(
-            'QListView { font-size: 12pt; }'
-            ' QListView::item { padding: 4px 6px; }')
+        self.popup().setMinimumWidth(420)
+        self.refresh_style()
+
+    def refresh_style(self):
+        """Colors for the popup, matching the ACTIVE color scheme.
+
+        The popup is a top-level QListView (not a child of the main window),
+        so it gets neither the window stylesheet nor the repolish pass of a
+        scheme switch. Called at construction AND before every show (see
+        WikidataSuggest._on_results), so switching the scheme at runtime is
+        reflected the next time the list opens.
+        """
+        self.popup().setStyleSheet(completer_popup_style())
 
     def set_suggestions(self, display_list):
         self._model.setStringList(display_list)
@@ -198,4 +239,75 @@ class WikidataSuggest(QObject):
                            else f'{label} ({qid})')
         self.completer.set_suggestions(display)
         if display:
+            # Scheme may have changed since the last popup: refresh first.
+            self.completer.refresh_style()
             self.completer.complete()
+
+
+# ── Category suggestions (0.11.0) ─────────────────────────────────────────────
+
+def fetch_commons_categories(qids, timeout=8):
+    """{qid: (commons_category_or_None, label_or_'')} for up to 50 QIDs via
+    one wbgetentities call. The Commons category is Wikidata property P373;
+    the label falls back en -> de -> any."""
+    qids = [q for q in qids if q]
+    if not qids:
+        return {}
+    r = requests.get(
+        'https://www.wikidata.org/w/api.php',
+        params={'action': 'wbgetentities', 'ids': '|'.join(qids[:50]),
+                'props': 'claims|labels', 'languages': 'en|de',
+                'format': 'json'},
+        headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
+    r.raise_for_status()
+    out = {}
+    for qid, ent in (r.json().get('entities') or {}).items():
+        cat = None
+        for claim in (ent.get('claims', {}).get('P373') or []):
+            val = (claim.get('mainsnak', {}).get('datavalue', {})
+                   .get('value'))
+            if isinstance(val, str) and val.strip():
+                cat = val.strip()
+                break
+        labels = ent.get('labels', {})
+        label = (labels.get('en') or labels.get('de') or {}).get('value', '')
+        if not label and labels:
+            label = next(iter(labels.values())).get('value', '')
+        out[qid] = (cat, label)
+    return out
+
+
+_YEAR_RE = re.compile(r'\b(19|20)\d{2}\b')
+
+
+def category_suggestions(depicts_qids, created_qid, fetched, date_text,
+                         existing_cats):
+    """Pure suggestion builder (unit-testable, no network).
+
+    depicts entries suggest their Commons category (P373) or, failing that,
+    their label. The created-during event does the same, and if the result
+    carries NO year (the Wikidata label of a recurring event often does not),
+    the year from the file's Date column is appended - 'Berlinale' with a
+    2026-02-14 date becomes 'Berlinale 2026'. Existing categories are kept
+    (case-insensitive dedup); returns only the NEW names, in source order."""
+    existing = {c.strip().lower() for c in existing_cats if c.strip()}
+    year_m = _YEAR_RE.search(date_text or '')
+    year = year_m.group(0) if year_m else ''
+    out = []
+
+    def add(name):
+        name = (name or '').strip()
+        if name and name.lower() not in existing:
+            existing.add(name.lower())
+            out.append(name)
+
+    for qid in depicts_qids:
+        cat, label = fetched.get(qid, (None, ''))
+        add(cat or label)
+    if created_qid:
+        cat, label = fetched.get(created_qid, (None, ''))
+        name = (cat or label or '').strip()
+        if name and not _YEAR_RE.search(name) and year:
+            name = f'{name} {year}'
+        add(name)
+    return out

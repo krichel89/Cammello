@@ -47,8 +47,14 @@ check('source file width 180', w.table.columnWidth(w.COL_FILENAME) == 180)
 check('target width 200', w.table.columnWidth(w.COL_TITLE) == 200)
 check('status width 110', w.table.columnWidth(w.COL_STATUS) == 110)
 from PyQt5.QtWidgets import QHeaderView
-check('COL_EFFECTIVE stretches',
-      w.table.horizontalHeader().sectionResizeMode(w.COL_EFFECTIVE) == QHeaderView.Stretch)
+# 0.14.0: Interactive (drag-resizable); Stretch sections cannot be dragged.
+check('COL_EFFECTIVE is drag-resizable',
+      w.table.horizontalHeader().sectionResizeMode(w.COL_EFFECTIVE) == QHeaderView.Interactive)
+check('last section stretches instead',
+      w.table.horizontalHeader().stretchLastSection())
+w.table.setColumnWidth(w.COL_EFFECTIVE, 333)
+check('dragging (setColumnWidth) sticks',
+      w.table.columnWidth(w.COL_EFFECTIVE) == 333)
 
 # 4) Delegate on the Wikitext column, capping the height at 12 lines.
 d = w.table.itemDelegateForColumn(w.COL_EFFECTIVE)

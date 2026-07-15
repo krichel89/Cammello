@@ -16,9 +16,11 @@ import sys
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-MODULES = ['constants', 'logging_setup', 'sdc', 'exif', 'api', 'workers',
-           'wikidata', 'widgets', 'editors', 'main_window', 'mw_settings',
-           'mw_files', 'mw_editor', 'mw_upload']
+# Auto-discovered so a new module cannot be forgotten (the hardcoded list
+# from 0.9.9 was already missing iptc/mw_iptc/ftp_workers).
+MODULES = sorted(
+    f.stem for f in (pathlib.Path(__file__).parent / 'cammello').glob('*.py')
+    if f.stem != '__init__')
 
 HERE = pathlib.Path(__file__).parent
 

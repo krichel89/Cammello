@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
 from PyQt5.QtCore import Qt, pyqtSignal
 from .constants import *
 from .sdc import *
+from .i18n import tr
 from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
@@ -34,10 +35,20 @@ class CaptionsEditor(QWidget):
         self._rows_box.setSpacing(4)
         outer.addLayout(self._rows_box)
 
-        add_btn = QPushButton('Add language')
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        add_btn = QPushButton(tr('Add language'))
         add_btn.clicked.connect(
             lambda: (self.add_row(), self.changed.emit(), self.committed.emit()))
-        outer.addWidget(add_btn)
+        btn_row.addWidget(add_btn)
+        info_btn = QPushButton(tr('Information from caption'))
+        info_btn.setToolTip(
+            tr('Fills the Information wikitext of each language with its '
+               'caption text, where the Information field is still empty.'))
+        info_btn.clicked.connect(self._info_from_captions)
+        btn_row.addWidget(info_btn)
+        btn_row.addStretch()
+        outer.addLayout(btn_row)
 
         self.add_row()  # start with one empty row
 
@@ -60,11 +71,11 @@ class CaptionsEditor(QWidget):
         combo.setMaximumWidth(150)
 
         edit = QLineEdit(value)
-        edit.setPlaceholderText('Caption, e.g. Harald Krichel at the Berlinale 2026')
+        edit.setPlaceholderText(tr('Caption, e.g. Harald Krichel at the Berlinale 2026'))
 
         remove = QPushButton('×')
         remove.setFixedWidth(28)
-        remove.setToolTip('Remove this language')
+        remove.setToolTip(tr('Remove this language'))
 
         top.addWidget(combo)
         top.addWidget(edit, 1)
@@ -79,7 +90,7 @@ class CaptionsEditor(QWidget):
         info_edit = QTextEdit()
         info_edit.setPlainText(info)
         info_edit.setPlaceholderText(
-            'Information wikitext for this language (uploaded as {{%s|1=…}})'
+            tr('Information wikitext for this language (uploaded as {{%s|1=…}})')
             % lang)
         info_edit.setAcceptRichText(False)
         two_lines = info_edit.fontMetrics().lineSpacing() * 2 + 12
@@ -102,7 +113,7 @@ class CaptionsEditor(QWidget):
 
         def _update_info_placeholder():
             info_edit.setPlaceholderText(
-                'Information wikitext for this language (uploaded as {{%s|1=…}})'
+                tr('Information wikitext for this language (uploaded as {{%s|1=…}})')
                 % combo.currentData())
         combo.currentIndexChanged.connect(lambda *_: _update_info_placeholder())
         combo.currentIndexChanged.connect(lambda *_: self.changed.emit())
@@ -112,6 +123,19 @@ class CaptionsEditor(QWidget):
         # QTextEdit has no editingFinished; live sync uses changed (textChanged).
         info_edit.textChanged.connect(lambda *_: self.changed.emit())
         remove.clicked.connect(lambda: self._remove(entry))
+
+    def _info_from_captions(self):
+        """Copy each row's caption into its Information field, but only where
+        that field is still empty (never overwrite hand-written wikitext)."""
+        changed = False
+        for e in self._rows:
+            caption = e['edit'].text().strip()
+            if caption and not e['info'].toPlainText().strip():
+                e['info'].setPlainText(caption)
+                changed = True
+        if changed:
+            self.changed.emit()
+            self.committed.emit()
 
     def _remove(self, entry):
         entry['widget'].setParent(None)
@@ -179,6 +203,8 @@ class StructuredDescriptionEditor(QWidget):
 
     changed = pyqtSignal()
     committed = pyqtSignal()   # fires on field switch, not per keystroke
+    suggest_requested = pyqtSignal()        # created-during category (base)
+    suggest_depicts_requested = pyqtSignal()  # depicts categories (per-file)
 
     def __init__(self, parent=None, is_base=True):
         super().__init__(parent)
@@ -186,7 +212,7 @@ class StructuredDescriptionEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(QLabel('Captions:'))
+        layout.addWidget(QLabel(tr('Captions:')))
         self.captions_editor = CaptionsEditor()
         self.captions_editor.changed.connect(self.changed)
         self.captions_editor.committed.connect(self.committed)
@@ -197,25 +223,40 @@ class StructuredDescriptionEditor(QWidget):
         # Depicts (P180) — per-file only (no depicts in the base description).
         if not self.is_base:
             self.depicts = QLineEdit()
-            self.depicts.setPlaceholderText('e.g. Q42; Q64')
+            self.depicts.setPlaceholderText(tr('e.g.') + ' Q42; Q64')
             _style_wd_field(self.depicts, multi=True, searchable=True)
             self._depicts_suggest = WikidataSuggest(self.depicts, multi=True)
         else:
             self.depicts = None
 
+        # Depicts override (per-file): depicts is mandatory for the upload,
+        # but one of these waives it. A dropdown keeps the full, readable
+        # labels (the checkbox texts were too long to sit side by side).
+        # itemData: '' = no override; else the depicts_override= value.
+        if not self.is_base:
+            self.override_combo = QComboBox()
+            self.override_combo.addItem(tr('depicts is set (required)'), '')
+            self.override_combo.addItem(tr('No Wikidata item'), 'no_item')
+            self.override_combo.addItem(tr('Not applicable'), 'no_person')
+            self.override_combo.addItem(tr('Unidentified'), 'unidentified')
+            self.override_combo.currentIndexChanged.connect(
+                self._on_override_changed)
+        else:
+            self.override_combo = None
+
         # Categories — plain text (not a Wikidata field).
         self.categories = QLineEdit()
-        self.categories.setPlaceholderText('e.g. Berlinale 2026; Portraits')
+        self.categories.setPlaceholderText(tr('e.g.') + ' Berlinale 2026; Portraits')
 
         # Base-only fields.
         if self.is_base:
             self.created_during = QLineEdit()
-            self.created_during.setPlaceholderText('e.g. Q124692383')
+            self.created_during.setPlaceholderText(tr('e.g.') + ' Q124692383')
             _style_wd_field(self.created_during, searchable=True)
             self._cd_suggest = WikidataSuggest(self.created_during, multi=False)
 
             self.gallery_suffix = QLineEdit()
-            self.gallery_suffix.setPlaceholderText('e.g. Berlinale 2026')
+            self.gallery_suffix.setPlaceholderText(tr('e.g.') + ' Berlinale 2026')
         else:
             self.created_during = None
             self.gallery_suffix = None
@@ -234,20 +275,43 @@ class StructuredDescriptionEditor(QWidget):
 
         # Rows.
         if not self.is_base:
-            form.addRow('Depicts (P180):', self.depicts)
+            form.addRow(tr('Depicts (P180):'), self.depicts)
+            form.addRow(tr('If no depicts:'), self.override_combo)
         if self.is_base:
-            form.addRow('Created during (P10408):', self.created_during)
-        form.addRow('Categories:', self.categories)
+            # 'created during' lives in the base description; its category
+            # suggestion belongs here too (was wrongly in the per-file editor).
+            cd_row = QHBoxLayout()
+            cd_row.addWidget(self.created_during, 1)
+            suggest_btn = QPushButton(tr('Suggest category'))
+            suggest_btn.setToolTip(
+                tr('Adds a base category from the "created during" event '
+                   '(Commons category P373, or the label; a missing year is '
+                   'taken from the Date column).'))
+            suggest_btn.clicked.connect(self.suggest_requested)
+            cd_row.addWidget(suggest_btn)
+            form.addRow(tr('Created during (P10408):'), cd_row)
+        if not self.is_base:
+            cat_row = QHBoxLayout()
+            cat_row.addWidget(self.categories, 1)
+            depicts_cat_btn = QPushButton(tr('Suggest category'))
+            depicts_cat_btn.setToolTip(
+                tr('Adds categories from the depicts entries (Commons '
+                   'category P373, or the label).'))
+            depicts_cat_btn.clicked.connect(self.suggest_depicts_requested)
+            cat_row.addWidget(depicts_cat_btn)
+            form.addRow(tr('Categories:'), cat_row)
+        else:
+            form.addRow(tr('Categories:'), self.categories)
         if self.is_base:
-            form.addRow('Gallery suffix:', self.gallery_suffix)
+            form.addRow(tr('Gallery suffix:'), self.gallery_suffix)
         apply_form_ratio(form)
         layout.addLayout(form)
 
-        layout.addWidget(QLabel('Extra wikitext / comments:'))
+        layout.addWidget(QLabel(tr('Extra wikitext / comments:')))
         self.extra = QTextEdit()
         self.extra.setPlaceholderText(
-            'e.g. {{en|1=…}}\n'
-            '# lines starting with # are comments and are not uploaded')
+            tr('e.g.') + ' {{en|1=…}}\n'
+            + tr('# lines starting with # are comments and are not uploaded'))
         # Start at two text lines; the grip below makes it drag-resizable.
         two_lines = self.extra.fontMetrics().lineSpacing() * 2 + 12
         self.extra.setFixedHeight(two_lines)
@@ -256,6 +320,24 @@ class StructuredDescriptionEditor(QWidget):
         self.extra.installEventFilter(self)
         layout.addWidget(self.extra)
         layout.addWidget(_VGrip(self.extra, two_lines))
+
+    def _on_override_changed(self, _index):
+        """The override dropdown commits immediately (no editingFinished)."""
+        self.changed.emit()
+        self.committed.emit()
+
+    def _override_value(self):
+        if self.override_combo is None:
+            return ''
+        return self.override_combo.currentData() or ''
+
+    def _set_override_value(self, value):
+        if self.override_combo is None:
+            return
+        idx = self.override_combo.findData(value or '')
+        self.override_combo.blockSignals(True)
+        self.override_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.override_combo.blockSignals(False)
 
     def eventFilter(self, obj, event):
         if obj is self.extra and event.type() == QEvent.FocusOut:
@@ -268,6 +350,8 @@ class StructuredDescriptionEditor(QWidget):
                 if k.startswith('caption_')}
         if self.depicts is not None:
             self.depicts.setText(sd.get('depicts', ''))
+            self._set_override_value(
+                (sd.get('depicts_override') or '').strip().lower())
         if self.is_base:
             self.created_during.setText(sd.get('created_during', ''))
             self.gallery_suffix.setText(sd.get('gallery_suffix', ''))
@@ -287,6 +371,9 @@ class StructuredDescriptionEditor(QWidget):
             depicts = self.depicts.text().strip()
             if depicts:
                 lines.append(f'depicts={depicts}')
+            override = self._override_value()
+            if override:
+                lines.append(f'depicts_override={override}')
         if self.is_base:
             for key, w in (('created_during', self.created_during),
                            ('gallery_suffix', self.gallery_suffix)):
@@ -335,19 +422,20 @@ class BulkEditDialog(QDialog):
 
     def __init__(self, n_selected, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Bulk edit selected files')
-        self.setStyleSheet(INPUT_STYLE)
+        self.setWindowTitle(tr('Bulk edit selected files'))
+        self.setStyleSheet(current_input_style())
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
-            f'Apply a value to the {n_selected} selected file(s):'))
+            tr('Apply a value to the {n} selected file(s):').format(
+                n=n_selected)))
 
         form = QFormLayout()
         self.field_combo = QComboBox()
         for label, key in self.FIELDS:
-            self.field_combo.addItem(label, key)
+            self.field_combo.addItem(tr(label), key)
         self.value_edit = QLineEdit()
-        form.addRow('Field:', self.field_combo)
-        form.addRow('Value:', self.value_edit)
+        form.addRow(tr('Field:'), self.field_combo)
+        form.addRow(tr('Value:'), self.value_edit)
         apply_form_ratio(form)
         layout.addLayout(form)
 
@@ -376,11 +464,11 @@ class BulkEditDialog(QDialog):
         else:
             self.value_edit.setStyleSheet('')
         hints = {
-            'depicts': 'Semicolon-separated QIDs; type a name to search Wikidata.',
-            'categories': 'Semicolon-separated, without [[Category:]].',
-            'caption:en': 'Sets the English SDC caption.',
-            'caption:de': 'Sets the German SDC caption.',
-            'date': 'Sets the Date column (e.g. 2026-02-15).',
+            'depicts': tr('Semicolon-separated QIDs; type a name to search Wikidata.'),
+            'categories': tr('Semicolon-separated, without [[Category:]].'),
+            'caption:en': tr('Sets the English SDC caption.'),
+            'caption:de': tr('Sets the German SDC caption.'),
+            'date': tr('Sets the Date column (e.g. 2026-02-15).'),
         }
         self.hint.setText(hints.get(key, '') + '  Empty value clears this field.')
 

@@ -20,6 +20,14 @@ from cammello.logging_setup import setup_logging
 app = QApplication(sys.argv)
 logger, emitter, gui_handler, log_path = setup_logging()
 
+# setup_logging() attaches a console handler, so the errors this test injects on
+# purpose ("boom: ...") would be printed to the terminal and look like the test
+# had failed. Silence the console; the log file still gets everything.
+import logging
+for h in logger.handlers:
+    if isinstance(h, logging.StreamHandler) and not hasattr(h, 'baseFilename'):
+        h.setLevel(logging.CRITICAL)
+
 fails = []
 
 
@@ -138,7 +146,11 @@ check('uncancelled summary says Done',
 
 
 # ── Upload succeeded, post-processing (SDC) failed ────────────────────────────
-# The file is on Commons; it must NOT be reported as "0/1 uploaded".
+# The file is on Commons; it must NOT be reported as "0/1 uploaded". The error
+# raised below is INJECTED ON PURPOSE - it is what this test is about.
+print('\n[the next two blocks inject errors deliberately: "boom: ..."]')
+
+
 class SdcBrokenApi(FakeApi):
     def get_page_id(self, filename):
         raise RuntimeError('boom: no page id')

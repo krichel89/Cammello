@@ -1,14 +1,16 @@
 """Small custom widgets (grip, collapsible group, drop table, delegates, login)."""
 import os
 from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
-                             QToolButton, QFrame,
+                             QToolButton, QFrame, QHeaderView,
                              QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
                              QTextEdit, QDialog, QDialogButtonBox, QCheckBox,
                              QTableWidget, QTableWidgetItem, QStyledItemDelegate,
-                             QAbstractItemView, QProgressBar)
-from PyQt5.QtCore import Qt, QEvent, pyqtSignal, QUrl, QSize, QSettings
+                             QAbstractItemView, QProgressBar, QComboBox)
+from PyQt5.QtCore import (Qt, QEvent, pyqtSignal, QUrl, QSize, QSettings,
+                          QObject)
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon
 from .constants import *
+from .i18n import tr
 from .sdc import *
 
 
@@ -49,7 +51,7 @@ class FilenameDelegate(QStyledItemDelegate):
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Login – Wikimedia Commons')
+        self.setWindowTitle(tr('Login – Wikimedia Commons'))
         self.setMinimumWidth(420)
         self.settings = QSettings(APP_NAME, 'Login')
 
@@ -60,16 +62,18 @@ class LoginDialog(QDialog):
             'api_url', 'https://commons.wikimedia.org/w/api.php'))
         self.url_edit.setVisible(False)  # hidden; always Commons by default
         self.user_edit = QLineEdit(self.settings.value('username', ''))
-        self.user_edit.setPlaceholderText('e.g. Seewolf@Cammello')
-        self.pass_edit = QLineEdit()
+        self.user_edit.setPlaceholderText(tr('e.g.') + ' Seewolf@Cammello')
+        # Prefilled when a password is stored via Settings -> MediaWiki
+        # account; otherwise empty = asked per session (old behavior).
+        self.pass_edit = QLineEdit(self.settings.value('password', ''))
         self.pass_edit.setEchoMode(QLineEdit.Password)
 
-        form.addRow('Username:', self.user_edit)
-        form.addRow('Password:', self.pass_edit)
+        form.addRow(tr('Username:'), self.user_edit)
+        form.addRow(tr('Password:'), self.pass_edit)
         layout.addLayout(form)
 
         hint = QLabel(
-            'Use a <b>BotPassword</b>: create one at '
+            tr('Use a <b>BotPassword</b>: create one at '
             '<a href="https://commons.wikimedia.org/wiki/Special:BotPasswords">'
             'Special:BotPasswords</a> and log in with the name shown there '
             '(e.g. <i>YourName@Cammello</i>).<br><br>'
@@ -79,7 +83,7 @@ class LoginDialog(QDialog):
             '<li>Create, edit, and move pages</li>'
             '<li>Upload new files</li>'
             '<li>Upload, replace, and move files</li>'
-            '</ul>')
+            '</ul>'))
         hint.setStyleSheet('color: gray; font-size: 11px;')
         hint.setWordWrap(True)
         hint.setOpenExternalLinks(True)
@@ -126,7 +130,7 @@ class _VGrip(QWidget):
         self._min_height = min_height
         self.setFixedHeight(7)
         self.setCursor(Qt.SizeVerCursor)
-        self.setToolTip('Drag to resize the field')
+        self.setToolTip(tr('Drag to resize the field'))
         self.setStyleSheet('background:#b0b0b0; border-radius:3px; margin:1px 0;')
         self._press_y = None
         self._start_h = 0
@@ -195,6 +199,79 @@ class CollapsibleGroupBox(QWidget):
         self._btn.setChecked(bool(on))
 
 
+# ── Mirrored settings widgets ──────────────────────────────────────────────────
+#
+# A Qt widget can live in exactly ONE layout, but several settings groups are
+# wanted in TWO tabs at once (the functional tab AND the Settings tab). The
+# solution is a second, independent widget instance ("mirror") that is kept in
+# sync with the primary bidirectionally. Persistence (QSettings) stays with
+# the primary widgets only, so all existing save/load code is untouched; the
+# mirrors write through to the primaries, which also re-fires any slots
+# connected to the primaries (e.g. the effective-wikitext refresh).
+#
+# Every sync handler compares before setting, so the update chain terminates
+# regardless of whether the setter emits its change signal unconditionally.
+
+
+def link_line_edits(a, b):
+    """Keep two QLineEdits' text in sync, in both directions."""
+    def _to(dst):
+        def _h(text):
+            if dst.text() != text:
+                dst.setText(text)
+        return _h
+    a.textChanged.connect(_to(b))
+    b.textChanged.connect(_to(a))
+
+
+def link_checkboxes(a, b):
+    def _to(dst):
+        def _h(checked):
+            if dst.isChecked() != checked:
+                dst.setChecked(checked)
+        return _h
+    a.toggled.connect(_to(b))
+    b.toggled.connect(_to(a))
+
+
+def link_combos(a, b):
+    def _to(dst):
+        def _h(index):
+            if dst.currentIndex() != index:
+                dst.setCurrentIndex(index)
+        return _h
+    a.currentIndexChanged.connect(_to(b))
+    b.currentIndexChanged.connect(_to(a))
+
+
+def mirror_line_edit(primary):
+    """A new QLineEdit mirroring the primary (text, placeholder, echo mode)."""
+    m = QLineEdit(primary.text())
+    m.setPlaceholderText(primary.placeholderText())
+    m.setEchoMode(primary.echoMode())
+    link_line_edits(primary, m)
+    return m
+
+
+def mirror_checkbox(primary, text=None):
+    m = QCheckBox(text if text is not None else primary.text())
+    m.setChecked(primary.isChecked())
+    m.setToolTip(primary.toolTip())
+    link_checkboxes(primary, m)
+    return m
+
+
+def mirror_combo(primary):
+    m = QComboBox()
+    m.setSizeAdjustPolicy(primary.sizeAdjustPolicy())
+    for i in range(primary.count()):
+        m.addItem(primary.itemText(i), primary.itemData(i))
+    m.setCurrentIndex(primary.currentIndex())
+    m.setToolTip(primary.toolTip())
+    link_combos(primary, m)
+    return m
+
+
 def apply_form_ratio(form, label_width=FORM_LABEL_WIDTH):
     """Give a QFormLayout narrow labels and wide fields (~30:70).
 
@@ -213,6 +290,44 @@ def apply_form_ratio(form, label_width=FORM_LABEL_WIDTH):
             lbl.setFixedWidth(label_width)
             lbl.setWordWrap(True)
 
+
+
+class HeaderResizeCursorFilter(QObject):
+    """Shows a horizontal-split cursor when the mouse hovers a draggable
+    column boundary of a QHeaderView. Qt does this natively in most setups,
+    but not reliably with app-level stylesheets on macOS; this filter makes
+    it deterministic."""
+
+    MARGIN = 5
+
+    def __init__(self, header):
+        super().__init__(header)
+        self._header = header
+        header.setMouseTracking(True)
+        header.installEventFilter(self)
+
+    def _on_boundary(self, x):
+        h = self._header
+        for i in range(h.count()):
+            if h.isSectionHidden(i):
+                continue
+            edge = h.sectionViewportPosition(i) + h.sectionSize(i)
+            if abs(x - edge) <= self.MARGIN:
+                # The edge is draggable if the section left of it is
+                # Interactive (Fixed/Stretch edges cannot be dragged).
+                if h.sectionResizeMode(i) == QHeaderView.Interactive:
+                    return True
+        return False
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseMove:
+            if self._on_boundary(event.pos().x()):
+                self._header.setCursor(Qt.SplitHCursor)
+            else:
+                self._header.unsetCursor()
+        elif event.type() == QEvent.Leave:
+            self._header.unsetCursor()
+        return False
 
 
 class CappedRowHeightDelegate(QStyledItemDelegate):
@@ -250,15 +365,19 @@ class UploadProgressDialog(QDialog):
 
     cancel_requested = pyqtSignal()
 
-    def __init__(self, total, parent=None):
+    def __init__(self, total, parent=None, verb=None, title=None):
+        """verb/title are optional and default to the upload wording, so all
+        existing call sites are unchanged; the culling folder export passes
+        verb='Copying'."""
         super().__init__(parent)
-        self.setWindowTitle(f'Upload - {APP_NAME}')
+        self.setWindowTitle(title or tr('Upload') + f' - {APP_NAME}')
         self.setMinimumWidth(460)
         self.setWindowFlags(
             (self.windowFlags() | Qt.CustomizeWindowHint)
             & ~Qt.WindowCloseButtonHint)
-        self.setStyleSheet(INPUT_STYLE)
+        self.setStyleSheet(current_input_style())
         self.total = total
+        self._verb = verb or tr('Uploading')
         self._cancelling = False
         # QDialog.close() raises a close event, and QDialog handles it by
         # calling reject(). Since reject() is overridden below to mean "the
@@ -268,13 +387,14 @@ class UploadProgressDialog(QDialog):
         self._closable = False
 
         layout = QVBoxLayout(self)
-        self.headline = QLabel(f'Uploading 0 of {total} file(s)…')
+        self.headline = QLabel(tr('{verb} {i} of {total} file(s)…').format(
+            verb=self._verb, i=0, total=total))
         f = self.headline.font()
         f.setBold(True)
         self.headline.setFont(f)
         layout.addWidget(self.headline)
 
-        self.detail = QLabel('Preparing…')
+        self.detail = QLabel(tr('Preparing…'))
         self.detail.setWordWrap(True)
         self.detail.setStyleSheet('color: gray;')
         layout.addWidget(self.detail)
@@ -287,7 +407,7 @@ class UploadProgressDialog(QDialog):
 
         row = QHBoxLayout()
         row.addStretch()
-        self.cancel_btn = QPushButton('Cancel')
+        self.cancel_btn = QPushButton(tr('Cancel'))
         self.cancel_btn.clicked.connect(self._on_cancel)
         row.addWidget(self.cancel_btn)
         layout.addLayout(row)
@@ -297,17 +417,17 @@ class UploadProgressDialog(QDialog):
             return
         self._cancelling = True
         self.cancel_btn.setEnabled(False)
-        self.cancel_btn.setText('Cancelling…')
-        self.detail.setText('Cancelling: the file currently being uploaded is '
-                            'finished first, then the run stops.')
+        self.cancel_btn.setText(tr('Cancelling…'))
+        self.detail.setText(tr('Cancelling: the file currently being uploaded is '
+                            'finished first, then the run stops.'))
         self.cancel_requested.emit()
 
     def set_current(self, index, filename):
         """index is 0-based; called when a file starts uploading."""
         if self._cancelling:
             return
-        self.headline.setText(
-            f'Uploading {index + 1} of {self.total} file(s)…')
+        self.headline.setText(tr('{verb} {i} of {total} file(s)…').format(
+            verb=self._verb, i=index + 1, total=self.total))
         self.detail.setText(filename)
 
     def set_done(self, count):

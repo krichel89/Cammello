@@ -1,10 +1,18 @@
 """Cammello constants and shared configuration."""
+import os
 import sys
 import re
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.9.12'
+__version__ = '0.11.0'
+
+
+def asset_path(name):
+    """Absolute path of a bundled asset (cammello/assets/<name>)."""
+    return os.path.join(os.path.dirname(__file__), 'assets', name)
+
+
 APP_NAME = 'Cammello'
 
 # Maintenance category added to every uploaded file.
@@ -13,7 +21,7 @@ TRACKING_CATEGORY_WIKITEXT = f'[[Category:{TRACKING_CATEGORY}]]'
 
 SD_KEYS = [
     'creator', 'copyright', 'license', 'depicts', 'created_during',
-    'gallery_suffix',
+    'gallery_suffix', 'depicts_override',
 ]
 
 PROPERTY_MAP = {
@@ -34,7 +42,12 @@ WD_FIELD_WIDTH = 220
 THUMB_W = 144
 THUMB_H = 96
 THUMB_COL_WIDTH = 156
+THUMB_COL_MAX = 2 * THUMB_COL_WIDTH   # column is draggable up to 2x
 THUMB_ROW_HEIGHT = 105
+# Source pixmaps are rendered at 2x so dragging the column wider does not
+# upscale (blur); QIcon scales DOWN cleanly.
+THUMB_SRC_W = 2 * THUMB_W
+THUMB_SRC_H = 2 * THUMB_H
 
 # Maximum number of text lines shown in the Wikitext column. The vertical
 # header resizes rows to their contents, which for a long effective wikitext
@@ -67,21 +80,88 @@ GROUP_TITLE_STYLE = (
 # Higher-contrast input fields (applied on the main window and dialogs; the
 # rules cascade to all child QLineEdit/QTextEdit/QComboBox widgets, including
 # the per-language Information wikitext boxes).
-INPUT_STYLE = (
-    'QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {'
-    ' border: 1px solid #7a8ea6;'
-    ' border-radius: 3px;'
-    ' padding: 2px 4px;'
-    ' background: white;'
-    ' color: #1a1a1a;'          # explicit dark text: on macOS dark mode, Qt5
-    #                             follows the system (light) text color while
-    #                             this stylesheet forces a white background,
-    #                             which made fields unreadable (white on white).
-    ' }'
-    'QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {'
-    ' border: 1px solid #2a6db0;'
-    ' }'
-)
+def input_style(dark=False):
+    """Stylesheet for input widgets, in a light and a dark variant.
+
+    Up to now the light variant was a constant applied once at build time, so
+    switching the color scheme left every input field light - the main reason
+    the scheme switch looked broken. _apply_color_scheme() now re-applies the
+    matching variant and repolishes the widget tree."""
+    if dark:
+        bg, fg, border, focus = '#2b2b2b', '#e8e8e8', '#5a6b7d', '#4a9fe0'
+    else:
+        bg, fg, border, focus = 'white', '#1a1a1a', '#7a8ea6', '#2a6db0'
+    return (
+        f'QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {{'
+        f' border: 1px solid {border};'
+        f' border-radius: 3px;'
+        f' padding: 2px 4px;'
+        f' background: {bg};'
+        f' color: {fg};'
+        f' }}'
+        f'QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,'
+        f' QComboBox:focus {{'
+        f' border: 1px solid {focus};'
+        f' }}'
+        # AdjustToContents measures the text only; with a stylesheet the
+        # native width logic (arrow/check indicator room) is off.
+        f'QComboBox {{ padding-right: 24px; }}'
+        f'QComboBox::drop-down {{ width: 20px; }}'
+        # The dropdown POPUP is a separate QAbstractItemView and does NOT
+        # inherit the rule above (0.9.7 bug class).
+        f'QComboBox QAbstractItemView {{'
+        f' background: {bg};'
+        f' color: {fg};'
+        f' selection-background-color: #2a6db0;'
+        f' selection-color: white;'
+        f' }}'
+    )
+
+
+# Light variant as the module constant (backward compatible); the currently
+# active variant is tracked so dialogs built later pick the right one.
+INPUT_STYLE = input_style(False)
+_CURRENT_INPUT_STYLE = [INPUT_STYLE]
+_CURRENT_INPUT_DARK = [False]
+
+
+def set_current_input_style(dark):
+    _CURRENT_INPUT_STYLE[0] = input_style(dark)
+    _CURRENT_INPUT_DARK[0] = bool(dark)
+
+
+def current_input_style():
+    return _CURRENT_INPUT_STYLE[0]
+
+
+def current_style_is_dark():
+    """Whether the ACTIVE input style is the dark variant."""
+    return _CURRENT_INPUT_DARK[0]
+
+
+def completer_popup_style():
+    """Stylesheet for TOP-LEVEL completer popups (the Wikidata suggestion
+    lists). These popups are not children of the main window, so neither the
+    window stylesheet nor the repolish pass in _apply_color_scheme reaches
+    them - without explicit colors they kept the platform default and were
+    unreadable on the dark scheme (light background with light palette
+    text). Re-applied every time the popup is about to show, so a scheme
+    switch at runtime is picked up."""
+    if _CURRENT_INPUT_DARK[0]:
+        bg, fg, border = '#2b2b2b', '#e8e8e8', '#5a6b7d'
+    else:
+        bg, fg, border = 'white', '#1a1a1a', '#7a8ea6'
+    return (
+        f'QListView {{'
+        f' background: {bg};'
+        f' color: {fg};'
+        f' border: 1px solid {border};'
+        f' font-size: 12pt;'
+        f' }}'
+        f'QListView::item {{ padding: 4px 6px; }}'
+        f'QListView::item:selected {{'
+        f' background: #2a6db0; color: white; }}'
+    )
 
 # Fixed width for QFormLayout labels so labels stay narrow and the input
 # fields get the remaining width (approximately a 30:70 split at the typical
@@ -92,7 +172,7 @@ FORM_LABEL_WIDTH = 165
 # created-during, P180 depicts) get a light-blue background and a validator
 # that only accepts QIDs (Q followed by digits). Single-value fields accept
 # one QID; the depicts field accepts a semicolon-separated list of QIDs.
-WD_BG = '#e6f2ff'
+WD_BG = '#e6f2ff'   # unused since 0.11.0 (WD fields are border-only)
 _WD_SINGLE_RE = QRegExp(r'^(Q\d+)?$')
 _WD_LIST_RE = QRegExp(r'^\s*(Q\d+(\s*[;,]\s*Q\d+)*\s*[;,]?\s*)?$')
 

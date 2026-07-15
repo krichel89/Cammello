@@ -4,6 +4,7 @@ import re
 import traceback
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
+from .i18n import tr
 from .constants import *
 from .sdc import *
 from .api import MediaWikiApi
@@ -51,11 +52,11 @@ class UploadWorker(QThread):
                 cancelled_at = i
                 self.log.info('Upload cancelled before file %d/%d ("%s").',
                               i + 1, len(self.rows), fname)
-                self.progress.emit(i, 'Cancelled')
+                self.progress.emit(i, tr('Cancelled'))
                 break
             try:
                 self.file_started.emit(i, fname)
-                self.progress.emit(i, 'Uploading…')
+                self.progress.emit(i, tr('Uploading…'))
 
                 # Normalize the target filename: ensure extension, strip a
                 # "File:" prefix, reject invalid characters.
@@ -85,10 +86,20 @@ class UploadWorker(QThread):
                 clean_desc = re.sub(r'\[\[Category:[^\]]+\]\]\n?', '',
                                     clean_desc).strip()
 
-                # Always add the maintenance category (deduplicated).
+                # Always add the tracking category (deduplicated).
                 if TRACKING_CATEGORY_WIKITEXT not in cats_seen:
                     cats.append(TRACKING_CATEGORY_WIKITEXT)
                     cats_seen.add(TRACKING_CATEGORY_WIKITEXT)
+
+                # Depicts override in a WikiPortraits context: add the
+                # matching WikiPortraits maintenance category.
+                mnt = wikiportraits_maintenance_category(
+                    sd, ' '.join(cats) + ' ' + (other_templates or ''))
+                if mnt and mnt not in cats_seen:
+                    cats.append(mnt)
+                    cats_seen.add(mnt)
+                    self.log.info('Depicts override "%s": %s added.',
+                                  sd.get('depicts_override'), mnt)
 
                 # {{Information}} block
                 info = f"{{{{{row.get('template', 'Information')}\n"
@@ -126,7 +137,7 @@ class UploadWorker(QThread):
                 self.log.error('✗ Error for "%s": %s', fname, e, exc_info=True)
                 msg = str(e) or f'{type(e).__name__} (no message)'
                 self.error.emit(i, msg)
-                self.progress.emit(i, '✗ Error')
+                self.progress.emit(i, '✗ ' + tr('Error'))
                 continue
 
             # From here on the file EXISTS on Commons. Structured data and the
@@ -205,10 +216,10 @@ class UploadWorker(QThread):
                             '"Create, edit, and move pages" if you use a '
                             'gallery prefix) at Special:BotPasswords.')
                 self.error.emit(
-                    i, f'Uploaded, but structured data failed: {msg}')
+                    i, tr('Uploaded, but structured data failed: {msg}').format(msg=msg))
 
             self.progress.emit(
-                i, '✓ Done' if sdc_ok else '✓ Uploaded (SDC failed)')
+                i, '✓ ' + (tr('Done') if sdc_ok else tr('Uploaded (SDC failed)')))
             success_count += 1
 
         # Update galleries. Files that did go up are still added to the

@@ -29,6 +29,7 @@ from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
 from .editors import *
+from .i18n import tr
 
 
 class MWSettingsMixin:
@@ -44,7 +45,7 @@ class MWSettingsMixin:
 
     def _copy_log(self):
         QApplication.clipboard().setText(self.log_view.toPlainText())
-        self.status_bar.showMessage('Log copied to clipboard.', 3000)
+        self.status_bar.showMessage(tr('Log copied to clipboard.'), 3000)
 
     def _open_log_file(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.log_path))
@@ -114,12 +115,29 @@ class MWSettingsMixin:
         self.settings.setValue('timeout', self.timeout_edit.text())
         self.settings.setValue('base_description', self.base_text_edit.toPlainText())
         self.settings.setValue('expert_mode', self.expert_cb.isChecked())
+        if hasattr(self, 'iptc_export_dir_edit'):
+            self._iptc_save_settings()
+        if hasattr(self, 'mw_user_edit'):
+            self._login_settings.setValue('username',
+                                          self.mw_user_edit.text().strip())
+            self._login_settings.setValue('password',
+                                          self.mw_password_edit.text())
+            self._login_settings.sync()
+        if hasattr(self, 'ftp_host_edit'):
+            self._ftp_save_settings()
+        if hasattr(self, 'flickr_api_key_edit'):
+            self._flickr_save_settings()
+        if hasattr(self, 'cull_advance_cb'):
+            self._cull_save_settings()
+        if hasattr(self, 'scheme_combo'):
+            self.settings.setValue('color_scheme',
+                                   self.scheme_combo.currentData())
 
     def _on_save_settings(self):
         """Explicitly persist the current settings (button + on close)."""
         self._save_settings()
         self.settings.sync()
-        self.status_bar.showMessage('Settings saved.', 3000)
+        self.status_bar.showMessage(tr('Settings saved.'), 3000)
 
     # ── Settings import/export as a plain text file ──────────────────────────
 
@@ -136,8 +154,8 @@ class MWSettingsMixin:
     def _save_settings_to_file(self):
         default = os.path.join(os.path.expanduser('~'), 'cammello_settings.txt')
         path, _ = QFileDialog.getSaveFileName(
-            self, 'Save settings to file', default,
-            'Text files (*.txt);;All files (*)')
+            self, tr('Save settings to file'), default,
+            tr('Text files') + ' (*.txt);;' + tr('All files') + ' (*)')
         if not path:
             return
 
@@ -177,18 +195,19 @@ class MWSettingsMixin:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(lines) + '\n')
         except Exception as e:
-            QMessageBox.critical(self, 'Save error',
-                                 f'Could not write the file:\n{e}')
+            QMessageBox.critical(self, tr('Save error'),
+                                 tr('Could not write the file:') + f'\n{e}')
             return
 
         self.logger.info('Settings written to %s (file description incl.: %s)',
                          path, included_file)
         if self.export_file_desc_cb.isChecked() and not included_file:
             self.status_bar.showMessage(
-                'Saved. No single file selected, so no file description was '
-                'included.', 6000)
+                tr('Saved. No single file selected, so no file description was '
+                'included.'), 6000)
         else:
-            self.status_bar.showMessage(f'Settings saved to {path}', 5000)
+            self.status_bar.showMessage(
+                tr('Settings saved to {path}').format(path=path), 5000)
 
     def _parse_settings_file(self, content):
         """Parse an exported settings file into (singles, base_desc, file_desc).
@@ -230,16 +249,16 @@ class MWSettingsMixin:
 
     def _load_settings_from_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, 'Load settings from file', os.path.expanduser('~'),
-            'Text files (*.txt);;All files (*)')
+            self, tr('Load settings from file'), os.path.expanduser('~'),
+            tr('Text files') + ' (*.txt);;' + tr('All files') + ' (*)')
         if not path:
             return
         try:
             with open(path, encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
-            QMessageBox.critical(self, 'Load error',
-                                 f'Could not read the file:\n{e}')
+            QMessageBox.critical(self, tr('Load error'),
+                                 tr('Could not read the file:') + f'\n{e}')
             return
 
         singles, base_desc, file_desc = self._parse_settings_file(content)
@@ -278,15 +297,19 @@ class MWSettingsMixin:
                 self.table.item(row, self.COL_DESC).setText(file_desc)
                 self._load_selected_desc()
             else:
-                note = (' (file description in the file was ignored: no single '
-                        'file selected)')
+                note = ' ' + tr('(file description in the file was ignored: '
+                                'no single file selected)')
 
         self.logger.info('Settings loaded from %s%s', path, note)
-        self.status_bar.showMessage(f'Settings loaded from {path}.{note}', 6000)
+        self.status_bar.showMessage(
+            tr('Settings loaded from {path}.').format(path=path) + note, 6000)
 
     def closeEvent(self, event):
-        # Persist settings when the window is closed.
+        # Persist settings when the window is closed; flush pending XMP
+        # writes of the culling tab (write-behind) before the process dies.
         self._save_settings()
+        if hasattr(self, '_cull_wb'):
+            self._cull_shutdown()
         super().closeEvent(event)
 
     def _get_timeout(self):
