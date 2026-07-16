@@ -96,8 +96,16 @@ def extract_preview_bytes(path):
             return f.read()
     if rawpy is None:
         raise RuntimeError(raw_unavailable_reason())
-    with rawpy.imread(path) as raw:
-        thumb = raw.extract_thumb()
+    # Under the same lock as pyexiv2: the Windows crash log (2026-07-16)
+    # showed an access violation with THREE pool threads concurrently inside
+    # rawpy.imread while pyexiv2 (already serialized) ran in a fourth thread.
+    # rawpy's docs consider separate instances usable in parallel, but
+    # empirically all crashing runs had concurrent imread calls - so ALL
+    # native image-library work is serialized until proven safe. JPEG
+    # previews and the QImageReader decode stay parallel.
+    with PYEXIV2_LOCK:
+        with rawpy.imread(path) as raw:
+            thumb = raw.extract_thumb()
     if thumb.format == rawpy.ThumbFormat.JPEG:
         return thumb.data
     # Bitmap fallback: encode to JPEG once so the rest of the pipeline is
