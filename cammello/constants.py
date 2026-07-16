@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.11.1'
+__version__ = '0.11.2'
 
 # pyexiv2 is documented as NOT thread-safe ("Not thread safe, because pyexiv2
 # uses some global variables in C++", pyexiv2 README). A lock (this used to be
@@ -239,6 +239,19 @@ def remember_caption_language(code):
     extras = _caption_extra_langs()
     if code not in extras and code not in CAPTION_BASE_LANGS:
         extras.append(code)
+        s.setValue('caption_extra_langs', ','.join(extras))
+        s.sync()
+
+
+def forget_caption_language(code):
+    """Remove a previously remembered ISO code from the persisted list, so it
+    stops appearing in the caption-language dropdown. The four base languages
+    cannot be removed. No-op if the code was never remembered."""
+    from PyQt5.QtCore import QSettings
+    s = QSettings(APP_NAME, 'Main')
+    extras = _caption_extra_langs()
+    if code in extras:
+        extras.remove(code)
         s.setValue('caption_extra_langs', ','.join(extras))
         s.sync()
 

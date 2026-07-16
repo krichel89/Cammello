@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QWidget, QLabel, QLineEd
                              QFormLayout, QDialog, QDialogButtonBox)
 from PyQt5.QtCore import Qt, pyqtSignal
 from .constants import *
+from .constants import _caption_extra_langs
 from .sdc import *
 from .i18n import tr
 from .wikidata import *
@@ -61,14 +62,7 @@ class CaptionsEditor(QWidget):
         top.setContentsMargins(0, 0, 0, 0)
 
         combo = QComboBox()
-        for code, name in caption_language_choices():
-            combo.addItem(f'{code} – {name}' if name else code, code)
-        combo.addItem(tr('Other (ISO code)…'), '__other__')
-        idx = combo.findData(lang)
-        if idx < 0:                       # unknown code (e.g. from advanced mode)
-            combo.insertItem(combo.count() - 1, lang, lang)
-            idx = combo.findData(lang)
-        combo.setCurrentIndex(idx)
+        self._populate_combo(combo, lang)
         combo.setMaximumWidth(150)
         combo.currentIndexChanged.connect(
             lambda _i, c=combo: self._on_lang_combo_changed(c))
@@ -127,33 +121,108 @@ class CaptionsEditor(QWidget):
         info_edit.textChanged.connect(lambda *_: self.changed.emit())
         remove.clicked.connect(lambda: self._remove(entry))
 
+    def _populate_combo(self, combo, want_code):
+        """Fill a language combo with the current choices plus the two action
+        entries, then select want_code (inserting it ad-hoc if it is not a
+        listed choice, e.g. a code still used by a row but no longer saved).
+        Also records the selected real code as the combo's fallback."""
+        combo.blockSignals(True)
+        combo.clear()
+        for code, name in caption_language_choices():
+            combo.addItem(f'{code} – {name}' if name else code, code)
+        combo.addItem(tr('Other (ISO code)…'), '__other__')
+        combo.addItem(tr('Remove saved language…'), '__forget__')
+        idx = combo.findData(want_code)
+        if idx < 0 and want_code and want_code not in ('__other__', '__forget__'):
+            combo.insertItem(combo.findData('__other__'),
+                             format_caption_language(want_code), want_code)
+            idx = combo.findData(want_code)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.setProperty('prev_code', combo.currentData())
+        combo.blockSignals(False)
+
+    def _restore_combo(self, combo, code):
+        """Put combo back on a real language code without emitting signals."""
+        combo.blockSignals(True)
+        idx = combo.findData(code)
+        if idx < 0 and code:
+            combo.insertItem(combo.findData('__other__'),
+                             format_caption_language(code), code)
+            idx = combo.findData(code)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.setProperty('prev_code', combo.currentData())
+        combo.blockSignals(False)
+
+    def _rebuild_combos(self):
+        """Refill every row's combo from the (just changed) saved list, keeping
+        each row on the language it currently shows."""
+        for e in self._rows:
+            combo = e['combo']
+            want = combo.currentData()
+            if want in ('__other__', '__forget__', None):
+                want = combo.property('prev_code')
+            self._populate_combo(combo, want)
+
     def _on_lang_combo_changed(self, combo):
+        """Dispatch the two action entries; for a real language, just record it
+        as this combo's fallback selection."""
+        data = combo.currentData()
+        if data == '__other__':
+            self._add_other_language(combo)
+            return
+        if data == '__forget__':
+            self._forget_language_dialog(combo)
+            return
+        combo.setProperty('prev_code', data)
+
+    def _add_other_language(self, combo):
         """'Other (ISO code)…' selected: ask for a code, validate it, insert
         it into the dropdown, select it, and PERSIST it - freely entered
         codes extend the four-language default list permanently."""
-        if combo.currentData() != '__other__':
-            return
+        prev = combo.property('prev_code')
         code, ok = QInputDialog.getText(
             self, tr('Caption language'),
             tr('ISO language code (e.g. nl, pt, ja):'))
         code = (code or '').strip().lower()
-        combo.blockSignals(True)
         if not ok or not re.fullmatch(r'[a-z]{2,3}', code):
-            combo.setCurrentIndex(0)
-            combo.blockSignals(False)
+            self._restore_combo(combo, prev)
             if ok:
                 QMessageBox.warning(self, tr('Caption language'),
                                     tr('Not a valid ISO code: {code}').format(
                                         code=code or '?'))
             return
-        idx = combo.findData(code)
-        if idx < 0:
-            combo.insertItem(combo.count() - 1,
-                             format_caption_language(code), code)
-            idx = combo.findData(code)
-            remember_caption_language(code)
-        combo.setCurrentIndex(idx)
-        combo.blockSignals(False)
+        remember_caption_language(code)
+        # Rebuild all rows so the new code appears in every dropdown, and put
+        # this row on it.
+        self._rebuild_combos()
+        self._restore_combo(combo, code)
+        self.changed.emit()
+        self.committed.emit()
+
+    def _forget_language_dialog(self, combo):
+        """'Remove saved language…' selected: let the user delete one of the
+        codes they previously added, then refresh every dropdown. This row
+        keeps whatever language it had; a row still using a removed code keeps
+        it as an ad-hoc entry (its caption is never lost)."""
+        prev = combo.property('prev_code')
+        self._restore_combo(combo, prev)          # this action never moves the row
+        extras = _caption_extra_langs()
+        if not extras:
+            QMessageBox.information(
+                self, tr('Caption language'),
+                tr('No saved languages to remove. The four default languages '
+                   'cannot be removed.'))
+            return
+        items = [format_caption_language(c) for c in extras]
+        choice, ok = QInputDialog.getItem(
+            self, tr('Remove saved language'),
+            tr('Remove which saved language from the dropdown?'),
+            items, 0, False)
+        if not ok:
+            return
+        code = extras[items.index(choice)]
+        forget_caption_language(code)
+        self._rebuild_combos()
         self.changed.emit()
         self.committed.emit()
 

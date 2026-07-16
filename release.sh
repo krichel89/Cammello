@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.11.1"
+VERSION="0.11.2"
 REPO_DIR="/Users/h/Documents/Python/Cammello"
 
 cd "$REPO_DIR"
@@ -14,4 +14,4 @@ git push origin "v${VERSION}"
 
 gh release create "v${VERSION}" \
   --title "v${VERSION}" \
-  --notes-file notes_0111.md
+  --notes-file notes_0112.md

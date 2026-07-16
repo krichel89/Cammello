@@ -4,6 +4,33 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] - 2026-07-16
+
+### Fixed
+- **macOS app: Culling / IPTC / FTP tabs no longer disappear.** The pyexiv2
+  wheel's bundled `libexiv2.dylib` links against Homebrew libraries
+  (inih, brotli, gettext) that were absent on the build runner, so the frozen
+  app failed to `dlopen` it and silently disabled every pyexiv2-backed tab.
+  The macOS build now runs `brew install exiv2`, which pulls those libraries
+  in so PyInstaller bundles them; the app is self-contained without Homebrew.
+- **Windows: hard crash (access violation) when opening a folder in the
+  Culling tab.** exiv2 could crash the process while reading metadata during a
+  folder scan (reproduced on Panasonic `.RW2`, but not limited to it). The
+  scan read path no longer calls pyexiv2 at all: rating (`xmp:Rating`) and
+  colour label (`xmp:Label`) are parsed as text directly from the XMP of the
+  sidecar and JPEG. Writing ratings still uses pyexiv2 (one file, on demand).
+- **Portrait photos shown sideways (Windows).** Image orientation is now read
+  via Pillow for JPEGs and via libraw (rawpy) for RAW files, so previews are
+  displayed upright.
+
+### Added
+- **Remove a saved caption language.** ISO codes added through
+  "Other (ISO code)…" are persisted in the dropdown; a new
+  "Remove saved language…" entry deletes one again. The four default
+  languages (en, de, es, fr) cannot be removed. A row still using a removed
+  code keeps it (its caption is never lost); the code just stops being
+  offered as a default choice.
+
 ## [0.11.1] - 2026-07-15
 
 ### Added

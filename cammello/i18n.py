@@ -1871,6 +1871,30 @@ TRANSLATIONS = {
         'fr': 'Autre (code ISO)…',
         'it': 'Altro (codice ISO)…',
     },
+    'Remove saved language…': {
+        'de': 'Gespeicherte Sprache entfernen…',
+        'es': 'Eliminar idioma guardado…',
+        'fr': 'Supprimer une langue enregistrée…',
+        'it': 'Rimuovi lingua salvata…',
+    },
+    'Remove saved language': {
+        'de': 'Gespeicherte Sprache entfernen',
+        'es': 'Eliminar idioma guardado',
+        'fr': 'Supprimer une langue enregistrée',
+        'it': 'Rimuovi lingua salvata',
+    },
+    'Remove which saved language from the dropdown?': {
+        'de': 'Welche gespeicherte Sprache soll aus der Auswahlliste entfernt werden?',
+        'es': '¿Qué idioma guardado quieres eliminar de la lista desplegable?',
+        'fr': 'Quelle langue enregistrée supprimer de la liste déroulante ?',
+        'it': 'Quale lingua salvata rimuovere dal menu a discesa?',
+    },
+    'No saved languages to remove. The four default languages cannot be removed.': {
+        'de': 'Keine gespeicherten Sprachen zum Entfernen. Die vier Standardsprachen können nicht entfernt werden.',
+        'es': 'No hay idiomas guardados para eliminar. Los cuatro idiomas predeterminados no se pueden eliminar.',
+        'fr': 'Aucune langue enregistrée à supprimer. Les quatre langues par défaut ne peuvent pas être supprimées.',
+        'it': 'Nessuna lingua salvata da rimuovere. Le quattro lingue predefinite non possono essere rimosse.',
+    },
     'Caption language': {
         'de': 'Bildunterschriften-Sprache',
         'es': 'Idioma de la leyenda',
