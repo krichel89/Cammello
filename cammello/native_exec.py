@@ -29,6 +29,7 @@ only the short native metadata/thumb calls serialize here.
 The worker thread is a daemon and lives for the whole process. run() is safe to
 call from any thread, including the GUI thread and QThreadPool workers.
 """
+import logging
 import queue
 import threading
 
@@ -41,8 +42,18 @@ _start_lock = threading.Lock()
 
 
 def _worker():
+    log = logging.getLogger('Cammello')
     while True:
         fn, args, kwargs, box, ev = _queue.get()
+        # Diagnostic: the file is logged (and flushed) BEFORE the native call,
+        # so if that call dies with a hard access violation - which no Python
+        # try/except can catch - the last line in cammello_debug.log names the
+        # exact operation and file that brought the native library down.
+        try:
+            target = args[0] if args else ''
+            log.debug('native: %s %r', getattr(fn, '__name__', fn), target)
+        except Exception:
+            pass
         try:
             box[0] = ('ok', fn(*args, **kwargs))
         except BaseException as exc:      # propagate EVERYTHING to the caller
