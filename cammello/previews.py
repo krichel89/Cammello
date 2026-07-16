@@ -128,31 +128,16 @@ def extract_preview_bytes(path):
 
 def decode_preview(path, orientation=None, max_edge=None):
     """QImage of the preview, orientation applied, optionally scaled so the
-    long edge is max_edge.
+    long edge is max_edge. Runs on the calling (pool) thread.
 
-    Runs the actual decode on the single native-imaging thread (native_exec).
-    On Windows the native Qt image decoder (QImageReader.read) corrupts the
-    process heap when it runs CONCURRENTLY with pyexiv2/exiv2 in another
-    thread - a hard access violation in pyexiv2.Image.__init__, reproduced
-    with four pool threads decoding JPEGs while the metadata reader opened a
-    file (crash log 2026-07-16). Confining pyexiv2 and rawpy to one thread was
-    not enough while Qt decode still overlapped; so the Qt decode is confined
-    to that same thread too. All native imaging is now strictly serial; the
-    QImage returned is a value type and safe to hand back to the pool thread.
-    The GUI thread never blocks on this - decode happens in the pool, which
-    dispatches here.
+    The Qt image decode (QImageReader.read) runs here, in parallel across the
+    pool - it was briefly confined to the native-imaging thread on suspicion
+    of a Qt-vs-pyexiv2 heap conflict, but a crash log showed pyexiv2 still
+    crashing while the decode threads were only in Python dispatch code (no
+    concurrent native Qt work), so that theory was wrong and the serialization
+    only cost speed. Only the not-thread-safe libraries (pyexiv2 via
+    read_orientation, rawpy via extract_preview_bytes) go through native_exec.
     """
-    return native_exec.run(_decode_preview_native, path, orientation, max_edge)
-
-
-def _decode_preview_native(path, orientation=None, max_edge=None):
-    # Scaling happens INSIDE the decoder (QImageReader.setScaledSize): for JPEG
-    # libjpeg then decodes at a reduced DCT scale instead of producing 20
-    # megapixels that are thrown away right after. This was the 'reading JPEGs
-    # makes the program extremely slow' bug: a 256-px thumb of an EOS R6 JPEG
-    # cost a full-resolution decode. Scaled decode is ~an order of magnitude
-    # cheaper. (extract_preview_bytes / read_orientation below re-enter
-    # native_exec.run, which runs inline when already on this thread.)
     ext = os.path.splitext(path)[1].lower()
     if ext in ('.jpg', '.jpeg'):
         reader = QImageReader(path)
