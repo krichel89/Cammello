@@ -148,19 +148,21 @@ _XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
 
 
 def _read_xmp_from(path):
-    img = pyexiv2.Image(path)
-    try:
-        return img.read_xmp() or {}
-    finally:
-        img.close()
+    with PYEXIV2_LOCK:
+        img = pyexiv2.Image(path)
+        try:
+            return img.read_xmp() or {}
+        finally:
+            img.close()
 
 
 def _write_xmp_to(path, payload):
-    img = pyexiv2.Image(path)
-    try:
-        img.modify_xmp(payload)
-    finally:
-        img.close()
+    with PYEXIV2_LOCK:
+        img = pyexiv2.Image(path)
+        try:
+            img.modify_xmp(payload)
+        finally:
+            img.close()
 
 
 def read_item_metadata(item):

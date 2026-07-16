@@ -1,4 +1,5 @@
 """Logging setup (file + in-app log tab + console), with credential masking."""
+import faulthandler
 import os
 import logging
 import tempfile
@@ -16,6 +17,34 @@ def get_log_path():
         return os.path.join(base, 'cammello_debug.log')
     except Exception:
         return os.path.join(tempfile.gettempdir(), 'cammello_debug.log')
+
+
+# faulthandler needs its file object to stay alive for the whole run; a
+# module-level reference keeps it from being garbage-collected.
+_CRASH_LOG_FILE = None
+
+
+def _enable_faulthandler(log_path):
+    """Write native crash tracebacks (segfaults etc.) next to the log file.
+
+    Python logging cannot catch crashes inside native libraries (pyexiv2,
+    rawpy, Qt) - the process just dies and the debug log ends mid-line.
+    faulthandler dumps the Python-level stack of every thread into
+    cammello_crash.log at the moment of the crash, which is usually enough
+    to see WHICH call went down. Returns the crash log path or None.
+    """
+    global _CRASH_LOG_FILE
+    try:
+        path = os.path.join(os.path.dirname(log_path), 'cammello_crash.log')
+        _CRASH_LOG_FILE = open(path, 'a', encoding='utf-8')
+        _CRASH_LOG_FILE.write('--- %s %s started %s ---\n' % (
+            APP_NAME, __version__,
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        _CRASH_LOG_FILE.flush()
+        faulthandler.enable(file=_CRASH_LOG_FILE)
+        return path
+    except Exception:
+        return None                      # never let diagnostics break startup
 
 
 class LogEmitter(QObject):
@@ -75,7 +104,10 @@ def setup_logging():
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
+    crash_path = _enable_faulthandler(log_path)
     logger.info('%s %s started. Log file: %s', APP_NAME, __version__, log_path)
+    if crash_path:
+        logger.debug('faulthandler active. Crash log: %s', crash_path)
     return logger, emitter, gui_handler, log_path
 
 

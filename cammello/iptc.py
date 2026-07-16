@@ -72,11 +72,12 @@ def read_iptc(filepath):
     """
     if pyexiv2 is None:
         raise RuntimeError(unavailable_reason())
-    img = pyexiv2.Image(filepath)
-    try:
-        raw = img.read_iptc() or {}
-    finally:
-        img.close()
+    with PYEXIV2_LOCK:
+        img = pyexiv2.Image(filepath)
+        try:
+            raw = img.read_iptc() or {}
+        finally:
+            img.close()
     out = {}
     for key, exiv_key, _label, multi in IPTC_FIELDS:
         val = raw.get(exiv_key)
@@ -123,11 +124,12 @@ def write_iptc(filepath, data, target_path=None):
         else:
             payload[exiv_key] = val
 
-    img = pyexiv2.Image(path)
-    try:
-        img.modify_iptc(payload)
-    finally:
-        img.close()
+    with PYEXIV2_LOCK:
+        img = pyexiv2.Image(path)
+        try:
+            img.modify_iptc(payload)
+        finally:
+            img.close()
     return path
 
 

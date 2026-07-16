@@ -26,6 +26,8 @@ from PyQt5.QtCore import (QObject, QRunnable, QThreadPool, pyqtSignal, Qt,
                           QSize, QBuffer, QIODevice, QByteArray)
 from PyQt5.QtGui import QImage, QImageReader, QTransform
 
+from .constants import PYEXIV2_LOCK
+
 try:
     import rawpy
     _RAWPY_ERROR = None
@@ -62,11 +64,12 @@ def read_orientation(path):
     if pyexiv2 is None:
         return 1
     try:
-        img = pyexiv2.Image(path)
-        try:
-            val = (img.read_exif() or {}).get('Exif.Image.Orientation')
-        finally:
-            img.close()
+        with PYEXIV2_LOCK:
+            img = pyexiv2.Image(path)
+            try:
+                val = (img.read_exif() or {}).get('Exif.Image.Orientation')
+            finally:
+                img.close()
         return int(val) if val else 1
     except Exception:
         return 1
