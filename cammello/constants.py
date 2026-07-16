@@ -9,12 +9,12 @@ from PyQt5.QtCore import QRegExp
 __version__ = '0.11.1'
 
 # pyexiv2 is documented as NOT thread-safe ("Not thread safe, because pyexiv2
-# uses some global variables in C++", pyexiv2 README). Concurrent access
-# crashes natively - observed as the Windows exe crashing on folder scan,
-# where _MetadataReader (QThread) and the PreviewLoader pool (read_orientation)
-# hit pyexiv2 at the same time. EVERY pyexiv2.Image use anywhere in Cammello
-# must therefore hold this lock. RLock so nested calls within one thread
-# stay safe.
+# uses some global variables in C++", pyexiv2 README). A lock (this used to be
+# it) serializes calls but does NOT fix exiv2/XMP's thread-affine global state,
+# which still crashed on Windows when pyexiv2 was touched from more than one
+# thread. All native imaging work is therefore confined to a single dedicated
+# thread instead - see cammello/native_exec.py. This lock is kept only for
+# backward compatibility of the import and is no longer used.
 PYEXIV2_LOCK = threading.RLock()
 
 

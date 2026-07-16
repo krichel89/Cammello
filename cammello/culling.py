@@ -20,6 +20,7 @@ import threading
 
 from .constants import *
 from . import iptc as iptc_mod        # for available(); pyexiv2 access below
+from . import native_exec
 
 try:
     import pyexiv2
@@ -147,22 +148,31 @@ _XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
                  '<?xpacket end="w"?>')
 
 
+def _read_xmp_raw(path):
+    img = pyexiv2.Image(path)
+    try:
+        return img.read_xmp() or {}
+    finally:
+        img.close()
+
+
 def _read_xmp_from(path):
-    with PYEXIV2_LOCK:
-        img = pyexiv2.Image(path)
-        try:
-            return img.read_xmp() or {}
-        finally:
-            img.close()
+    # All pyexiv2 access is confined to the single native-imaging thread
+    # (see native_exec): exiv2/XMP is not thread-safe, and a lock alone did
+    # not prevent the Windows access-violation crash.
+    return native_exec.run(_read_xmp_raw, path)
+
+
+def _write_xmp_raw(path, payload):
+    img = pyexiv2.Image(path)
+    try:
+        img.modify_xmp(payload)
+    finally:
+        img.close()
 
 
 def _write_xmp_to(path, payload):
-    with PYEXIV2_LOCK:
-        img = pyexiv2.Image(path)
-        try:
-            img.modify_xmp(payload)
-        finally:
-            img.close()
+    native_exec.run(_write_xmp_raw, path, payload)
 
 
 def read_item_metadata(item):

@@ -26,7 +26,7 @@ from PyQt5.QtCore import (QObject, QRunnable, QThreadPool, pyqtSignal, Qt,
                           QSize, QBuffer, QIODevice, QByteArray)
 from PyQt5.QtGui import QImage, QImageReader, QTransform
 
-from .constants import PYEXIV2_LOCK
+from . import native_exec
 
 try:
     import rawpy
@@ -59,17 +59,20 @@ def raw_unavailable_reason():
     return _RAWPY_ERROR or 'rawpy is not installed'
 
 
+def _read_orientation_raw(path):
+    img = pyexiv2.Image(path)
+    try:
+        return (img.read_exif() or {}).get('Exif.Image.Orientation')
+    finally:
+        img.close()
+
+
 def read_orientation(path):
     """EXIF orientation (1-8) of a file; 1 when unknown."""
     if pyexiv2 is None:
         return 1
     try:
-        with PYEXIV2_LOCK:
-            img = pyexiv2.Image(path)
-            try:
-                val = (img.read_exif() or {}).get('Exif.Image.Orientation')
-            finally:
-                img.close()
+        val = native_exec.run(_read_orientation_raw, path)
         return int(val) if val else 1
     except Exception:
         return 1
@@ -85,6 +88,13 @@ def _apply_orientation(qimage, orientation):
     return qimage
 
 
+def _extract_thumb_raw(path):
+    """Runs on the native-imaging thread; returns a rawpy Thumbnail namedtuple
+    (its .data/.format are plain bytes/enum, safe to hand back across threads)."""
+    with rawpy.imread(path) as raw:
+        return raw.extract_thumb()
+
+
 def extract_preview_bytes(path):
     """JPEG bytes of the best available preview.
 
@@ -96,16 +106,12 @@ def extract_preview_bytes(path):
             return f.read()
     if rawpy is None:
         raise RuntimeError(raw_unavailable_reason())
-    # Under the same lock as pyexiv2: the Windows crash log (2026-07-16)
-    # showed an access violation with THREE pool threads concurrently inside
-    # rawpy.imread while pyexiv2 (already serialized) ran in a fourth thread.
-    # rawpy's docs consider separate instances usable in parallel, but
-    # empirically all crashing runs had concurrent imread calls - so ALL
-    # native image-library work is serialized until proven safe. JPEG
-    # previews and the QImageReader decode stay parallel.
-    with PYEXIV2_LOCK:
-        with rawpy.imread(path) as raw:
-            thumb = raw.extract_thumb()
+    # rawpy (libraw) runs on the SAME single native-imaging thread as
+    # pyexiv2 (see native_exec): earlier Windows crash logs showed access
+    # violations with several rawpy.imread threads active at once. The Qt
+    # decode below stays parallel across the pool; only this short native
+    # thumb extraction serializes onto the dedicated thread.
+    thumb = native_exec.run(_extract_thumb_raw, path)
     if thumb.format == rawpy.ThumbFormat.JPEG:
         return thumb.data
     # Bitmap fallback: encode to JPEG once so the rest of the pipeline is

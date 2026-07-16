@@ -16,6 +16,7 @@ import re
 import shutil
 
 from .constants import *
+from . import native_exec
 
 try:
     import pyexiv2
@@ -72,12 +73,7 @@ def read_iptc(filepath):
     """
     if pyexiv2 is None:
         raise RuntimeError(unavailable_reason())
-    with PYEXIV2_LOCK:
-        img = pyexiv2.Image(filepath)
-        try:
-            raw = img.read_iptc() or {}
-        finally:
-            img.close()
+    raw = native_exec.run(_read_iptc_raw, filepath)
     out = {}
     for key, exiv_key, _label, multi in IPTC_FIELDS:
         val = raw.get(exiv_key)
@@ -124,13 +120,24 @@ def write_iptc(filepath, data, target_path=None):
         else:
             payload[exiv_key] = val
 
-    with PYEXIV2_LOCK:
-        img = pyexiv2.Image(path)
-        try:
-            img.modify_iptc(payload)
-        finally:
-            img.close()
+    native_exec.run(_modify_iptc_raw, path, payload)
     return path
+
+
+def _read_iptc_raw(filepath):
+    img = pyexiv2.Image(filepath)
+    try:
+        return img.read_iptc() or {}
+    finally:
+        img.close()
+
+
+def _modify_iptc_raw(path, payload):
+    img = pyexiv2.Image(path)
+    try:
+        img.modify_iptc(payload)
+    finally:
+        img.close()
 
 
 # ── MediaWiki -> IPTC mapping ────────────────────────────────────────────────
