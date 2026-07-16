@@ -40,6 +40,12 @@ try:
 except Exception:
     pyexiv2 = None
 
+# RAW extensions that must never be opened with pyexiv2 (exiv2 crashes on some,
+# e.g. .RW2). Kept in sync with culling.RAW_EXTENSIONS; duplicated here to
+# avoid an import cycle (culling imports heavy siblings).
+_RAW_EXTS = {'.cr3', '.cr2', '.crw', '.nef', '.nrw', '.arw', '.raf',
+             '.orf', '.rw2', '.dng', '.pef', '.srw', '.x3f'}
+
 THUMB_EDGE = 256          # long edge of the thumbnail level
 
 # EXIF orientation -> (rotation degrees clockwise, mirror horizontally).
@@ -59,20 +65,40 @@ def raw_unavailable_reason():
     return _RAWPY_ERROR or 'rawpy is not installed'
 
 
-def _read_orientation_raw(path):
-    img = pyexiv2.Image(path)
-    try:
-        return (img.read_exif() or {}).get('Exif.Image.Orientation')
-    finally:
-        img.close()
+def _read_orientation_pillow(path):
+    """EXIF orientation via Pillow - no pyexiv2. Pillow coexists with Qt
+    without the crashes exiv2 causes, and is already a dependency."""
+    from PIL import Image
+    with Image.open(path) as im:
+        exif = im.getexif()
+    return exif.get(0x0112)          # 0x0112 = Orientation
+
+
+# libraw flip code -> EXIF orientation (1/3/6/8). libraw: 0=none, 3=180,
+# 5=90 CCW, 6=90 CW.
+_FLIP_TO_ORIENTATION = {0: 1, 3: 3, 5: 8, 6: 6}
+
+
+def _raw_orientation_via_rawpy(path):
+    if rawpy is None:
+        return 1
+    with rawpy.imread(path) as raw:
+        flip = getattr(raw.sizes, 'flip', 0)
+    return _FLIP_TO_ORIENTATION.get(flip, 1)
 
 
 def read_orientation(path):
-    """EXIF orientation (1-8) of a file; 1 when unknown."""
-    if pyexiv2 is None:
-        return 1
+    """EXIF orientation (1-8) of a file; 1 when unknown.
+
+    pyexiv2 is never used here - exiv2 crashes in the scan process. JPEG
+    orientation comes from Pillow, RAW orientation from libraw via rawpy.
+    Both libraries coexist with Qt without the exiv2 crash.
+    """
+    ext = os.path.splitext(path)[1].lower()
     try:
-        val = native_exec.run(_read_orientation_raw, path)
+        if ext in _RAW_EXTS:
+            return native_exec.run(_raw_orientation_via_rawpy, path)
+        val = _read_orientation_pillow(path)
         return int(val) if val else 1
     except Exception:
         return 1

@@ -27,6 +27,54 @@ try:
 except Exception:
     pyexiv2 = None
 
+# ── XMP rating/label reading WITHOUT pyexiv2 ────────────────────────────────
+#
+# The folder scan must never call pyexiv2. exiv2 crashes hard (uncatchable
+# Windows access violation) somewhere in the scan - not reproducible in
+# isolation (pyexiv2 alone, Qt alone, and pyexiv2+Qt interleaved single-thread
+# all pass), so the trigger is some combination we could not pin down. Rather
+# than keep chasing it, the read path avoids the native library entirely:
+# rating (xmp:Rating) and colour label (xmp:Label) are plain XMP, which is XML
+# text. In a sidecar the whole file is that XML; in a JPEG it sits in an APP1
+# XMP packet as UTF-8 text. Both are found by locating the <x:xmpmeta> block in
+# the raw bytes and matching the two tags (attribute form, as Photo Mechanic /
+# Lightroom write, and element form). Writing still uses pyexiv2 (write_item_
+# metadata), but that is user-triggered and one file at a time, not the scan.
+
+_XMP_META_START = b'<x:xmpmeta'
+_XMP_META_END = b'</x:xmpmeta>'
+_RE_RATING_ATTR = re.compile(r'xmp:Rating\s*=\s*"(-?\d+(?:\.\d+)?)"')
+_RE_RATING_ELEM = re.compile(r'<xmp:Rating>\s*(-?\d+(?:\.\d+)?)\s*</xmp:Rating>')
+_RE_LABEL_ATTR = re.compile(r'xmp:Label\s*=\s*"([^"]*)"')
+_RE_LABEL_ELEM = re.compile(r'<xmp:Label>\s*([^<]*?)\s*</xmp:Label>')
+
+
+def _read_rating_label_text(path):
+    """Return (rating_str_or_None, label_str_or_None) by reading the XMP as
+    text. No native library. Works for .xmp sidecars and for JPEGs with an
+    embedded XMP packet. Returns (None, None) if the file has no XMP or cannot
+    be read."""
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return None, None
+    i = data.find(_XMP_META_START)
+    if i < 0:
+        return None, None
+    j = data.find(_XMP_META_END, i)
+    block = data[i:j + len(_XMP_META_END)] if j >= 0 else data[i:]
+    text = block.decode('utf-8', 'replace')
+    rating = None
+    m = _RE_RATING_ATTR.search(text) or _RE_RATING_ELEM.search(text)
+    if m:
+        rating = m.group(1)
+    label = None
+    m = _RE_LABEL_ATTR.search(text) or _RE_LABEL_ELEM.search(text)
+    if m:
+        label = m.group(1)
+    return rating, label
+
 # ── File types ───────────────────────────────────────────────────────────────
 
 RAW_EXTENSIONS = {'.cr3', '.cr2', '.crw', '.nef', '.nrw', '.arw', '.raf',
@@ -176,28 +224,22 @@ def _write_xmp_to(path, payload):
 
 
 def read_item_metadata(item):
-    """Fill item.rating / item.label from disk.
+    """Fill item.rating / item.label from disk WITHOUT pyexiv2.
 
-    Precedence: sidecar (LR's truth for RAWs) > embedded XMP in the RAW
-    (e.g. the in-camera rating of an EOS R6) > embedded XMP in the JPEG.
+    Precedence: sidecar (the Photo Mechanic / Lightroom source of truth) >
+    embedded XMP in the JPEG. The RAW file is never read - exiv2 crashes on
+    some RAW formats and the scan avoids the native library entirely (see
+    _read_rating_label_text). A RAW rated only in-camera, with no sidecar and
+    no JPEG partner, reads as unrated.
     """
-    if pyexiv2 is None:
-        raise RuntimeError('pyexiv2 is not installed')
     sources = []
     sc = item.sidecar_path
     if sc and os.path.exists(sc):
         sources.append(sc)
-    if item.raw_path:
-        sources.append(item.raw_path)
     if item.jpg_path:
         sources.append(item.jpg_path)
     for src in sources:
-        try:
-            xmp = _read_xmp_from(src)
-        except Exception:
-            continue
-        rating = xmp.get('Xmp.xmp.Rating')
-        label = xmp.get('Xmp.xmp.Label')
+        rating, label = _read_rating_label_text(src)
         if rating is None and label is None:
             continue
         try:
