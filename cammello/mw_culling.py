@@ -7,7 +7,9 @@ Keyboard model (the whole point of the tab - one hand, no dialogs):
   X            reject (rating -1) + advance
   6-9          red/yellow/green/blue directly (Lightroom's own key layout;
                purple has no key in LR either)
-  Z            toggle 100% zoom, F fullscreen
+  Z            toggle 100% zoom, F fullscreen (double-click does too)
+  Home/End     jump to the first / last image
+  I            toggle the EXIF info overlay
 Number keys auto-advance (checkbox to turn that off).
 
 The tab widget itself owns the keyboard: every child has NoFocus so arrow
@@ -290,6 +292,7 @@ class MWCullingMixin:
         self._cull_number_mode = 'rating'      # or 'color'
         self._cull_grid = False
         self._cull_fs = None
+        self._cull_show_exif = False   # i key: EXIF overlay on/off
         self._cull_row_by_path = {}
         self._cull_row_by_item = {}
         self._cull_reader = None
@@ -383,6 +386,8 @@ class MWCullingMixin:
         split = QSplitter(Qt.Vertical)
         self.cull_view = CullImageView()
         self.cull_view.zoom_requested.connect(self._cull_request_full)
+        self.cull_view.fullscreen_requested.connect(
+            self._cull_toggle_fullscreen)
         self.cull_view.zoom_changed.connect(self._cull_zoom_changed)
         split.addWidget(self.cull_view)
 
@@ -633,6 +638,7 @@ class MWCullingMixin:
             [i.display_path for i in self._cull_visible],
             idx, self._cull_direction)
         self._cull_set_status()
+        self._cull_update_info_overlay()
 
     def _cull_on_loaded(self, key, level):
         if not (0 <= self._cull_index < len(self._cull_visible)):
@@ -687,6 +693,37 @@ class MWCullingMixin:
         else:
             self.cull_view.set_overlay('')
 
+    def _cull_update_info_overlay(self):
+        """EXIF overlay (i key): filename plus camera/lens/exposure summary,
+        top-left of the image view. Reading one file's EXIF header via Pillow
+        is fast enough to do synchronously on navigation. RAW-only items have
+        no Pillow-readable EXIF; the overlay says so instead of hiding."""
+        if not self._cull_show_exif:
+            self.cull_view.show_info_overlay(False)
+            return
+        item = self._cull_current_item()
+        if item is None:
+            self.cull_view.show_info_overlay(False)
+            return
+        info = previews.read_exif_summary(item.display_path)
+        lines = [f'<b>{os.path.basename(item.display_path)}</b>']
+        if info:
+            if 'camera' in info:
+                lines.append(info['camera'])
+            if 'lens' in info:
+                lines.append(info['lens'])
+            expo = '  ·  '.join(info[k] for k in
+                                ('focal', 'aperture', 'shutter', 'iso')
+                                if k in info)
+            if expo:
+                lines.append(expo)
+            if 'captured' in info:
+                lines.append(info['captured'])
+        else:
+            lines.append(tr('No EXIF data'))
+        self.cull_view.set_info_overlay('<br>'.join(lines))
+        self.cull_view.show_info_overlay(True)
+
     # ── Keyboard ──────────────────────────────────────────────────────────────
 
     def _cull_update_mode_label(self):
@@ -705,6 +742,15 @@ class MWCullingMixin:
             # one image in loupe view.
             step = self._cull_grid_columns() if self._cull_grid else 1
             self._cull_step(step if key == Qt.Key_Down else -step)
+        elif key == Qt.Key_Home:
+            if self._cull_visible:
+                self._cull_show_index(0)
+        elif key == Qt.Key_End:
+            if self._cull_visible:
+                self._cull_show_index(len(self._cull_visible) - 1)
+        elif key == Qt.Key_I:
+            self._cull_show_exif = not self._cull_show_exif
+            self._cull_update_info_overlay()
         elif key == Qt.Key_M:
             self._cull_number_mode = ('color'
                                       if self._cull_number_mode == 'rating'

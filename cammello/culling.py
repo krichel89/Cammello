@@ -49,6 +49,15 @@ _RE_LABEL_ATTR = re.compile(r'xmp:Label\s*=\s*"([^"]*)"')
 _RE_LABEL_ELEM = re.compile(r'<xmp:Label>\s*([^<]*?)\s*</xmp:Label>')
 
 
+# The XMP APP1 packet of a JPEG sits in the header segments, i.e. before the
+# compressed image data; a bounded read of the file head finds it without
+# pulling a 20+ MB camera JPEG fully into memory (the metadata scan of a
+# 3000-image card was dominated by exactly that I/O). Sidecars are tiny and
+# fit in the first read anyway. If the marker is NOT in the head, the full
+# read runs as a fallback, so correctness is unchanged for exotic layouts.
+_XMP_HEAD_BYTES = 4 * 1024 * 1024
+
+
 def _read_rating_label_text(path):
     """Return (rating_str_or_None, label_str_or_None) by reading the XMP as
     text. No native library. Works for .xmp sidecars and for JPEGs with an
@@ -56,7 +65,11 @@ def _read_rating_label_text(path):
     be read."""
     try:
         with open(path, 'rb') as f:
-            data = f.read()
+            data = f.read(_XMP_HEAD_BYTES)
+            if (len(data) == _XMP_HEAD_BYTES
+                    and (_XMP_META_START not in data
+                         or _XMP_META_END not in data)):
+                data += f.read()   # rare: XMP starts or ends beyond the head
     except OSError:
         return None, None
     i = data.find(_XMP_META_START)

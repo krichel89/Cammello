@@ -89,6 +89,11 @@ jobs:
           # libexiv2.dylib" und der Culling-/IPTC-/FTP-Teil verschwindet
           # (so geschehen bei v0.11.1). brew install exiv2 zieht alle drei
           # als Abhaengigkeiten mit.
+          # HOMEBREW_NO_REQUIRE_TAP_TRUST: der GitHub-Runner hat vorinstallierte
+          # Taps (z. B. aws/tap), die als "nicht vertraut" gelten; ohne diese
+          # Variable bricht brew mit einer Trust-Warnung ab. Auf einem
+          # Wegwerf-CI-Runner ist das Abschalten unbedenklich.
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
           brew install exiv2
 
       - name: Install Dependencies

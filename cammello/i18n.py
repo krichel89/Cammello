@@ -1871,6 +1871,12 @@ TRANSLATIONS = {
         'fr': 'Autre (code ISO)…',
         'it': 'Altro (codice ISO)…',
     },
+    'No EXIF data': {
+        'de': 'Keine EXIF-Daten',
+        'es': 'Sin datos EXIF',
+        'fr': 'Pas de données EXIF',
+        'it': 'Nessun dato EXIF',
+    },
     'Remove saved language…': {
         'de': 'Gespeicherte Sprache entfernen…',
         'es': 'Eliminar idioma guardado…',

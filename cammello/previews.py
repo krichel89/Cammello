@@ -26,7 +26,6 @@ from PyQt5.QtCore import (QObject, QRunnable, QThreadPool, pyqtSignal, Qt,
                           QSize, QBuffer, QIODevice, QByteArray)
 from PyQt5.QtGui import QImage, QImageReader, QTransform
 
-from . import native_exec
 
 try:
     import rawpy
@@ -97,11 +96,118 @@ def read_orientation(path):
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext in _RAW_EXTS:
-            return native_exec.run(_raw_orientation_via_rawpy, path)
+            return _raw_orientation_via_rawpy(path)
         val = _read_orientation_pillow(path)
         return int(val) if val else 1
     except Exception:
         return 1
+
+
+def _raw_exif_summary(path):
+    """EXIF summary for a RAW file, without pyexiv2. Exposure data comes from
+    libraw via rawpy (raw.other: aperture/focal/shutter/ISO/timestamp,
+    raw.lens: lens make+model) - available for every format libraw decodes,
+    CR3 and RW2 included. The camera name is not exposed by rawpy; if the
+    pure-Python exifread package is installed it is filled in from there
+    (works for TIFF-based RAWs; CR3 support in exifread is unverified), and
+    simply omitted otherwise."""
+    out = {}
+    try:
+        with rawpy.imread(path) as raw:
+            o = raw.other
+            lens = raw.lens
+            if getattr(o, 'focal_length', 0):
+                out['focal'] = f'{float(o.focal_length):g} mm'
+            if getattr(o, 'aperture', 0):
+                out['aperture'] = f'f/{float(o.aperture):g}'
+            sp = float(getattr(o, 'shutter_speed', 0) or 0)
+            if sp > 0:
+                out['shutter'] = (f'1/{round(1 / sp)} s' if sp < 1
+                                  else f'{sp:g} s')
+            if getattr(o, 'iso_speed', 0):
+                out['iso'] = f'ISO {int(o.iso_speed)}'
+            ts = int(getattr(o, 'timestamp', 0) or 0)
+            if ts > 0:
+                import datetime
+                out['captured'] = datetime.datetime.fromtimestamp(
+                    ts).strftime('%Y:%m:%d %H:%M:%S')
+            lmodel = (getattr(lens, 'model', '') or '').strip()
+            lmake = (getattr(lens, 'make', '') or '').strip()
+            if lmodel:
+                out['lens'] = (lmodel if lmodel.lower().startswith(
+                    lmake.lower()) or not lmake else f'{lmake} {lmodel}')
+    except Exception:
+        return {}
+    # Camera make/model via exifread, when available (optional, pure Python).
+    try:
+        import exifread
+        with open(path, 'rb') as f:
+            tags = exifread.process_file(f, details=False)
+        make = str(tags.get('Image Make', '') or '').strip()
+        model = str(tags.get('Image Model', '') or '').strip()
+        if model:
+            out['camera'] = model if model.lower().startswith(make.lower()) \
+                else f'{make} {model}'.strip()
+    except Exception:
+        pass
+    return out
+
+
+def read_exif_summary(path):
+    """Small EXIF summary for the culling info overlay, without pyexiv2.
+    JPEGs are read via Pillow; RAW files via libraw/rawpy (plus exifread for
+    the camera name when installed) - see _raw_exif_summary. Returns a dict
+    with any of the keys camera, lens, focal, aperture, shutter, iso,
+    captured; empty dict when nothing is readable."""
+    if os.path.splitext(path)[1].lower() in _RAW_EXTS:
+        return _raw_exif_summary(path)
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            exif = im.getexif()
+            ifd = exif.get_ifd(0x8769)   # Exif sub-IFD
+    except Exception:
+        return {}
+    out = {}
+    make = str(exif.get(0x010F, '')).strip()
+    model = str(exif.get(0x0110, '')).strip()
+    if model:
+        # Canon writes the make into the model already; avoid "Canon Canon".
+        out['camera'] = model if model.lower().startswith(make.lower()) \
+            else f'{make} {model}'.strip()
+    lens = str(ifd.get(0xA434, '')).strip()
+    if lens:
+        out['lens'] = lens
+    fl = ifd.get(0x920A)
+    if fl:
+        try:
+            out['focal'] = f'{float(fl):g} mm'
+        except (TypeError, ValueError):
+            pass
+    fn = ifd.get(0x829D)
+    if fn:
+        try:
+            out['aperture'] = f'f/{float(fn):g}'
+        except (TypeError, ValueError):
+            pass
+    et = ifd.get(0x829A)
+    if et:
+        try:
+            et = float(et)
+            out['shutter'] = (f'1/{round(1 / et)} s' if 0 < et < 1
+                              else f'{et:g} s')
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    iso = ifd.get(0x8827)
+    if iso:
+        if isinstance(iso, (tuple, list)):
+            iso = iso[0] if iso else None
+        if iso:
+            out['iso'] = f'ISO {iso}'
+    dt = str(ifd.get(0x9003, '')).strip()      # DateTimeOriginal
+    if dt:
+        out['captured'] = dt
+    return out
 
 
 def _apply_orientation(qimage, orientation):
@@ -132,12 +238,13 @@ def extract_preview_bytes(path):
             return f.read()
     if rawpy is None:
         raise RuntimeError(raw_unavailable_reason())
-    # rawpy (libraw) runs on the SAME single native-imaging thread as
-    # pyexiv2 (see native_exec): earlier Windows crash logs showed access
-    # violations with several rawpy.imread threads active at once. The Qt
-    # decode below stays parallel across the pool; only this short native
-    # thumb extraction serializes onto the dedicated thread.
-    thumb = native_exec.run(_extract_thumb_raw, path)
+    # rawpy runs directly on the calling pool thread, in parallel. It was
+    # temporarily serialized through native_exec while rawpy was a crash
+    # suspect; the actual culprit turned out to be pyexiv2 on the scan path
+    # (now removed entirely), and rawpy's docs state separate RawPy instances
+    # are safe to use concurrently - which is exactly what the pool does.
+    # Parallel RAW thumb extraction restores the pre-0.11.1 scan speed.
+    thumb = _extract_thumb_raw(path)
     if thumb.format == rawpy.ThumbFormat.JPEG:
         return thumb.data
     # Bitmap fallback: encode to JPEG once so the rest of the pipeline is
@@ -156,13 +263,11 @@ def decode_preview(path, orientation=None, max_edge=None):
     """QImage of the preview, orientation applied, optionally scaled so the
     long edge is max_edge. Runs on the calling (pool) thread.
 
-    The Qt image decode (QImageReader.read) runs here, in parallel across the
-    pool - it was briefly confined to the native-imaging thread on suspicion
-    of a Qt-vs-pyexiv2 heap conflict, but a crash log showed pyexiv2 still
-    crashing while the decode threads were only in Python dispatch code (no
-    concurrent native Qt work), so that theory was wrong and the serialization
-    only cost speed. Only the not-thread-safe libraries (pyexiv2 via
-    read_orientation, rawpy via extract_preview_bytes) go through native_exec.
+    Everything here runs in parallel across the pool: the Qt image decode
+    (QImageReader.read), Pillow orientation reads, and rawpy thumb extraction
+    (separate RawPy instances are concurrency-safe per its docs). pyexiv2 is
+    not used anywhere on this read path - see the crash post-mortem in
+    culling._read_rating_label_text.
     """
     ext = os.path.splitext(path)[1].lower()
     if ext in ('.jpg', '.jpeg'):

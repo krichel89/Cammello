@@ -12,6 +12,7 @@ class CullImageView(QGraphicsView):
 
     zoom_requested = pyqtSignal()      # emitted on click/Z; mixin loads 'full'
     zoom_changed = pyqtSignal(float)   # current scale factor (1.0 = 100%)
+    fullscreen_requested = pyqtSignal()  # double-click toggles fullscreen
 
     MIN_ZOOM, MAX_ZOOM = 0.05, 4.0
 
@@ -39,6 +40,14 @@ class CullImageView(QGraphicsView):
             'padding: 6px 12px; border-radius: 6px; font-size: 20px;')
         self.overlay.setTextFormat(Qt.RichText)
         self.overlay.hide()
+
+        # Top-left info overlay (EXIF summary, toggled with the i key).
+        self.info_overlay = QLabel(self)
+        self.info_overlay.setStyleSheet(
+            'background: rgba(0, 0, 0, 165); color: white;'
+            'padding: 8px 12px; border-radius: 6px; font-size: 13px;')
+        self.info_overlay.setTextFormat(Qt.RichText)
+        self.info_overlay.hide()
 
     # -- content ---------------------------------------------------------------
 
@@ -132,6 +141,16 @@ class CullImageView(QGraphicsView):
         self.overlay.move(self.width() - self.overlay.width() - m,
                           self.height() - self.overlay.height() - m)
 
+    def set_info_overlay(self, html):
+        self.info_overlay.setText(html)
+        self.info_overlay.adjustSize()
+        self.info_overlay.move(14, 14)
+
+    def show_info_overlay(self, on):
+        self.info_overlay.setVisible(on)
+        if on:
+            self.info_overlay.move(14, 14)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._fit:
@@ -152,6 +171,19 @@ class CullImageView(QGraphicsView):
             # mouseReleaseEvent; store the press position to tell them apart.
             self._press_pos = event.pos()
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # Qt delivers the second press of a double-click as THIS event,
+            # but the FIRST press already ran the single-click zoom-to-100%.
+            # Undo that so fullscreen starts fitted, then let the tab toggle
+            # fullscreen (same path as the F key).
+            if not self._fit:
+                self.fit()
+            self.fullscreen_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event):
         if (event.button() == Qt.LeftButton and not self._fit
