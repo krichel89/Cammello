@@ -5,13 +5,15 @@ from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
                              QTextEdit, QDialog, QDialogButtonBox, QCheckBox,
                              QTableWidget, QTableWidgetItem, QStyledItemDelegate,
-                             QAbstractItemView, QProgressBar, QComboBox)
+                             QAbstractItemView, QProgressBar, QComboBox,
+                             QApplication, QLayout, QSizePolicy)
 from PyQt5.QtCore import (Qt, QEvent, pyqtSignal, QUrl, QSize, QSettings,
-                          QObject)
+                          QObject, QRect, QPoint)
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon
 from .constants import *
 from .i18n import tr
 from .sdc import *
+from . import credentials
 
 
 class FilenameDelegate(QStyledItemDelegate):
@@ -65,7 +67,9 @@ class LoginDialog(QDialog):
         self.user_edit.setPlaceholderText(tr('e.g.') + ' Seewolf@Cammello')
         # Prefilled when a password is stored via Settings -> MediaWiki
         # account; otherwise empty = asked per session (old behavior).
-        self.pass_edit = QLineEdit(self.settings.value('password', ''))
+        self.pass_edit = QLineEdit(
+            credentials.load_mediawiki_password(
+                self.settings, self.user_edit.text()))
         self.pass_edit.setEchoMode(QLineEdit.Password)
 
         form.addRow(tr('Username:'), self.user_edit)
@@ -99,6 +103,165 @@ class LoginDialog(QDialog):
         self.settings.setValue('api_url', self.url_edit.text())
         self.settings.setValue('username', self.user_edit.text())
         return self.url_edit.text(), self.user_edit.text(), self.pass_edit.text()
+
+
+# ── OAuth sign-in (mw_oauth) ─────────────────────────────────────────────────
+# Storage glue lives here (UI layer): access token/secret go to the OS
+# keyring (credentials.mw_oauth_slot); when no keyring backend exists they
+# fall back to QSettings 'Login' - same trust level as the old plaintext
+# BotPassword, so the app keeps working everywhere.
+
+def stored_oauth_tokens():
+    """-> (access_token, access_secret), ('', '') if not authorized."""
+    tok = credentials.load(credentials.mw_oauth_slot('token'))
+    sec = credentials.load(credentials.mw_oauth_slot('secret'))
+    if tok and sec:
+        return tok, sec
+    s = QSettings(APP_NAME, 'Login')
+    return (s.value('oauth_token', '') or '',
+            s.value('oauth_secret', '') or '')
+
+
+def clear_stored_oauth():
+    """Remove the authorization locally (keyring + QSettings fallback).
+
+    The server-side grant stays until the user revokes it on
+    Special:OAuthManageMyGrants - worth mentioning in the docs."""
+    credentials.delete(credentials.mw_oauth_slot('token'))
+    credentials.delete(credentials.mw_oauth_slot('secret'))
+    s = QSettings(APP_NAME, 'Login')
+    for key in ('oauth_token', 'oauth_secret', 'oauth_username'):
+        s.remove(key)
+    s.sync()
+
+
+class OAuthLoginDialog(QDialog):
+    """Browser-based OAuth sign-in with a copyable authorize link.
+
+    The loopback callback (mw_oauth) listens on 127.0.0.1 and is reached
+    from ANY browser on this machine, so the link can be copied into a
+    second browser that holds the wiki session instead of the default
+    browser (explicit requirement).  The 'show link only' checkbox
+    persists as 'oauth_show_only' in QSettings 'Login'.
+
+    On success the tokens are stored (see stored_oauth_tokens above), the
+    username lands in QSettings 'Login'/'oauth_username', and the dialog
+    accepts; the caller reads .username afterwards.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr('Wikimedia sign-in (OAuth)'))
+        self.setMinimumWidth(520)
+        self.settings = QSettings(APP_NAME, 'Login')
+        self.username = ''
+        self._worker = None
+
+        v = QVBoxLayout(self)
+        intro = QLabel(tr(
+            'Cammello asks Wikimedia for permission to upload and edit on '
+            'Commons in your name. No password is entered in Cammello. '
+            'Open the link in any browser on this computer where you are '
+            'signed in to Wikimedia - a second browser works too; Cammello '
+            'receives the confirmation automatically.'))
+        intro.setWordWrap(True)
+        v.addWidget(intro)
+
+        self.show_only_cb = QCheckBox(
+            tr('Show the link only - do not open the default browser'))
+        self.show_only_cb.setChecked(
+            self.settings.value('oauth_show_only', False, type=bool))
+        v.addWidget(self.show_only_cb)
+
+        self.start_btn = QPushButton(tr('Start authorization'))
+        self.start_btn.clicked.connect(self._start)
+        v.addWidget(self.start_btn)
+
+        url_row = QHBoxLayout()
+        url_row.addWidget(QLabel(tr('Authorization link:')))
+        self.url_edit = QLineEdit()
+        self.url_edit.setReadOnly(True)
+        url_row.addWidget(self.url_edit, 1)
+        self.copy_btn = QPushButton(tr('Copy'))
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._copy_url)
+        url_row.addWidget(self.copy_btn)
+        self.open_btn = QPushButton(tr('Open in default browser'))
+        self.open_btn.setEnabled(False)
+        self.open_btn.clicked.connect(self._open_url)
+        url_row.addWidget(self.open_btn)
+        v.addLayout(url_row)
+
+        self.status_label = QLabel('')
+        self.status_label.setWordWrap(True)
+        v.addWidget(self.status_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.rejected.connect(self.reject)
+        v.addWidget(buttons)
+
+    # ── worker plumbing ──────────────────────────────────────────────────
+
+    def _start(self):
+        from .mw_oauth import OAuthAuthorizeWorker
+        self.settings.setValue('oauth_show_only',
+                               self.show_only_cb.isChecked())
+        self.settings.sync()
+        self.start_btn.setEnabled(False)
+        self.show_only_cb.setEnabled(False)
+        self._set_status(tr('Waiting for authorization in the browser…'),
+                         'orange')
+        self._worker = OAuthAuthorizeWorker(
+            auto_open=not self.show_only_cb.isChecked(), parent=self)
+        self._worker.authorize_url_ready.connect(self._on_url)
+        self._worker.succeeded.connect(self._on_success)
+        self._worker.failed.connect(self._on_failure)
+        self._worker.start()
+
+    def _on_url(self, url):
+        self.url_edit.setText(url)
+        self.url_edit.setCursorPosition(0)
+        self.copy_btn.setEnabled(True)
+        self.open_btn.setEnabled(True)
+
+    def _copy_url(self):
+        QApplication.clipboard().setText(self.url_edit.text())
+        self._set_status(tr('Link copied.'), 'green')
+
+    def _open_url(self):
+        QDesktopServices.openUrl(QUrl(self.url_edit.text()))
+
+    def _on_success(self, token, secret, username):
+        stored = (credentials.store(credentials.mw_oauth_slot('token'), token)
+                  and credentials.store(credentials.mw_oauth_slot('secret'),
+                                        secret))
+        if stored:
+            self.settings.remove('oauth_token')
+            self.settings.remove('oauth_secret')
+        else:
+            # no keyring backend: same trust level as the old plaintext
+            # BotPassword - degrade, do not fail
+            self.settings.setValue('oauth_token', token)
+            self.settings.setValue('oauth_secret', secret)
+        self.settings.setValue('oauth_username', username)
+        self.settings.sync()
+        self.username = username
+        self.accept()
+
+    def _on_failure(self, message):
+        self._set_status(message, 'red')
+        self.start_btn.setEnabled(True)
+        self.show_only_cb.setEnabled(True)
+
+    def _set_status(self, text, color):
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f'color: {color}')
+
+    def reject(self):
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait(2000)
+        super().reject()
 
 
 # ── Structured editor: language list, example, captions editor ──────────────────
@@ -538,3 +701,75 @@ class FileDropTableWidget(QTableWidget):
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
+
+
+class FlowLayout(QLayout):
+    """A layout that arranges its items left-to-right and wraps to the next
+    line when the width runs out (like word wrapping). Used for button rows so
+    they never force a wide minimum width that would push neighbours off-screen.
+
+    Adapted from Qt's official FlowLayout example.
+    """
+
+    def __init__(self, parent=None, margin=0, spacing=6):
+        super().__init__(parent)
+        if parent is not None:
+            self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+        self._items = []
+
+    def addItem(self, item):        # noqa: N802 (Qt override)
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):        # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):        # noqa: N802
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):    # noqa: N802
+        return True
+
+    def heightForWidth(self, width):    # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):    # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):             # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):          # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        x, y = rect.x(), rect.y()
+        line_height = 0
+        for item in self._items:
+            w = item.sizeHint().width()
+            h = item.sizeHint().height()
+            next_x = x + w + self._spacing
+            if next_x - self._spacing > rect.right() and line_height > 0:
+                x = rect.x()
+                y = y + line_height + self._spacing
+                next_x = x + w + self._spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+            x = next_x
+            line_height = max(line_height, h)
+        return y + line_height - rect.y()

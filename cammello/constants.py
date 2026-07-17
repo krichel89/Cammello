@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.11.3'
+__version__ = '0.11.8'
 
 # pyexiv2 is documented as NOT thread-safe ("Not thread safe, because pyexiv2
 # uses some global variables in C++", pyexiv2 README). A lock (this used to be

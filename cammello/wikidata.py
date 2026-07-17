@@ -73,6 +73,58 @@ def current_token(text, multi):
 
 
 
+def _wbsearch_entities(query, lang, timeout):
+    """Prefix/label search via wbsearchentities -> [(qid, label, desc)]."""
+    if not query:
+        return []
+    resp = requests.get(
+        WD_API_ENDPOINT,
+        params={'action': 'wbsearchentities', 'search': query,
+                'language': lang, 'uselang': lang, 'type': 'item',
+                'limit': 10, 'format': 'json'},
+        headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
+    data = resp.json()
+    return [(e.get('id', ''), e.get('label', ''), e.get('description', ''))
+            for e in data.get('search', [])]
+
+
+def _cirrus_search_entities(query, lang, timeout):
+    """Full-text (CirrusSearch) search -> [(qid, label, desc)].
+
+    More tolerant than wbsearchentities: word order does not matter and extra
+    tokens (ordinals, years, stray spaces) still match. Two calls: list=search
+    to get the QIDs, then wbgetentities for their labels/descriptions.
+    """
+    if not query:
+        return []
+    resp = requests.get(
+        WD_API_ENDPOINT,
+        params={'action': 'query', 'list': 'search', 'srsearch': query,
+                'srnamespace': 0, 'srlimit': 10, 'format': 'json'},
+        headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
+    hits = resp.json().get('query', {}).get('search', [])
+    qids = [h.get('title', '') for h in hits
+            if h.get('title', '').startswith('Q')]
+    if not qids:
+        return []
+    resp2 = requests.get(
+        WD_API_ENDPOINT,
+        params={'action': 'wbgetentities', 'ids': '|'.join(qids[:20]),
+                'props': 'labels|descriptions', 'languages': f'{lang}|en',
+                'format': 'json'},
+        headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
+    ents = resp2.json().get('entities', {})
+    out = []
+    for qid in qids:                       # keep the search ranking order
+        ent = ents.get(qid) or {}
+        labels = ent.get('labels', {})
+        descs = ent.get('descriptions', {})
+        label = (labels.get(lang) or labels.get('en') or {}).get('value', qid)
+        desc = (descs.get(lang) or descs.get('en') or {}).get('value', '')
+        out.append((qid, label, desc))
+    return out
+
+
 class WikidataSearchWorker(QThread):
     """Runs one wbsearchentities query off the GUI thread.
 
@@ -82,40 +134,33 @@ class WikidataSearchWorker(QThread):
     """
     results = pyqtSignal(int, list)
 
-    def __init__(self, query, lang, seq, timeout=8, parent=None):
+    def __init__(self, query, lang, seq, timeout=8, parent=None, fuzzy=False):
         super().__init__(parent)
         self._query = query
         self._lang = lang or 'en'
         self._seq = seq
         self._timeout = timeout
+        # fuzzy: when the prefix-based wbsearchentities returns little, fall
+        # back to CirrusSearch full-text (word-order independent, tolerant of
+        # ordinals / trailing noise like "78th Cannes Film Festival  ").
+        self._fuzzy = fuzzy
 
     def run(self):
         items = []
         try:
-            resp = requests.get(
-                WD_API_ENDPOINT,
-                params={
-                    'action': 'wbsearchentities',
-                    'search': self._query,
-                    'language': self._lang,
-                    'uselang': self._lang,
-                    'type': 'item',
-                    'limit': 10,
-                    'format': 'json',
-                },
-                headers={'User-Agent': WD_USER_AGENT},
-                timeout=self._timeout,
-            )
-            data = resp.json()
-            for entry in data.get('search', []):
-                items.append((
-                    entry.get('id', ''),
-                    entry.get('label', ''),
-                    entry.get('description', ''),
-                ))
+            query = re.sub(r'\s+', ' ', (self._query or '').strip())
+            items = _wbsearch_entities(query, self._lang, self._timeout)
+            if self._fuzzy and len(items) < 5:
+                have = {q for q, _l, _d in items}
+                extra = _cirrus_search_entities(
+                    query, self._lang, self._timeout)
+                for qid, label, desc in extra:
+                    if qid not in have:
+                        items.append((qid, label, desc))
+                        have.add(qid)
         except Exception:
             items = []
-        self.results.emit(self._seq, items)
+        self.results.emit(self._seq, items[:10])
 
 
 class WikidataCompleter(QCompleter):

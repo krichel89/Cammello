@@ -124,11 +124,11 @@ try:
     check('flickr mirror in settings', hasattr(w, 'flickr_api_key_mirror'))
     w.flickr_api_key_edit.setText('k123')
     check('flickr key primary->mirror', w.flickr_api_key_mirror.text() == 'k123')
-    if hasattr(w, 'cull_flickr_btn'):
-        check('culling has Flickr target', True)
-    else:
-        check('culling has Flickr target', not w._feat_culling,
-              'button missing although culling is on')
+    # Culling no longer sends to Flickr directly: the per-target buttons
+    # (MediaWiki/FTP/Flickr) were merged into one "Apply" button; Flickr
+    # stays reachable via its own tab.
+    check('culling has no Flickr target', not hasattr(w, 'cull_flickr_btn'))
+    check('culling has combined Apply', hasattr(w, '_cull_apply'))
     # FTP tab now has the shared file list + count label.
     check('ftp list exists', hasattr(w, 'ftp_list'))
     check('ftp count label exists', hasattr(w, 'ftp_count_lbl'))

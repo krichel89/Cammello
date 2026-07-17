@@ -4,6 +4,121 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.8] - 2026-07-17
+
+### Added
+- **Culling: filter by colour, multi-select.** Colour swatches in the filter
+  bar let several labels be shown at once; a grey swatch matches images with no
+  label. No swatch active shows every colour.
+- **Culling: "Reload folder" button** re-reads the current folder from disk
+  (ratings/labels changed elsewhere show up without reopening).
+- **Culling: `Cmd/Ctrl+A` selects all** visible thumbnails and `Cmd/Ctrl+D`
+  clears the selection.
+- **Settings: Special:BotPasswords is now a clickable link** in the MediaWiki
+  account section, with the required grants spelled out.
+
+### Changed
+- **Culling: the three send buttons became one "Apply".** MediaWiki, FTP and
+  Flickr targets were merged into a single "Apply" button that hands the
+  selection (or all filtered images) to the MediaWiki, IPTC and FTP tabs at
+  once, without uploading. "Folder…" stays separate; Flickr is reachable from
+  its own tab.
+- **Culling: the fullscreen overlay shows the running number** (e.g. `300/500`)
+  next to the colour dot and stars.
+- **macOS: the dock icon is padded** with the usual transparent margin, so it
+  no longer looks oversized next to other icons.
+
+
+
+### Changed
+- **Wikidata lookup is now fuzzy.** When the prefix-based `wbsearchentities`
+  search returns little, the person/event resolver falls back to a full-text
+  (CirrusSearch) query — tolerant of word order, ordinals and stray spaces, so
+  e.g. "78th Cannes Film Festival" resolves. Queries are whitespace-normalised.
+- **Combined IPTC transfer actions.** "Person shown → depicts" and
+  "Person shown → categories" merged into one action **Person shown → depicts
+  + category** (pick each item once; adds both the P180 statement and the
+  category). Likewise **Event → created during + category**.
+
+### Fixed
+- The IPTC field editor is no longer pushed off-screen by a wide file list:
+  file names are elided, the list width is capped, the editor keeps a minimum
+  width, and the action buttons wrap (new FlowLayout) when space is tight.
+
+## [0.11.6] - 2026-07-17
+
+### Added
+- **IPTC "Event" field**, backed by the XMP property `Xmp.iptcExt.Event`
+  (Photo Mechanic's "Event"). Single value.
+- **Event → created during**: searches Wikidata for the event and sets it as
+  the "created during" (P10408) statement (`created_during=<QID>`).
+- **Event → category**: adds the event as a category, resolved via Wikidata
+  to the Commons category (P373) or the name.
+
+### Changed
+- **Creator, Copyright notice and Credit** moved out of the per-image editor
+  into a new constant **"Creator / rights / contact"** block, identical for
+  every processed image and no longer derived from the MediaWiki data. It is
+  edited in the Settings tab and shown collapsed at the top of the IPTC tab,
+  persisted in the app settings, and written onto every processed image (even
+  those without per-image IPTC edits).
+- Added contact fields to that block: e-mail, phone, website and postal
+  address (street, city, postal code, country), written to the IPTC Creator's
+  Contact Info XMP fields (`Xmp.iptc.Ci*`).
+
+### Removed
+- The **"Source"** IPTC field.
+
+## [0.11.5] - 2026-07-17
+
+### Added
+- **IPTC "Person shown" field**, backed by the XMP property
+  `Xmp.iptcExt.PersonInImage` (what Photo Mechanic and Lightroom write);
+  multiple names are semicolon-separated.
+- **Person shown → categories**: adds each person as a category, either
+  directly by name (`[[Category:Name]]`) or resolved through Wikidata
+  (name → item → Commons category P373), with a per-person picker.
+- **Person shown → depicts**: searches Wikidata for each person and lets you
+  pick the item to add as a depicts (P180) statement.
+
+## [0.11.4] - 2026-07-17
+
+### Added
+- **Wikimedia OAuth 1.0a sign-in**, opt-in and inert until a consumer key is
+  configured (`mw_oauth.CONSUMER_KEY`). The button is hidden while
+  `is_configured()` is false, so the BotPassword login stays the default until
+  an OAuth consumer is registered and approved on Meta. New modules
+  `credentials.py` (OS keyring wrapper) and `mw_oauth.py` (loopback handshake,
+  JWT-verified identify, `authorization_header` for a future api.py binding).
+- **MediaWiki BotPassword stored in the OS keyring** instead of QSettings
+  plaintext, keyed by username, with automatic one-time migration of any
+  existing plaintext value. Without a keyring backend the app keeps the old
+  plaintext path unchanged; the account note states which mode is active.
+- **Show/hide tabs from Settings.** A new "Tabs" group toggles every tab
+  except Settings and About (Culling, MediaWiki, IPTC, FTP, Flickr, Log),
+  backed by the existing `feature_*` keys and applied at the next start.
+  MediaWiki and Log became hideable for the first time; their widgets stay
+  built (the IPTC tab and Settings mirrors depend on them) — only the tab is
+  withheld.
+
+### Fixed
+- `exifread` is listed in requirements again (it was dropped from the 0.11.3
+  packaging), restoring the camera name in the culling EXIF overlay for RAW.
+
+## [0.11.3] - 2026-07-16
+
+### Added
+- **Culling: Home / End** jump to the first / last image (loupe and grid).
+- **Culling: double-click** on the image toggles fullscreen (like the F key).
+- **Culling: `i`** toggles an EXIF info overlay (filename, camera, lens,
+  focal · aperture · shutter · ISO · captured). JPEGs via Pillow, RAW via
+  libraw/rawpy, with `exifread` for the RAW camera name when installed.
+
+### Changed
+- RAW thumbnail extraction runs in parallel across the loader pool again,
+  restoring the pre-0.11.1 scan speed (the serialization added while chasing
+  the 0.11.1 crash was unrelated and is no longer needed).
+
 ## [0.11.2] - 2026-07-16
 
 ### Fixed

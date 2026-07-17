@@ -17,16 +17,79 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QListWidgetItem, QSplitter, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QFileDialog, QTextEdit, QScrollArea,
-    QAbstractItemView)
+    QAbstractItemView, QDialog, QDialogButtonBox)
 from PyQt5.QtCore import Qt, QSize
 
 from .constants import *
 from . import iptc
 from .ftp_workers import (FtpUploadWorker, PROTOCOLS, DEFAULT_PORTS,
                           sftp_available, sftp_unavailable_reason)
-from .widgets import (UploadProgressDialog, CollapsibleGroupBox,
+from .widgets import (UploadProgressDialog, CollapsibleGroupBox, FlowLayout,
                       apply_form_ratio)
-from .i18n import tr
+from .i18n import tr, current_language
+from .wikidata import WikidataSearchWorker, fetch_commons_categories
+
+
+class _PersonResolveDialog(QDialog):
+    """Resolve person names to Wikidata items. One row per name with a combo
+    of matches (filled from a background wbsearchentities query). In 'category'
+    mode each combo also offers "use the name as the category"; both modes
+    offer "(skip)".
+
+    result_choices() -> {name: value} where value is a QID string, the literal
+    'literal' (category mode, use the name), or None (skip).
+    """
+
+    def __init__(self, names, mode='depicts', lang='en', parent=None):
+        super().__init__(parent)
+        self._mode = mode
+        self._lang = lang or 'en'
+        self.setWindowTitle(
+            tr('Person shown -> depicts') if mode == 'depicts'
+            else tr('Person shown -> categories'))
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(
+            tr('Pick the matching Wikidata item for each person:')))
+        form = QFormLayout()
+        self._rows = []          # (name, combo)
+        self._workers = []
+        for name in names:
+            combo = QComboBox()
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.addItem(tr('Searching…'), None)
+            form.addRow(name + ':', combo)
+            self._rows.append((name, combo))
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        # Kick off one search per name (sequence numbers ignored - each combo
+        # has its own worker).
+        for i, (name, combo) in enumerate(self._rows):
+            w = WikidataSearchWorker(name, self._lang, i, parent=self,
+                                     fuzzy=True)
+            w.results.connect(
+                lambda _seq, items, c=combo, n=name: self._fill(c, n, items))
+            self._workers.append(w)
+            w.start()
+
+    def _fill(self, combo, name, items):
+        combo.clear()
+        if self._mode == 'category':
+            combo.addItem(tr('Use the name as the category'), 'literal')
+        for qid, label, desc in items:
+            text = f'{label} — {desc} ({qid})' if desc else f'{label} ({qid})'
+            combo.addItem(text, qid)
+        combo.addItem(tr('(skip)'), None)
+        if items:                      # default to the top match
+            combo.setCurrentIndex(0 if self._mode == 'category' else 0)
+            if self._mode == 'category' and len(items):
+                combo.setCurrentIndex(1)    # first real match, not 'literal'
+
+    def result_choices(self):
+        return {name: combo.currentData() for name, combo in self._rows}
 
 
 class MWIptcMixin:
@@ -40,6 +103,10 @@ class MWIptcMixin:
 
         w = QWidget()
         outer = QVBoxLayout(w)
+
+        # Constant creator / rights / contact block, collapsed, at the very top
+        # (primary widgets; mirrored in Settings). Same for every image.
+        outer.addWidget(self._build_iptc_constants_group())
 
         split = QSplitter(Qt.Horizontal)
         outer.addWidget(split, 1)
@@ -55,6 +122,11 @@ class MWIptcMixin:
         # the delay when opening the tab.
         self.iptc_list.setIconSize(QSize(96, 64))
         self.iptc_list.setUniformItemSizes(True)
+        # Long file names must not widen the list (which would push the field
+        # editor off-screen): elide in the middle and never scroll sideways.
+        self.iptc_list.setTextElideMode(Qt.ElideMiddle)
+        self.iptc_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.iptc_list.setWordWrap(True)
         self.iptc_list.currentItemChanged.connect(self._iptc_on_select)
         lv.addWidget(self.iptc_list)
         self.iptc_count_lbl = QLabel('')
@@ -73,7 +145,7 @@ class MWIptcMixin:
         form_box = QGroupBox(tr('IPTC fields of the selected file'))
         form = QFormLayout(form_box)
         self._iptc_edits = {}
-        for key, _exiv, label, multi in iptc.IPTC_FIELDS:
+        for key, _exiv, label, multi in iptc.EDITOR_FIELDS:
             edit = QLineEdit()
             edit.setMinimumHeight(26)      # never squeezed below readability
             if multi:
@@ -83,7 +155,7 @@ class MWIptcMixin:
             form.addRow(tr(label) + ':', edit)
         rv.addWidget(form_box)
 
-        btn_row = QHBoxLayout()
+        btn_row = FlowLayout(spacing=6)   # wraps instead of forcing width
         self.iptc_read_btn = QPushButton(tr('Read IPTC from file'))
         self.iptc_read_btn.clicked.connect(self._iptc_read_selected)
         btn_row.addWidget(self.iptc_read_btn)
@@ -100,6 +172,20 @@ class MWIptcMixin:
             'caption_<language>.'))
         self.iptc_to_mw_btn.clicked.connect(self._iptc_caption_to_mw)
         btn_row.addWidget(self.iptc_to_mw_btn)
+        self.iptc_persons_btn = QPushButton(tr('Person shown -> depicts + category'))
+        self.iptc_persons_btn.setToolTip(
+            tr('For each person shown: pick the Wikidata item, then add both a '
+               'depicts (P180) statement and a category (Commons category '
+               'P373, or the name).'))
+        self.iptc_persons_btn.clicked.connect(self._iptc_persons_transfer)
+        btn_row.addWidget(self.iptc_persons_btn)
+        self.iptc_event_btn = QPushButton(tr('Event -> created during + category'))
+        self.iptc_event_btn.setToolTip(
+            tr('Pick the Wikidata item for the event, then set "created '
+               'during" (P10408) and add a category (Commons category P373, '
+               'or the name).'))
+        self.iptc_event_btn.clicked.connect(self._iptc_event_transfer)
+        btn_row.addWidget(self.iptc_event_btn)
         self.iptc_lang_combo = QComboBox()
         self.iptc_lang_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.iptc_lang_combo.addItems(['de', 'en', 'es', 'fr', 'it', 'pt'])
@@ -109,7 +195,6 @@ class MWIptcMixin:
         self.iptc_lang_combo.setMinimumWidth(78)
         self.iptc_lang_combo.setMaximumWidth(96)
         btn_row.addWidget(self.iptc_lang_combo)
-        btn_row.addStretch()
         rv.addLayout(btn_row)
 
         write_box = QGroupBox(tr('IPTC writing'))
@@ -144,6 +229,12 @@ class MWIptcMixin:
         scroll.setWidget(right)
         split.addWidget(scroll)
         split.setSizes([340, 760])
+        # The file list keeps its size; extra width goes to the field editor,
+        # and the editor never shrinks below a usable width.
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        left.setMaximumWidth(460)
+        scroll.setMinimumWidth(360)
 
         return w
 
@@ -390,7 +481,6 @@ class MWIptcMixin:
             date_item = self.table.item(r, self.COL_DATE)
             mapped = iptc.mw_to_iptc(
                 merged,
-                author=self.author_edit.text().strip(),
                 date=date_item.text() if date_item else '',
                 target_filename=target)
             data = self._iptc_store.setdefault(path, {})
@@ -435,7 +525,154 @@ class MWIptcMixin:
                 lang=lang, name=os.path.basename(path)))
             return
 
+    # ── Person shown -> categories / depicts ─────────────────────────────────
+
+    def _iptc_current_persons(self):
+        """List of person names in the Person-shown field of the loaded file."""
+        self._iptc_commit_current()
+        if not self._iptc_current:
+            return []
+        raw = self._iptc_store.get(self._iptc_current, {}).get(
+            iptc.PERSON_KEY, '')
+        return iptc.split_multi(raw)
+
+    def _iptc_apply_to_desc(self, transform):
+        """Apply `transform(text) -> text` to the description (COL_DESC) of the
+        currently loaded IPTC file, then refresh. Returns True on success."""
+        for path, _name, _target, r in self._iptc_paths():
+            if path != self._iptc_current:
+                continue
+            item = self.table.item(r, self.COL_DESC)
+            if item is None:
+                return False
+            item.setText(transform(item.text()))
+            self._refresh_effective(r)
+            return True
+        return False
+
+    def _iptc_persons_transfer(self):
+        """Combined: resolve each person shown once, then add BOTH a depicts
+        (P180) statement (for picked QIDs) and a category (Commons category
+        P373, the label, or the literal name)."""
+        persons = self._iptc_current_persons()
+        if not persons:
+            QMessageBox.information(self, 'IPTC',
+                                    tr('No person shown in this file.'))
+            return
+        qids, cats = self._iptc_resolve(persons)
+        if qids is None:                   # cancelled
+            return
+        did = []
+        if qids and self._iptc_apply_to_desc(
+                lambda t: iptc.merge_depicts(t, qids)):
+            did.append(tr('{n} depicts').format(n=len(qids)))
+        if cats and self._iptc_apply_to_desc(
+                lambda t: iptc.add_category_lines(t, cats)):
+            did.append(tr('{n} categories').format(n=len(cats)))
+        if did:
+            self._iptc_log(tr('Person shown: added {what}.').format(
+                what=', '.join(did)))
+
+    def _iptc_resolve(self, names):
+        """Resolve `names` via Wikidata (category mode: 'literal' allowed).
+        Returns (qids, category_names) or (None, None) if cancelled.
+        qids: the picked QIDs (for depicts / created during).
+        category_names: Commons category (P373), label, or the literal name."""
+        dlg = _PersonResolveDialog(names, mode='category',
+                                   lang=current_language(), parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return None, None
+        picks = dlg.result_choices()          # {name: 'literal' | qid | None}
+        qids = [v for v in picks.values()
+                if v and v != 'literal' and v.upper().startswith('Q')]
+        cat_of_qid = {}
+        if qids:
+            try:
+                fetched = fetch_commons_categories(qids)
+            except Exception:
+                fetched = {}
+            for q in qids:
+                cat, label = fetched.get(q, (None, ''))
+                cat_of_qid[q] = cat or label or ''
+        cats = []
+        for name, choice in picks.items():
+            if not choice:
+                continue
+            cats.append(name if choice == 'literal'
+                        else (cat_of_qid.get(choice) or name))
+        return qids, [c for c in cats if c]
+
+    # ── Constant creator / rights / contact block ────────────────────────────
+
+    # (widget attr, storage key, label, is_contact) - primary widgets; the
+    # storage key matches iptc.CONSTANT_FIELDS so _iptc_constants() maps 1:1.
+    _CONSTANT_UI = [
+        ('ci_byline_edit',    'byline',    'Creator (by-line)', False),
+        ('ci_copyright_edit', 'copyright', 'Copyright notice',  False),
+        ('ci_credit_edit',    'credit',    'Credit',            False),
+        ('ci_email_edit',     'ci_email',  'E-mail',            True),
+        ('ci_tel_edit',       'ci_tel',    'Phone',             True),
+        ('ci_url_edit',       'ci_url',    'Website',           True),
+        ('ci_street_edit',    'ci_street', 'Street',            True),
+        ('ci_city_edit',      'ci_city',   'City',              True),
+        ('ci_pcode_edit',     'ci_pcode',  'Postal code',       True),
+        ('ci_ctry_edit',      'ci_ctry',   'Country',           True),
+    ]
+
+    def _build_iptc_constants_group(self):
+        """Collapsible group with the creator / rights / contact fields that
+        are written to EVERY processed image (persisted, not from MediaWiki)."""
+        box = CollapsibleGroupBox(
+            tr('Creator / rights / contact (same for all images)'))
+        form = QFormLayout(box.content)
+        for attr, _key, label, _contact in self._CONSTANT_UI:
+            edit = QLineEdit()
+            setattr(self, attr, edit)
+            form.addRow(tr(label) + ':', edit)
+        box.setChecked(False)          # collapsed by default
+        return box
+
+    def _iptc_constants(self):
+        """The constant block as {storage_key: text} for iptc.write_iptc."""
+        return {key: getattr(self, attr).text().strip()
+                for attr, key, _l, _c in self._CONSTANT_UI}
+
+    def _iptc_has_constants(self):
+        return any(v for v in self._iptc_constants().values())
+
+    # ── Event -> created during (P10408) / categories ────────────────────────
+
+    def _iptc_current_event(self):
+        self._iptc_commit_current()
+        if not self._iptc_current:
+            return ''
+        return (self._iptc_store.get(self._iptc_current, {})
+                .get(iptc.EVENT_KEY, '') or '').strip()
+
+    def _iptc_event_transfer(self):
+        """Combined: resolve the event once, then set "created during"
+        (P10408) and add a category (Commons category P373, or the name)."""
+        event = self._iptc_current_event()
+        if not event:
+            QMessageBox.information(self, 'IPTC',
+                                    tr('No event in this file.'))
+            return
+        qids, cats = self._iptc_resolve([event])
+        if qids is None:                   # cancelled
+            return
+        did = []
+        if qids and self._iptc_apply_to_desc(
+                lambda t: iptc.set_created_during(t, qids[0])):
+            did.append(tr('created during {qid}').format(qid=qids[0]))
+        if cats and self._iptc_apply_to_desc(
+                lambda t: iptc.add_category_lines(t, cats)):
+            did.append(tr('{n} categories').format(n=len(cats)))
+        if did:
+            self._iptc_log(tr('Event: added {what}.').format(
+                what=', '.join(did)))
+
     # ── Writing and uploading ─────────────────────────────────────────────────
+
 
     def _iptc_pick_export_dir(self):
         d = QFileDialog.getExistingDirectory(self, tr('Export folder'))
@@ -455,11 +692,15 @@ class MWIptcMixin:
                 'into the original files.'))
             return None
         out = []
+        has_const = self._iptc_has_constants()
         for path, _name, target, _r in self._iptc_paths():
             if only_paths is not None and path not in only_paths:
                 continue
             data = self._iptc_store.get(path)
-            if not data or not any(v.strip() for v in data.values()):
+            has_data = bool(data and any(v.strip() for v in data.values()))
+            # Write a file if it has its own IPTC data OR the constant block is
+            # filled (the creator/rights block goes onto every processed image).
+            if not has_data and not has_const:
                 continue
             remote = target if os.path.splitext(target)[1] else (
                 target + os.path.splitext(path)[1])
@@ -479,6 +720,7 @@ class MWIptcMixin:
         for path, write_path, _remote in targets:
             try:
                 iptc.write_iptc(path, self._iptc_store.get(path, {}),
+                                constants=self._iptc_constants(),
                                 target_path=write_path)
                 written += 1
             except Exception as e:
@@ -514,6 +756,7 @@ class MWIptcMixin:
         for path, write_path, remote in targets:
             try:
                 actual = iptc.write_iptc(path, self._iptc_store.get(path, {}),
+                                         constants=self._iptc_constants(),
                                          target_path=write_path)
                 files.append((actual, remote))
             except Exception as e:
@@ -568,6 +811,8 @@ class MWIptcMixin:
         s = self.settings
         s.setValue('iptc_export_dir', self.iptc_export_dir_edit.text())
         s.setValue('iptc_inplace', self.iptc_inplace_cb.isChecked())
+        for attr, key, _l, _c in self._CONSTANT_UI:
+            s.setValue('iptc_const_' + key, getattr(self, attr).text())
 
     def _ftp_save_settings(self):
         s = self.settings
@@ -586,6 +831,8 @@ class MWIptcMixin:
         s = self.settings
         self.iptc_export_dir_edit.setText(s.value('iptc_export_dir', ''))
         self.iptc_inplace_cb.setChecked(s.value('iptc_inplace', False, type=bool))
+        for attr, key, _l, _c in self._CONSTANT_UI:
+            getattr(self, attr).setText(s.value('iptc_const_' + key, ''))
 
     def _ftp_load_settings(self):
         s = self.settings

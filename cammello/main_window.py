@@ -34,6 +34,8 @@ from .mw_iptc import MWIptcMixin
 from .mw_culling import MWCullingMixin, _TabBarDropSwitcher
 from .mw_flickr import FlickrMixin
 from . import iptc as iptc_mod
+from . import mw_oauth
+from . import credentials
 from .wikidata import refresh_wd_fields
 from .i18n import (tr, UI_LANGUAGES, set_language,
                    default_language_from_locale, current_language)
@@ -108,6 +110,11 @@ class MainWindow(FlickrMixin,
         # The MediaWiki (upload) tab is built first (its widgets are read by
         # the IPTC tab), but added to the tab bar AFTER the Culling tab.
         mw_tab = self._build_upload_tab()
+        # Keep a reference so the MediaWiki widgets survive even when the tab
+        # is hidden (not added to the bar): the IPTC tab and the Settings
+        # mirrors read author_edit & Co., and _restore_settings writes them.
+        # Without this reference Qt garbage-collects the unparented widget.
+        self._mw_tab = mw_tab
 
         # Hidden per-tab switches (no UI): QSettings booleans, flipped from
         # the command line via --disable-tab / --enable-tab (see main()).
@@ -134,6 +141,14 @@ class MainWindow(FlickrMixin,
         # '-> Flickr' target only when the feature is on.
         self._feat_flickr = self.settings.value('feature_flickr', True,
                                                 type=bool)
+        # MediaWiki and Log are hideable too (everything except Settings and
+        # About). Both are independent of pyexiv2. Their widgets are always
+        # BUILT - the IPTC tab and the Settings mirrors read the MediaWiki
+        # fields, and the GUI log handler writes into the Log widget - only
+        # the tab is withheld from the bar. Applied at the next start.
+        self._feat_mediawiki = self.settings.value(
+            'feature_mediawiki', True, type=bool)
+        self._feat_log = self.settings.value('feature_log', True, type=bool)
         if not self._feat_flickr:
             self.logger.info('Flickr tab disabled via hidden switch '
                              '(re-enable with --enable-tab flickr).')
@@ -155,7 +170,8 @@ class MainWindow(FlickrMixin,
             self._cull_tab_widget = self._build_culling_tab()
             self.tabs.addTab(self._cull_tab_widget, tr('Culling'))
             self._cull_load_settings()
-        self.tabs.addTab(mw_tab, 'MediaWiki')
+        if self._feat_mediawiki:
+            self.tabs.addTab(mw_tab, 'MediaWiki')
         if self._feat_iptc:
             self._iptc_tab_widget = self._build_iptc_tab()
             self.tabs.addTab(self._iptc_tab_widget, 'IPTC')
@@ -193,7 +209,9 @@ class MainWindow(FlickrMixin,
             self.scheme_combo.setCurrentIndex(_si)
         self.scheme_combo.blockSignals(False)
         self._apply_color_scheme(saved_scheme, repolish=False)
-        self.tabs.addTab(self._build_log_tab(), tr('Log'))
+        self._log_tab = self._build_log_tab()  # always built: the GUI log
+        if self._feat_log:                     # handler writes into it even
+            self.tabs.addTab(self._log_tab, tr('Log'))  # when the tab is hidden
         self.tabs.addTab(self._build_about_tab(), tr('About'))
 
         self.status_bar = QStatusBar()
@@ -505,6 +523,43 @@ class MainWindow(FlickrMixin,
         self.table.setIconSize(QSize(w, int(w * THUMB_H / THUMB_W)))
         self.table.resizeRowsToContents()
 
+    def _build_tabs_group(self):
+        """Checkboxes to show/hide every tab except Settings and About.
+        Backed by the same feature_* QSettings keys as the hidden
+        --enable-tab/--disable-tab switches; applied at the next start (like
+        the language setting). Tabs that need pyexiv2 are disabled with a hint
+        when it is unavailable."""
+        from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QCheckBox
+        avail = iptc_mod.available()
+        box = QGroupBox(tr('Tabs'))
+        v = QVBoxLayout(box)
+        v.addWidget(QLabel(tr('Show these tabs (applies after restart):')))
+        # (settings key, label, default, needs_pyexiv2)
+        specs = [
+            ('feature_culling', tr('Culling'), True, True),
+            ('feature_mediawiki', 'MediaWiki', True, False),
+            ('feature_iptc', 'IPTC', False, True),
+            ('feature_ftp', 'FTP', True, True),
+            ('feature_flickr', 'Flickr', True, False),
+            ('feature_log', tr('Log'), True, False),
+        ]
+        self._tab_feature_cbs = {}
+        for key, label, default, needs in specs:
+            cb = QCheckBox(label)
+            cb.setChecked(self.settings.value(key, default, type=bool))
+            if needs and not avail:
+                cb.setEnabled(False)
+                cb.setToolTip(tr('Requires pyexiv2, which is not available.'))
+            cb.toggled.connect(
+                lambda checked, k=key: self._on_tab_feature_toggled(k, checked))
+            v.addWidget(cb)
+            self._tab_feature_cbs[key] = cb
+        return box
+
+    def _on_tab_feature_toggled(self, key, checked):
+        self.settings.setValue(key, bool(checked))
+        self.settings.sync()
+
     def _build_settings_tab(self):
         """One tab for everything configurable. Sections appear depending on
         the available features; the widgets keep their attribute names, so
@@ -540,6 +595,8 @@ class MainWindow(FlickrMixin,
         af.addRow(tr('Language:'), self.language_combo)
         lay.addWidget(appearance)
 
+        lay.addWidget(self._build_tabs_group())
+
         # The MediaWiki / IPTC / FTP settings appear TWICE: in their
         # functional tab (primary widgets - QSettings persistence unchanged)
         # and here as linked mirrors (see widgets.link_line_edits & Co.).
@@ -547,6 +604,7 @@ class MainWindow(FlickrMixin,
         lay.addWidget(self._build_mw_settings_mirror())
         if hasattr(self, 'iptc_inplace_cb'):
             lay.addWidget(self._build_iptc_settings_mirror())
+            lay.addWidget(self._build_iptc_creator_mirror())
         if hasattr(self, 'ftp_host_edit'):
             lay.addWidget(self._build_ftp_settings_mirror())
         if hasattr(self, 'flickr_api_key_edit'):
@@ -590,17 +648,76 @@ class MainWindow(FlickrMixin,
             self._login_settings.value('username', ''))
         self.mw_user_edit.setPlaceholderText(tr('e.g.') + ' Seewolf@Cammello')
         form.addRow(tr('Username:'), self.mw_user_edit)
+        # BotPassword: loaded from the OS keyring (migrating any old plaintext
+        # out of QSettings on first run); plaintext fallback without a backend.
         self.mw_password_edit = QLineEdit(
-            self._login_settings.value('password', ''))
+            credentials.load_mediawiki_password(
+                self._login_settings, self.mw_user_edit.text()))
         self.mw_password_edit.setEchoMode(QLineEdit.Password)
         form.addRow(tr('Password:'), self.mw_password_edit)
-        note = QLabel(tr('BotPassword recommended (Special:BotPasswords). '
-                         'The password is stored in PLAIN TEXT - leave it '
-                         'empty to be asked at login instead.'))
+        grants = tr('Create one at Special:BotPasswords and log in with the '
+                    'name shown there (e.g. YourName@Cammello). Required '
+                    'grants: edit existing pages; create, edit and move pages; '
+                    'upload new files; upload, replace and move files.')
+        link = ('<a href="https://commons.wikimedia.org/wiki/'
+                'Special:BotPasswords">Special:BotPasswords</a>')
+        grants_html = grants.replace('Special:BotPasswords', link)
+        if credentials.backend_available():
+            store = tr('The password is stored in your system keyring - leave '
+                       'it empty to be asked at login instead.')
+        else:
+            store = tr('No system keyring available, so the password is stored '
+                       'in plain text - leave it empty to be asked at login '
+                       'instead.')
+        note = QLabel(grants_html + '<br>' + store)
+        note.setOpenExternalLinks(True)
+        note.setTextFormat(Qt.RichText)
         note.setWordWrap(True)
         form.addRow('', note)
+        # OAuth sign-in: only offered in builds with a registered consumer
+        # (mw_oauth.CONSUMER_KEY filled in) - see mw_oauth module docstring.
+        if mw_oauth.is_configured():
+            self.oauth_status_label = QLabel()
+            self.oauth_status_label.setWordWrap(True)
+            oauth_btn = QPushButton(tr('Sign in with Wikimedia (OAuth)…'))
+            oauth_btn.clicked.connect(self._on_oauth_login)
+            self.oauth_remove_btn = QPushButton(tr('Remove authorization'))
+            self.oauth_remove_btn.clicked.connect(self._on_oauth_remove)
+            row = QHBoxLayout()
+            row.addWidget(oauth_btn)
+            row.addWidget(self.oauth_remove_btn)
+            row.addStretch()
+            form.addRow('OAuth:', self.oauth_status_label)
+            form.addRow('', row)
+            self._refresh_oauth_status()
         apply_form_ratio(form)
         return box
+
+    def _refresh_oauth_status(self):
+        token, secret = stored_oauth_tokens()
+        if token and secret:
+            user = self._login_settings.value('oauth_username', '') or '?'
+            self.oauth_status_label.setText(
+                tr('Authorized as {username}.').format(username=user))
+            self.oauth_remove_btn.setEnabled(True)
+        else:
+            self.oauth_status_label.setText(tr('Not authorized.'))
+            self.oauth_remove_btn.setEnabled(False)
+
+    def _on_oauth_login(self):
+        dlg = OAuthLoginDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            self.status_bar.showMessage(
+                tr('Authorized as {username}.').format(username=dlg.username),
+                5000)
+        self._refresh_oauth_status()
+
+    def _on_oauth_remove(self):
+        clear_stored_oauth()
+        self._refresh_oauth_status()
+        self.status_bar.showMessage(tr('Authorization removed. To revoke it '
+                                       'on the server side, visit '
+                                       'Special:OAuthManageMyGrants.'), 8000)
 
     def _build_mw_settings_mirror(self):
         box = QGroupBox(tr('MediaWiki upload'))
@@ -651,6 +768,18 @@ class MainWindow(FlickrMixin,
             self.iptc_export_dir_mirror, tr('Export folder')))
         dir_row.addWidget(browse)
         v.addLayout(dir_row)
+        return box
+
+    def _build_iptc_creator_mirror(self):
+        """Settings-tab mirror of the IPTC constant creator / rights / contact
+        block (primaries live in the IPTC tab)."""
+        from PyQt5.QtWidgets import QFormLayout
+        box = QGroupBox(tr('Creator / rights / contact (same for all images)'))
+        form = QFormLayout(box)
+        for attr, _key, label, _contact in self._CONSTANT_UI:
+            mirror = mirror_line_edit(getattr(self, attr))
+            setattr(self, attr + '_mirror', mirror)
+            form.addRow(tr(label) + ':', mirror)
         return box
 
     def _build_flickr_settings_mirror(self):

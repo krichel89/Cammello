@@ -22,7 +22,8 @@ import shutil
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QComboBox, QCheckBox, QFileDialog, QMessageBox, QSplitter,
-    QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle)
+    QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
+    QToolButton)
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QBrush, QPen
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 
@@ -348,32 +349,42 @@ class MWCullingMixin:
         self.cull_rejects_cb = QCheckBox(tr('incl. rejects'))
         self.cull_rejects_cb.stateChanged.connect(self._cull_apply_filter)
         bar.addWidget(self.cull_rejects_cb)
+        # Colour filter: multi-select swatches. None active = all colours; any
+        # active = only those colours (grey swatch = "no label").
+        bar.addSpacing(8)
+        bar.addWidget(QLabel(tr('Colours:')))
+        self._cull_color_btns = []
+        swatches = list(culling.LABEL_COLORS) + ['#888']   # last = no label
+        for i, col in enumerate(swatches):
+            b = QToolButton()
+            b.setCheckable(True)
+            b.setFixedSize(20, 20)
+            b.setStyleSheet(
+                f'QToolButton{{background:{col};border:1px solid #444;'
+                f'border-radius:4px;}}'
+                f'QToolButton:checked{{border:2px solid #fff;}}')
+            b.setToolTip(tr('no label') if i == len(swatches) - 1
+                         else tr('colour {n}').format(n=i + 1))
+            b.clicked.connect(self._cull_apply_filter)
+            self._cull_color_btns.append(b)
+            bar.addWidget(b)
         bar.addStretch()
-        # Three targets for the selection (no selection = every image passing
-        # the filter, same convention as before). Which file of a RAW+JPEG
-        # pair is sent follows the pair selector in the Settings tab.
+        refresh_btn = QPushButton(tr('Reload folder'))
+        refresh_btn.setToolTip(tr('Read the current folder again from disk.'))
+        refresh_btn.clicked.connect(self._cull_reload_folder)
+        bar.addWidget(refresh_btn)
+        # "Übernehmen" hands the selection (or all filtered images) to the
+        # MediaWiki tab AND the IPTC tab AND the FTP tab's list at once (the
+        # three share one file list; nothing is uploaded yet). Folder export
+        # stays a separate action.
         bar.addWidget(QLabel(tr('Send to:')))
-        to_table_btn = QPushButton('MediaWiki')
-        to_table_btn.setToolTip(tr('Adds the selected images to the MediaWiki '
-                                'tab; with no selection, every image passing '
-                                'the filter. Images can also be dragged onto '
-                                'the MediaWiki tab directly.'))
-        to_table_btn.clicked.connect(self._cull_to_table)
-        bar.addWidget(to_table_btn)
-        if getattr(self, '_feat_ftp', False):
-            self.cull_ftp_btn = QPushButton('FTP')
-            self.cull_ftp_btn.setToolTip(
-                tr('Uploads the selected images (as they are, no IPTC writing) '
-                'to the server configured in the FTP tab / Settings.'))
-            self.cull_ftp_btn.clicked.connect(self._cull_to_ftp)
-            bar.addWidget(self.cull_ftp_btn)
-        if getattr(self, '_feat_flickr', False):
-            self.cull_flickr_btn = QPushButton('Flickr')
-            self.cull_flickr_btn.setToolTip(
-                tr('Uploads the selected images (as they are) to the Flickr '
-                   'account authorized in the Flickr tab.'))
-            self.cull_flickr_btn.clicked.connect(self._cull_to_flickr)
-            bar.addWidget(self.cull_flickr_btn)
+        apply_btn = QPushButton(tr('Apply'))
+        apply_btn.setToolTip(tr('Adds the selected images (or all filtered '
+                                'images when nothing is selected) to the '
+                                'MediaWiki, IPTC and FTP tabs. Nothing is '
+                                'uploaded yet.'))
+        apply_btn.clicked.connect(self._cull_apply)
+        bar.addWidget(apply_btn)
         to_folder_btn = QPushButton(tr('Folder…'))
         to_folder_btn.setToolTip(
             tr('Copies the selected images into a local folder. RAW files bring '
@@ -488,6 +499,7 @@ class MWCullingMixin:
         self._cull_loader.new_generation()
 
         self._cull_items = culling.scan_folder(folder)
+        self._cull_folder = folder
         if not previews.raw_available():
             raw_only = sum(1 for i in self._cull_items
                            if i.raw_path and not i.jpg_path)
@@ -542,6 +554,17 @@ class MWCullingMixin:
         return {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}[
             self.cull_minrating_combo.currentIndex()]
 
+    def _cull_label_filter(self):
+        """Selected colour swatches -> a set of label indices for
+        culling.filter_items (0-4 = colours, -1 = no label), or None when no
+        swatch is active (= all colours)."""
+        btns = getattr(self, '_cull_color_btns', [])
+        sel = set()
+        for i, b in enumerate(btns):
+            if b.isChecked():
+                sel.add(-1 if i == len(btns) - 1 else i)
+        return sel or None
+
     def _cull_apply_filter(self, *_a):
         current_item = (self._cull_visible[self._cull_index]
                         if 0 <= self._cull_index < len(self._cull_visible)
@@ -549,7 +572,8 @@ class MWCullingMixin:
         self._cull_visible = culling.filter_items(
             self._cull_items,
             min_rating=self._cull_min_rating(),
-            exclude_rejects=not self.cull_rejects_cb.isChecked())
+            exclude_rejects=not self.cull_rejects_cb.isChecked(),
+            label_indices=self._cull_label_filter())
         self.cull_strip.blockSignals(True)
         self.cull_strip.clear()
         cell = 230 if self._cull_grid else 152
@@ -682,14 +706,15 @@ class MWCullingMixin:
         if n_sel:
             text += '  ·  ' + tr('{n} selected').format(n=n_sel)
         self.cull_status.setText(text)
-        # Fullscreen overlay: stars/X plus a dot in the label color.
+        # Fullscreen overlay: running number, stars/X, and a dot in the label
+        # color.
         if item is not None:
             stars = ('✕' if item.rating == -1
                      else '★' * item.rating + '☆' * (5 - max(item.rating, 0)))
             idx = item.label_color_index
             dot = (f'<span style="color:{culling.LABEL_COLORS[idx]};">'
                    f'&#11044;</span> ' if idx is not None else '')
-            self.cull_view.set_overlay(f'{dot}{stars}')
+            self.cull_view.set_overlay(f'{pos}/{shown} &nbsp; {dot}{stars}')
         else:
             self.cull_view.set_overlay('')
 
@@ -794,6 +819,14 @@ class MWCullingMixin:
             self._cull_toggle_fullscreen()
         elif key == Qt.Key_Escape and self._cull_fs is not None:
             self._cull_toggle_fullscreen()
+        elif key == Qt.Key_A and event.modifiers() & Qt.ControlModifier:
+            # Ctrl+A (Windows/Linux) / Cmd+A (macOS, mapped to ControlModifier
+            # by Qt): select every visible thumbnail.
+            self.cull_strip.selectAll()
+            self._cull_set_status()
+        elif key == Qt.Key_D and event.modifiers() & Qt.ControlModifier:
+            self.cull_strip.clearSelection()
+            self._cull_set_status()
         else:
             return False
         return True
@@ -966,6 +999,25 @@ class MWCullingMixin:
             else:
                 paths.append(item.display_path)
         return paths
+
+    def _cull_apply(self):
+        """Combined hand-over: add to the MediaWiki table (which the IPTC and
+        FTP tabs share) and refresh those tabs' lists. Nothing is uploaded."""
+        self._cull_to_table()
+        if hasattr(self, '_iptc_refresh_list'):
+            self._iptc_refresh_list()
+        if hasattr(self, '_ftp_refresh_list'):
+            self._ftp_refresh_list()
+
+    def _cull_reload_folder(self):
+        """Re-read the current folder from disk (ratings/labels may have
+        changed in another program)."""
+        folder = getattr(self, '_cull_folder', None)
+        if not folder:
+            QMessageBox.information(self, tr('Culling'),
+                                    tr('No folder is open yet.'))
+            return
+        self._cull_open_folder(folder)
 
     def _cull_to_table(self):
         """Target 1: the MediaWiki tab's file table."""

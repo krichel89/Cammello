@@ -104,12 +104,25 @@ jobs:
 
       - name: Build .icns from icon.png
         run: |
+          # macOS dock icons leave a transparent margin (~80% content); our
+          # source art is full-bleed, so pad it before building the iconset,
+          # otherwise Cammello looks oversized next to other dock icons.
+          python3 - <<'PY'
+          from PIL import Image
+          im = Image.open("cammello/assets/icon.png").convert("RGBA")
+          size = 1024
+          canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+          art = im.resize((int(size * 0.82), int(size * 0.82)), Image.LANCZOS)
+          off = (size - art.width) // 2
+          canvas.paste(art, (off, off), art)
+          canvas.save("icon_padded.png")
+          PY
           mkdir icon.iconset
           for size in 16 32 64 128 256 512; do
-            sips -z $size $size cammello/assets/icon.png \
+            sips -z $size $size icon_padded.png \
               --out icon.iconset/icon_${size}x${size}.png
             double=$((size * 2))
-            sips -z $double $double cammello/assets/icon.png \
+            sips -z $double $double icon_padded.png \
               --out icon.iconset/icon_${size}x${size}@2x.png
           done
           iconutil -c icns icon.iconset -o cammello/assets/icon.icns
@@ -126,6 +139,7 @@ jobs:
             --icon cammello/assets/icon.icns \
             --add-data "cammello/assets:cammello/assets" \
             --hidden-import paramiko \
+            --collect-all keyring --hidden-import keyring.backends.macOS \
             --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
           cd dist
           zip -r Cammello_Mac.zip Cammello.app
@@ -170,7 +184,7 @@ jobs:
           # Unter Windows ist --onefile unproblematisch und ergibt eine
           # einzelne Cammello.exe.
           # --add-data mit Semikolon (Windows-Trenner); siehe Mac-Job.
-          pyinstaller --onefile --windowed --name Cammello --icon cammello/assets/icon.ico --add-data "cammello/assets;cammello/assets" --hidden-import paramiko --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
+          pyinstaller --onefile --windowed --name Cammello --icon cammello/assets/icon.ico --add-data "cammello/assets;cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.Windows --hidden-import win32ctypes.core.ctypes --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
@@ -213,7 +227,7 @@ jobs:
         run: |
           # --onefile ergibt ein einzelnes ausfuehrbares Binary; PyQt5 ist
           # darin enthalten, der Nutzer braucht es nicht separat zu installieren.
-          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
+          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.SecretService --hidden-import secretstorage --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
           cd dist
           tar -czf Cammello_Linux.tar.gz Cammello
 

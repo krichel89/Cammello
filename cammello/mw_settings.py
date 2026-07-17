@@ -21,6 +21,7 @@ from .constants import *
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
+from . import credentials
 from .sdc import _strip_sd_lines
 from .exif import *
 from .api import *
@@ -120,8 +121,9 @@ class MWSettingsMixin:
         if hasattr(self, 'mw_user_edit'):
             self._login_settings.setValue('username',
                                           self.mw_user_edit.text().strip())
-            self._login_settings.setValue('password',
-                                          self.mw_password_edit.text())
+            credentials.save_mediawiki_password(
+                self._login_settings, self.mw_user_edit.text(),
+                self.mw_password_edit.text())
             self._login_settings.sync()
         if hasattr(self, 'ftp_host_edit'):
             self._ftp_save_settings()
