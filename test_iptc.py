@@ -43,7 +43,6 @@ QPixmap(320, 200).save(src, 'JPG', 92)
 data = {
     'caption': 'Bauer at Oh See Málaga 2026',
     'keywords': 'festival; Málaga; band',
-    'byline': 'Harald Krichel',
     'city': 'Málaga',
     'date_created': '2026-05-23',
     'object_name': 'Bauer-1',
@@ -64,7 +63,21 @@ check('date roundtrip', back.get('date_created') == '2026-05-23')
 iptc.write_iptc(copy, {'city': ''})
 check('empty value deletes the tag', 'city' not in iptc.read_iptc(copy))
 check('other tags survive the delete',
-      iptc.read_iptc(copy).get('byline') == 'Harald Krichel')
+      iptc.read_iptc(copy).get('caption') == 'Bauer at Oh See Málaga 2026')
+
+# Constant block (creator/rights/contact) is written from the `constants` arg,
+# to every image, and is NOT read back into the editor.
+iptc.write_iptc(copy, {}, constants={'byline': 'Harald Krichel',
+                                     'ci_email': 'foto@example.org'})
+import pyexiv2 as _px
+_img = _px.Image(copy)
+_iim, _xmp = _img.read_iptc(), _img.read_xmp()
+_img.close()
+_bl = _iim.get('Iptc.Application2.Byline')
+check('constant byline written',
+      (_bl[0] if isinstance(_bl, list) else _bl) == 'Harald Krichel')
+check('constant contact (XMP) written',
+      _xmp.get('Xmp.iptc.CiEmailWork') == 'foto@example.org')
 
 # In-place write.
 written2 = iptc.write_iptc(src, {'caption': 'in place'})
@@ -81,13 +94,14 @@ depicts=Q1; Q2
 [[Category:Bands|Sortkey]]
 [[Category:Uploaded with Cammello]]"""
 
-m = iptc.mw_to_iptc(MERGED, author='Pedro J Pacheco', date='2026-05-23 17:41:31',
+m = iptc.mw_to_iptc(MERGED, date='2026-05-23 17:41:31',
                     target_filename='Oh See 2026 - Bauer -1.jpg')
 check('caption prefers de', m.get('caption') == 'Bauer auf der Bühne')
 check('keywords from categories, maintenance dropped, sortkey stripped',
       m.get('keywords') == 'Oh See Málaga Festival 2026; Bands',
       str(m.get('keywords')))
-check('byline from author', m.get('byline') == 'Pedro J Pacheco')
+check('creator NOT mapped from MediaWiki (constant block now)',
+      'byline' not in m)
 check('date_created = date prefix', m.get('date_created') == '2026-05-23')
 check('object_name without extension',
       m.get('object_name') == 'Oh See 2026 - Bauer -1')
