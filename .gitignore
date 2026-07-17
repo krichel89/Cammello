@@ -7,3 +7,6 @@ dist/
 cammello/assets/icon.icns
 cammello/assets/icon.ico
 .DS_Store
+icon.iconset/
+icon_padded.png
+*.icns
