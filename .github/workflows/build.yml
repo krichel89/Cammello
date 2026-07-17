@@ -107,6 +107,9 @@ jobs:
           # macOS dock icons leave a transparent margin (~80% content); our
           # source art is full-bleed, so pad it before building the iconset,
           # otherwise Cammello looks oversized next to other dock icons.
+          # Remove any stale build artefacts first (a checked-in icon.iconset
+          # would otherwise make `mkdir` fail with "File exists").
+          rm -rf icon.iconset icon_padded.png
           python3 - <<'PY'
           from PIL import Image
           im = Image.open("cammello/assets/icon.png").convert("RGBA")
@@ -117,7 +120,7 @@ jobs:
           canvas.paste(art, (off, off), art)
           canvas.save("icon_padded.png")
           PY
-          mkdir icon.iconset
+          mkdir -p icon.iconset
           for size in 16 32 64 128 256 512; do
             sips -z $size $size icon_padded.png \
               --out icon.iconset/icon_${size}x${size}.png
