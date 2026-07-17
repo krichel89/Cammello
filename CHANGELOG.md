@@ -4,6 +4,27 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] - 2026-07-17
+
+### Changed
+- **Culling toolbar tidied up.** "Open folder…" is now "Open…", with Reload
+  moved next to it as a compact ⟳ icon button. The zoom −/read-out/+ controls
+  were removed (zoom stays on the mouse wheel and Cmd/Ctrl +/-). The rating,
+  rejects and colour filters are grouped under one "Filter:" label, and the
+  folder-export button is now "Save to…" (the "Send to:" label is gone).
+- **MediaWiki editor gives categories more room.** The "Suggest category"
+  buttons are now a compact "Suggest" behind the Categories field; the tooltips
+  still spell out what each adds.
+
+### Added
+- **OAuth sign-in now signs real API requests.** The stored access token is
+  used to build an `Authorization` header (RFC 5849 HMAC-SHA1, reusing the
+  verified Flickr signing) on every request, with multipart upload bodies
+  correctly excluded from the signature. When a consumer is configured and the
+  user has authorized, Login uses OAuth automatically instead of prompting for
+  a password; BotPassword remains the default until a consumer key/secret are
+  filled in.
+
 ## [0.11.9] - 2026-07-17
 
 ### Fixed

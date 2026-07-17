@@ -276,18 +276,23 @@ class LoginWorker(QThread):
     success = pyqtSignal(object)   # MediaWikiApi instance
     failure = pyqtSignal(str)
 
-    def __init__(self, api_url, username, password, timeout, logger):
+    def __init__(self, api_url, username, password, timeout, logger,
+                 oauth_token=None, oauth_secret=None):
         super().__init__()
         self.api_url = api_url
         self.username = username
         self.password = password
         self.timeout = timeout
         self.logger = logger
+        self.oauth_token = oauth_token
+        self.oauth_secret = oauth_secret
 
     def run(self):
         try:
             api = MediaWikiApi(self.api_url, self.username, self.password,
-                               timeout=self.timeout, logger=self.logger)
+                               timeout=self.timeout, logger=self.logger,
+                               oauth_token=self.oauth_token,
+                               oauth_secret=self.oauth_secret)
             if api.login():
                 self.success.emit(api)
             else:

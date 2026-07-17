@@ -31,21 +31,42 @@ from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
 from .editors import *
+from . import mw_oauth
 
 
 class MWFilesMixin:
     def do_login(self):
+        # OAuth takes precedence when a consumer is configured (CONSUMER_KEY
+        # filled in) AND the user has authorized once: no dialog, no password -
+        # the stored access token signs every request. BotPassword stays the
+        # path whenever OAuth is not set up or not yet authorized.
+        if mw_oauth.is_configured():
+            token, secret = stored_oauth_tokens()
+            if token and secret:
+                s = QSettings(APP_NAME, 'Login')
+                api_url = (s.value('api_url', '')
+                           or 'https://commons.wikimedia.org/w/api.php')
+                username = s.value('oauth_username', '') or 'OAuth'
+                self._start_login_worker(
+                    api_url, username, '',
+                    oauth_token=token, oauth_secret=secret)
+                return
+
         dlg = LoginDialog(self)
         if dlg.exec() != QDialog.Accepted:
             return
         api_url, username, password = dlg.get_credentials()
+        self._start_login_worker(api_url, username, password)
 
+    def _start_login_worker(self, api_url, username, password,
+                            oauth_token=None, oauth_secret=None):
         self.login_btn.setEnabled(False)
         self.login_label.setText('Logging in…')
         self.login_label.setStyleSheet('color: orange')
 
         self._login_worker = LoginWorker(
-            api_url, username, password, self._get_timeout(), self.logger)
+            api_url, username, password, self._get_timeout(), self.logger,
+            oauth_token=oauth_token, oauth_secret=oauth_secret)
         self._login_worker.success.connect(
             lambda api: self._on_login_success(api, username))
         self._login_worker.failure.connect(self._on_login_failure)

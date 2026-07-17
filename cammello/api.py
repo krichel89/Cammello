@@ -11,7 +11,8 @@ from .sdc import extract_name_from_caption
 REDACT_KEYS = {'password', 'lgpassword', 'token', 'lgtoken', 'logintoken'}
 
 class MediaWikiApi:
-    def __init__(self, api_url, username, password, timeout=120, logger=None):
+    def __init__(self, api_url, username, password, timeout=120, logger=None,
+                 oauth_token=None, oauth_secret=None):
         self.api_url = api_url
         self.timeout = timeout
         self.log = logger or logging.getLogger(APP_NAME)
@@ -23,6 +24,12 @@ class MediaWikiApi:
         self.csrf_token = None
         self.username = username
         self.password = password
+        # OAuth 1.0a access credentials (from mw_oauth / the OS keyring). When
+        # both are present every request is signed with an Authorization header
+        # and no BotPassword login handshake happens. Empty = BotPassword path.
+        self._oauth_token = oauth_token or ''
+        self._oauth_secret = oauth_secret or ''
+        self._use_oauth = bool(self._oauth_token and self._oauth_secret)
 
     # ── central helpers ──────────────────────────────────────────────────────
 
@@ -59,6 +66,24 @@ class MediaWikiApi:
                 file_note = ' files=<...>'
         self.log.debug('→ %s [%s] params=%s%s',
                        method, desc, self._redact(payload), file_note)
+
+        # OAuth 1.0a: sign every request with the stored access token instead
+        # of relying on a login session cookie. Per RFC 5849 the multipart
+        # body of a file upload is NOT signed, so when `files` is present only
+        # the query parameters (plus the oauth_* parameters) go into the
+        # signature base string; the form fields ride in the multipart body.
+        if self._use_oauth:
+            from . import mw_oauth
+            sign_params = dict(kwargs.get('params') or {})
+            if not kwargs.get('files'):
+                body = kwargs.get('data')
+                if isinstance(body, dict):
+                    sign_params.update(body)
+            headers = dict(kwargs.get('headers') or {})
+            headers['Authorization'] = mw_oauth.authorization_header(
+                method, url, sign_params,
+                self._oauth_token, self._oauth_secret)
+            kwargs['headers'] = headers
 
         try:
             r = self.session.request(method, url, **kwargs)
@@ -156,6 +181,14 @@ class MediaWikiApi:
     def login(self):
         if not self.api_url.startswith('https://'):
             raise Exception('Security error: API URL must use HTTPS, not HTTP.')
+
+        # OAuth path: there is no login handshake and no session cookie - the
+        # Authorization header on every request authenticates us. Just confirm
+        # the server sees a real (non-anonymous) user before we start writing.
+        if self._use_oauth:
+            self.log.info('Authenticating via OAuth (no login call needed) …')
+            self._verify_session()
+            return True
 
         self.log.info('Logging in as "%s" …', self.username)
         self._last_login_msg = None

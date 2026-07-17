@@ -309,28 +309,22 @@ class MWCullingMixin:
 
         # Toolbar
         bar = QHBoxLayout()
-        open_btn = QPushButton(tr('Open folder…'))
+        open_btn = QPushButton(tr('Open…'))
+        open_btn.setToolTip(tr('Open a folder of images for culling.'))
         open_btn.clicked.connect(self._cull_open_folder)
         bar.addWidget(open_btn)
+        # Reload sits right next to Open as a compact icon button.
+        self.cull_reload_btn = QToolButton()
+        self.cull_reload_btn.setText('⟳')
+        self.cull_reload_btn.setToolTip(tr('Read the current folder again from disk.'))
+        self.cull_reload_btn.clicked.connect(self._cull_reload_folder)
+        bar.addWidget(self.cull_reload_btn)
         self.cull_mode_lbl = QLabel()
         self.cull_mode_lbl.setToolTip(tr('Number keys 1-5 set stars or colors; '
                                       'M toggles the mode.'))
         bar.addWidget(self.cull_mode_lbl)
-        bar.addWidget(QLabel(tr('Zoom:')))
-        self.cull_zoom_out_btn = QPushButton('−')
-        self.cull_zoom_out_btn.setFixedWidth(28)
-        self.cull_zoom_out_btn.setToolTip(tr('One zoom step out (Cmd/Ctrl -)'))
-        self.cull_zoom_out_btn.clicked.connect(self._cull_zoom_out)
-        bar.addWidget(self.cull_zoom_out_btn)
-        self.cull_zoom_lbl = QLabel('Fit')
-        self.cull_zoom_lbl.setFixedWidth(46)
-        self.cull_zoom_lbl.setAlignment(Qt.AlignCenter)
-        bar.addWidget(self.cull_zoom_lbl)
-        self.cull_zoom_in_btn = QPushButton('+')
-        self.cull_zoom_in_btn.setFixedWidth(28)
-        self.cull_zoom_in_btn.setToolTip(tr('One zoom step in (Cmd/Ctrl +)'))
-        self.cull_zoom_in_btn.clicked.connect(self._cull_zoom_in)
-        bar.addWidget(self.cull_zoom_in_btn)
+        # Zoom is driven by the mouse wheel / trackpad and Cmd/Ctrl +/- (the
+        # keyboard shortcuts stay live); the toolbar buttons were redundant.
         self.cull_grid_btn = QPushButton(tr('Grid'))
         self.cull_grid_btn.setCheckable(True)
         self.cull_grid_btn.setToolTip(tr('Grid view (G): thumbnails instead of '
@@ -338,21 +332,23 @@ class MWCullingMixin:
         self.cull_grid_btn.toggled.connect(self._cull_set_grid)
         bar.addWidget(self.cull_grid_btn)
         bar.addSpacing(12)
-        bar.addWidget(QLabel(tr('Show:')))
+        bar.addWidget(QLabel(tr('Filter:')))
         self.cull_minrating_combo = QComboBox()
         self.cull_minrating_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cull_minrating_combo.addItems(
             [tr('all'), '≥ 1', '≥ 2', '≥ 3', '≥ 4', '= 5'])
+        self.cull_minrating_combo.setToolTip(
+            tr('Show only images at or above this star rating.'))
         self.cull_minrating_combo.currentIndexChanged.connect(
             self._cull_apply_filter)
         bar.addWidget(self.cull_minrating_combo)
         self.cull_rejects_cb = QCheckBox(tr('incl. rejects'))
         self.cull_rejects_cb.stateChanged.connect(self._cull_apply_filter)
         bar.addWidget(self.cull_rejects_cb)
-        # Colour filter: multi-select swatches. None active = all colours; any
-        # active = only those colours (grey swatch = "no label").
+        # Colour filter: multi-select swatches, part of the same filter cluster.
+        # None active = all colours; any active = only those colours (grey
+        # swatch = "no label"). Each swatch's tooltip names the colour.
         bar.addSpacing(8)
-        bar.addWidget(QLabel(tr('Colours:')))
         self._cull_color_btns = []
         swatches = list(culling.LABEL_COLORS) + ['#888']   # last = no label
         for i, col in enumerate(swatches):
@@ -369,15 +365,10 @@ class MWCullingMixin:
             self._cull_color_btns.append(b)
             bar.addWidget(b)
         bar.addStretch()
-        refresh_btn = QPushButton(tr('Reload folder'))
-        refresh_btn.setToolTip(tr('Read the current folder again from disk.'))
-        refresh_btn.clicked.connect(self._cull_reload_folder)
-        bar.addWidget(refresh_btn)
-        # "Übernehmen" hands the selection (or all filtered images) to the
-        # MediaWiki tab AND the IPTC tab AND the FTP tab's list at once (the
-        # three share one file list; nothing is uploaded yet). Folder export
-        # stays a separate action.
-        bar.addWidget(QLabel(tr('Send to:')))
+        # "Apply" (Übernehmen) hands the selection (or all filtered images) to
+        # the MediaWiki tab AND the IPTC tab AND the FTP tab's list at once (the
+        # three share one file list; nothing is uploaded yet). "Save to…"
+        # (folder export) stays a separate action.
         apply_btn = QPushButton(tr('Apply'))
         apply_btn.setToolTip(tr('Adds the selected images (or all filtered '
                                 'images when nothing is selected) to the '
@@ -385,7 +376,7 @@ class MWCullingMixin:
                                 'uploaded yet.'))
         apply_btn.clicked.connect(self._cull_apply)
         bar.addWidget(apply_btn)
-        to_folder_btn = QPushButton(tr('Folder…'))
+        to_folder_btn = QPushButton(tr('Save to…'))
         to_folder_btn.setToolTip(
             tr('Copies the selected images into a local folder. RAW files bring '
             'their .xmp sidecar along; existing files in the target folder '
@@ -849,9 +840,13 @@ class MWCullingMixin:
                 return
 
     def _cull_zoom_changed(self, factor):
-        # Value display: 'Fit' in fit mode, the percentage otherwise.
-        self.cull_zoom_lbl.setText(
-            'Fit' if self.cull_view.is_fit else f'{int(round(factor*100))} %')
+        # The toolbar zoom read-out was removed in 0.12; keep the handler
+        # tolerant so the signal (still emitted on wheel/keyboard zoom) is a
+        # harmless no-op unless a label exists.
+        lbl = getattr(self, 'cull_zoom_lbl', None)
+        if lbl is not None:
+            lbl.setText('Fit' if self.cull_view.is_fit
+                        else f'{int(round(factor*100))} %')
 
     def _cull_set_grid(self, grid):
         """Grid = thumbnails fill the whole tab; loupe = image + filmstrip."""

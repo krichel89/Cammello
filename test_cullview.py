@@ -318,9 +318,9 @@ QTest.keyClick(t3, Qt.Key_Plus, Qt.ControlModifier)
 f2 = w3.cull_view.zoom_factor()
 check('second step zooms further in (ladder)', f2 > f1,
       f'{f1:.2f} -> {f2:.2f}')
-check('zoom label follows',
-      w3.cull_zoom_lbl.text().rstrip(' %').isdigit(),
-      w3.cull_zoom_lbl.text())
+# The toolbar zoom read-out was removed in 0.12 (zoom is wheel/keyboard only);
+# assert the keyboard ladder still drives the actual view zoom factor.
+check('keyboard zoom factor above fit', f2 > 1.0, f'{f2:.2f}')
 QTest.keyClick(t3, Qt.Key_Minus, Qt.ControlModifier)
 check('Ctrl/Cmd-Minus zooms out', w3.cull_view.zoom_factor() < f2)
 
@@ -407,7 +407,7 @@ check('Settings tab exists',
       'Settings' in [w6.tabs.tabText(i) for i in range(w6.tabs.count())])
 
 
-# ── Unreleased: current-image frame, zoom label, slider snap + fill range ─────
+# ── Unreleased: current-image frame, zoom ladder, slider snap + fill range ────
 w7 = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 w7.tabs.setCurrentWidget(w7._cull_tab_widget)
 w7._cull_tab_widget.setFocus()
@@ -433,12 +433,11 @@ check('delegate marks row 0 as current', w7._cull_delegate.current_row == 0)
 QTest.keyClick(t7, Qt.Key_Right)
 check('frame follows to row 1', w7._cull_delegate.current_row == 1)
 
-# Zoom label shows Fit, then the percentage.
-check('zoom label says Fit', w7.cull_zoom_lbl.text() == 'Fit',
-      w7.cull_zoom_lbl.text())
+# Zoom (0.12): the toolbar read-out label and +/- buttons were removed; zoom
+# is wheel/keyboard only. The ladder itself is unchanged - drive it via the
+# same methods the Cmd/Ctrl +/- shortcuts call.
 QTest.keyClick(t7, Qt.Key_Plus, Qt.ControlModifier)
-check('zoom label shows a value', w7.cull_zoom_lbl.text().endswith('%'),
-      w7.cull_zoom_lbl.text())
+check('Cmd/Ctrl-Plus leaves fit mode', not w7.cull_view.is_fit)
 
 # Zoom ladder: +/- walk the 12 friendly steps; 100% is an exact member.
 from cammello.mw_culling import ZOOM_STEPS
@@ -449,21 +448,21 @@ check('ladder is strictly increasing',
       all(a < b for a, b in zip(ZOOM_STEPS, ZOOM_STEPS[1:])))
 # From fit (~94%) the first + lands exactly on 100.
 w7.cull_view.fit()
-w7.cull_zoom_in_btn.click()
+w7._cull_zoom_in()
 check('+ from fit snaps onto the next ladder value (100)',
-      abs(w7.cull_view.zoom_factor() - 1.0) < 0.01
-      and w7.cull_zoom_lbl.text() == '100 %', w7.cull_zoom_lbl.text())
-w7.cull_zoom_in_btn.click()
+      abs(w7.cull_view.zoom_factor() - 1.0) < 0.01,
+      f'{w7.cull_view.zoom_factor():.3f}')
+w7._cull_zoom_in()
 check('next + = 150%', abs(w7.cull_view.zoom_factor() - 1.5) < 0.01)
 QTest.keyClick(t7, Qt.Key_Minus, Qt.ControlModifier)
 check('Cmd/Ctrl-Minus walks the ladder down',
       abs(w7.cull_view.zoom_factor() - 1.0) < 0.01)
 # Ends are hard stops.
 for _ in range(15):
-    w7.cull_zoom_in_btn.click()
+    w7._cull_zoom_in()
 check('+ stops at 400%', abs(w7.cull_view.zoom_factor() - 4.0) < 0.01)
 for _ in range(20):
-    w7.cull_zoom_out_btn.click()
+    w7._cull_zoom_out()
 check('- stops at 5%', abs(w7.cull_view.zoom_factor() - 0.05) < 0.011,
       f'{w7.cull_view.zoom_factor():.3f}')
 w7._cull_shutdown()

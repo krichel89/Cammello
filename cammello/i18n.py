@@ -92,6 +92,32 @@ TRANSLATIONS = {
         'de': 'Ordner neu laden', 'es': 'Recargar carpeta',
         'fr': 'Recharger le dossier', 'it': 'Ricarica cartella',
     },
+    'Open…': {
+        'de': 'Öffnen…', 'es': 'Abrir…', 'fr': 'Ouvrir…', 'it': 'Apri…',
+    },
+    'Open a folder of images for culling.': {
+        'de': 'Einen Ordner mit Bildern zum Sichten öffnen.',
+        'es': 'Abre una carpeta de imágenes para la selección.',
+        'fr': 'Ouvre un dossier d’images pour le tri.',
+        'it': 'Apre una cartella di immagini per la selezione.',
+    },
+    'Filter:': {
+        'de': 'Filter:', 'es': 'Filtro:', 'fr': 'Filtre :', 'it': 'Filtro:',
+    },
+    'Show only images at or above this star rating.': {
+        'de': 'Nur Bilder mit mindestens dieser Sternebewertung anzeigen.',
+        'es': 'Mostrar solo imágenes con esta valoración de estrellas o superior.',
+        'fr': 'N’afficher que les images ayant au moins cette note en étoiles.',
+        'it': 'Mostra solo le immagini con questa valutazione a stelle o superiore.',
+    },
+    'Save to…': {
+        'de': 'Speichern unter…', 'es': 'Guardar en…',
+        'fr': 'Enregistrer dans…', 'it': 'Salva in…',
+    },
+    'Suggest': {
+        'de': 'Vorschlagen', 'es': 'Sugerir', 'fr': 'Suggérer',
+        'it': 'Suggerisci',
+    },
     'Read the current folder again from disk.': {
         'de': 'Den aktuellen Ordner erneut von der Festplatte einlesen.',
         'es': 'Vuelve a leer la carpeta actual desde el disco.',

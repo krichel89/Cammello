@@ -384,7 +384,8 @@ class StructuredDescriptionEditor(QWidget):
             # suggestion belongs here too (was wrongly in the per-file editor).
             cd_row = QHBoxLayout()
             cd_row.addWidget(self.created_during, 1)
-            suggest_btn = QPushButton(tr('Suggest category'))
+            suggest_btn = QPushButton(tr('Suggest'))
+            suggest_btn.setMaximumWidth(96)
             suggest_btn.setToolTip(
                 tr('Adds a base category from the "created during" event '
                    '(Commons category P373, or the label; a missing year is '
@@ -395,7 +396,8 @@ class StructuredDescriptionEditor(QWidget):
         if not self.is_base:
             cat_row = QHBoxLayout()
             cat_row.addWidget(self.categories, 1)
-            depicts_cat_btn = QPushButton(tr('Suggest category'))
+            depicts_cat_btn = QPushButton(tr('Suggest'))
+            depicts_cat_btn.setMaximumWidth(96)
             depicts_cat_btn.setToolTip(
                 tr('Adds categories from the depicts entries (Commons '
                    'category P373, or the label).'))
