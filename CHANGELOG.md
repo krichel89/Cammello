@@ -4,6 +4,15 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.9] - 2026-07-17
+
+### Fixed
+- **Build broke on the compile check.** `mw_oauth.py` had a multi-line string
+  inside an f-string expression — accepted by Python 3.12 but a `SyntaxError`
+  on the 3.11 CI runner. The text is now assembled before the f-string, so it
+  compiles on every supported Python version. No behaviour change; otherwise
+  identical to 0.11.8.
+
 ## [0.11.8] - 2026-07-17
 
 ### Added

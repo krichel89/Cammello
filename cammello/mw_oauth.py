@@ -215,9 +215,10 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.server.captured = dict(parse_qsl(parsed.query))
+        msg = tr("Authorization received. You can close this window "
+                 "and return to Cammello.")
         body = ('<!doctype html><meta charset="utf-8"><title>Cammello</title>'
-                f'<p>{tr("Authorization received. You can close this window "
-                         "and return to Cammello.")}</p>').encode('utf-8')
+                f'<p>{msg}</p>').encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
