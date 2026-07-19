@@ -22,10 +22,11 @@ from PyQt5.QtCore import Qt, QSize
 
 from .constants import *
 from . import iptc
+from . import channels
 from .ftp_workers import (FtpUploadWorker, PROTOCOLS, DEFAULT_PORTS,
                           sftp_available, sftp_unavailable_reason)
 from .widgets import (UploadProgressDialog, CollapsibleGroupBox, FlowLayout,
-                      apply_form_ratio)
+                      apply_form_ratio, NoWheelComboBox)
 from .i18n import tr, current_language
 from .wikidata import WikidataSearchWorker, fetch_commons_categories
 
@@ -104,10 +105,12 @@ class MWIptcMixin:
         w = QWidget()
         outer = QVBoxLayout(w)
 
-        # Constant creator / rights / contact block, collapsed, at the very top
-        # (primary widgets; mirrored in Settings). Same for every image.
-        outer.addWidget(self._build_iptc_constants_group())
-
+        # 0.12.8 (Harald): the constant creator / rights / contact block used
+        # to sit ABOVE the splitter, spanning the full width - a full-width
+        # band of fields on top of a two-column page, and it pushed the file
+        # list and the editor down. It now lives in the RIGHT column next to
+        # the file list, above the per-file fields, where it reads as what it
+        # is: settings that apply to every image, next to the images.
         split = QSplitter(Qt.Horizontal)
         outer.addWidget(split, 1)
 
@@ -141,6 +144,11 @@ class MWIptcMixin:
         # unreadable slivers on smaller windows.
         right = QWidget()
         rv = QVBoxLayout(right)
+
+        # Constant creator / rights / contact block (primary widgets;
+        # mirrored in Settings). Same for every image, hence above the
+        # per-file fields. Collapsed by default - see the group itself.
+        rv.addWidget(self._build_iptc_constants_group())
 
         form_box = QGroupBox(tr('IPTC fields of the selected file'))
         form = QFormLayout(form_box)
@@ -186,7 +194,7 @@ class MWIptcMixin:
                'or the name).'))
         self.iptc_event_btn.clicked.connect(self._iptc_event_transfer)
         btn_row.addWidget(self.iptc_event_btn)
-        self.iptc_lang_combo = QComboBox()
+        self.iptc_lang_combo = NoWheelComboBox()
         self.iptc_lang_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.iptc_lang_combo.addItems(['de', 'en', 'es', 'fr', 'it', 'pt'])
         # A fixed 60 px clipped the two letters behind the drop-down
@@ -260,6 +268,9 @@ class MWIptcMixin:
         self.ftp_list.setUniformItemSizes(True)
         self.ftp_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.ftp_list.itemSelectionChanged.connect(self._ftp_update_count)
+        # Right-click menu: channel marks (Commons/CC vs. commercial, 0.12.1).
+        self.ftp_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ftp_list.customContextMenuRequested.connect(self._ftp_context_menu)
         lv.addWidget(self.ftp_list)
         self.ftp_count_lbl = QLabel('')
         lv.addWidget(self.ftp_count_lbl)
@@ -278,8 +289,13 @@ class MWIptcMixin:
         self.ftp_status.setMaximumHeight(120)
 
         if getattr(self, '_feat_ftp', True):
-            box = QGroupBox(tr('FTP server'))
-            fv = QFormLayout(box)
+            # 0.12.8 (Harald): the FTP/Flickr sections match the rest of the
+            # app now - the same heading with the same arrow, and they fold
+            # away. Open on first use, and the state is not persisted: this
+            # tab is entered rarely, so a section someone folded weeks ago
+            # would just look like a missing feature.
+            box = CollapsibleGroupBox(tr('FTP server'))
+            fv = QFormLayout(box.content)
             self.ftp_protocol_combo = QComboBox()
             self.ftp_protocol_combo.setSizeAdjustPolicy(
                 QComboBox.AdjustToContents)
@@ -364,12 +380,28 @@ class MWIptcMixin:
             return None
         return {it.data(Qt.UserRole) for it in items}
 
+    def _commercial_allowed_paths(self):
+        """The FTP/Flickr channel's effective file set: the selection (or all
+        files) MINUS commons-marked files (0.12.1). Commons-marked items are
+        disabled in the list so a selection cannot contain them, but the
+        all-files fallback is filtered here. Logs the exclusion count."""
+        selected = self._ftp_selected_paths()
+        if selected is None:
+            selected = {p for p, _n, _t, _r in self._iptc_paths()}
+        allowed = {p for p in selected
+                   if self._channel_mark(p) != channels.MARK_COMMONS}
+        excluded = len(selected) - len(allowed)
+        if excluded:
+            self._ftp_log(tr('{n} file(s) excluded (marked for Commons).')
+                          .format(n=excluded))
+        return allowed
+
     def _ftp_upload_asis(self):
         """Upload without IPTC writing (used when the IPTC tab is off)."""
-        selected = self._ftp_selected_paths()
+        allowed = self._commercial_allowed_paths()
         files = []
         for path, _name, target, _r in self._iptc_paths():
-            if selected is not None and path not in selected:
+            if path not in allowed:
                 continue
             remote = target if os.path.splitext(target)[1] else (
                 target + os.path.splitext(path)[1])
@@ -743,11 +775,12 @@ class MWIptcMixin:
 
     def _iptc_start_ftp_upload(self):
         """FTP tab button with IPTC enabled: selection (or all) -> write
-        IPTC -> upload the written files."""
+        IPTC -> upload the written files. Commons-marked files are excluded
+        (channel marks, 0.12.1)."""
         if not self._ftp_credentials_ok():
             return
         targets = self._iptc_write_targets(
-            only_paths=self._ftp_selected_paths())
+            only_paths=self._commercial_allowed_paths())
         if not targets:
             return
 
@@ -772,6 +805,12 @@ class MWIptcMixin:
         """Shared FTP worker start for both button variants."""
         if not self._ftp_credentials_ok():
             return
+        # Sending a file to an agency IS the channel decision (0.12.4): mark
+        # these as commercial so they are greyed out and skipped on the
+        # Commons side from now on. This is the choke point for both FTP
+        # buttons, so one call covers them.
+        self._mark_uploaded_channel([p for p, _remote in files],
+                                    channels.MARK_COMMERCIAL)
         protocol = self.ftp_protocol_combo.currentText()
         self.ftp_upload_btn.setEnabled(False)
         self._ftp_dlg = UploadProgressDialog(len(files), self)

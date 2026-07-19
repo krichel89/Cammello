@@ -4,19 +4,254 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.12.0] - 2026-07-17
+## [0.12.8] - 2026-07-18
 
 ### Changed
-- **Culling toolbar tidied up.** "Open folder…" is now "Open…", with Reload
-  moved next to it as a compact ⟳ icon button. The zoom −/read-out/+ controls
-  were removed (zoom stays on the mouse wheel and Cmd/Ctrl +/-). The rating,
-  rejects and colour filters are grouped under one "Filter:" label, and the
-  folder-export button is now "Save to…" (the "Send to:" label is gone).
-- **MediaWiki editor gives categories more room.** The "Suggest category"
-  buttons are now a compact "Suggest" behind the Categories field; the tooltips
-  still spell out what each adds.
+- **One sign-in window, reached from both sides.** The "not signed in" link
+  on the MediaWiki page and the button in Settings now open the same
+  window. Previously the link fell through to the bot-password dialog
+  whenever no OAuth token was stored, so a user who had never authorized was
+  sent down the fallback path by the more prominent entry point.
+- The bot password is the fallback INSIDE that window; Settings keeps the
+  authorization status, "remove authorization" and an entry to edit the
+  stored bot-password credentials.
+- Authorizing signs you in immediately - no second click on Login.
+- With an authorization already stored, the link still signs in silently:
+  no window that only says you are already authorized. The Settings button
+  always shows it (re-authorize, switch account).
+
+### Changed
+- Section headings are neutral and maximal-contrast: white on the dark
+  scheme, near-black on the light one, instead of a blue accent.
+- The FTP / Flickr sections use the same heading as everywhere else and
+  fold away; they start expanded and the state is not remembered.
+- IPTC: the constant creator / rights / contact block moved from a
+  full-width band above the page into the right column, next to the file
+  list and above the per-file fields.
+- The collapse arrows of every section are a clear glyph in the heading
+  colour instead of the platform style's small grey triangle.
+
+### Fixed
+- Section headings are legible again: a much stronger accent colour, chosen
+  per colour scheme - the single mid blue of 0.12.7 nearly vanished on the
+  dark background - plus weight and a size a step above the body text
+  (a factor of the UI font, so headings follow it when you change it).
+- The mouse wheel no longer changes the language combo boxes. Scrolling the
+  MediaWiki page with a touchpad kept landing on "Other (ISO code)…" and
+  popping up the code dialog; the wheel now scrolls the page instead.
+- Both option boxes in the sign-in window ("show the link only" and
+  "confirm manually") start unchecked every time. They used to remember
+  their last state, so a single manual sign-in kept the dialog in manual
+  mode indefinitely.
+- Refreshing the OAuth status no longer raises in builds without a
+  configured consumer, where the status widgets are never created.
+
+## [0.12.7] - 2026-07-18
+
+### Changed
+- **Rejected images stay visible** (greyed out, red ✕) instead of being
+  filtered away; the checkbox is inverted and now reads "hide rejects".
+  An active star filter still hides them - a reject has no star count.
+- Module strip: every title is bold at all times, the active one is set
+  apart by colour alone. The width no longer changes when switching, so a
+  title cannot be clipped.
+- One button look across all pages (the MediaWiki style): the chrome for
+  QPushButton and QToolButton lives in the application stylesheet; the
+  Upload button's accent style is a property instead of an inline sheet.
+- Section headings are quieter: accent-coloured text with a thin rule
+  instead of a filled blue badge, and they scale with the UI font.
+- The UI font is one point larger.
+- Manual OAuth confirmation accepts the complete callback address from the
+  browser - including the one from a failed 127.0.0.1 page - and reads the
+  verifier out of it. A plain code still works.
+
+### Fixed
+- Ratings are clamped to the valid range (-1…5) when read, and an
+  out-of-range value is logged with its raw XMP string; all star rendering
+  goes through one bounded helper. Fixes an endless row of stars on a file
+  whose XMP claimed an absurd rating.
+- Greyed-out menu entries render correctly in Windows dark mode: Fusion is
+  now used on Windows even in "system" scheme (the native style paints menu
+  items itself and ignores the stylesheet), with explicit disabled palette
+  roles.
+- The OAuth authorization flow is instrumented - start, mode, link, bind
+  result, callback arrival, timeout, success, failure and cancel all reach
+  the log. Previously a failed sign-in left no trace at all.
+- **Manual sign-in starts the loopback server too.** It used to request an
+  'oob' callback and start no server; with a prefix-registered consumer the
+  wiki redirects to the registered callback regardless, so the browser hit
+  127.0.0.1 with nothing listening (ERR_CONNECTION_REFUSED). The manual
+  mode now listens as well and completes on its own when the redirect
+  arrives - pasting stays available as the fallback, and a true 'oob'
+  request is used only when the port cannot be bound.
+- The wait for the browser is 600 s (was 300 s), and its expiry is logged.
+
+## [0.12.6] - 2026-07-18
 
 ### Added
+- Lightroom-style module strip (top right): Culling · MediaWiki · IPTC ·
+  FTP/Flickr; active step highlighted, synced with Cmd/Ctrl+1…4.
+- Channel marks visible on the images: colored corner dot (teal = Commons,
+  orange = commercial) in filmstrip, grid and the loupe/fullscreen overlay.
+- Rejected images are greyed out with a red ✕ in the corner.
+- Metadata menu with rating (0-5, X) and colour label (6-9; M toggles, 5 =
+  purple in colour mode) actions - shortcuts visible, active only on the
+  culling page.
+- Bot password sub-dialog behind a small button under OAuth in Settings
+  (fallback kept, stored passwords untouched).
+
+### Changed
+- Settings, Log and About are separate windows; the tab row carries only
+  the four workflow steps.
+- Menu entries are greyed out on pages they do not apply to; "Open folder"
+  switches to the culling page first.
+- Edit menu renamed to Metadata; "Remove selected" and "Clear list" moved
+  to File.
+- Section 1 of the MediaWiki page renamed to "Author and license";
+  "Other templates" moved into the base description (and is cleared with
+  it).
+- "Not logged in" is a clickable link straight to the sign-in; signed in,
+  the label shows the username.
+- All pyexiv2 calls run in a crash-isolated helper process (spawn on
+  Windows with freeze_support; fork on POSIX).
+
+### Removed
+- Bulk edit dialog (multi-select editing in the editor covers it).
+
+### Fixed
+- **Ratings and labels are written without any native library**: .xmp
+  sidecars are patched as text, and embedded JPEG XMP is written by
+  rewriting the APP1 segment. Fixes rating loss on Windows, where exiv2
+  crashed on every sidecar and JPEG write.
+- Person shown / Event are read and written as XML text for sidecars too.
+- RAW files (CR2/NEF/…) show a thumbnail in the MediaWiki and IPTC lists
+  again: the camera's embedded preview is used instead of asking Qt to
+  decode a RAW, which also stops the libtiff console flood.
+- The channel dot no longer replaces the thumbnail in the IPTC/FTP lists -
+  it is drawn onto it.
+- Disabled menu entries are mid-gray in dark mode (the rule was in the
+  input-field stylesheet, which menus never see).
+- Module titles are no longer clipped when active (bold) - the buttons are
+  sized for the bold weight.
+- exiv2 crashes no longer kill Cammello: a helper-process crash surfaces as
+  a caught error naming the file, and the helper respawns.
+- The IPTC module no longer opens RAW/DNG files with exiv2 at all - RAW
+  metadata is read from and written to the .xmp sidecar (IIM fields are
+  skipped with a log note).
+
+## [0.12.5] - 2026-07-18
+
+### Fixed
+- **Overlapping buttons** in the narrow right-hand column: the caption
+  button row now wraps, and the wrapping layout reserves each item's
+  minimum width instead of only its preferred width.
+- **Toolbars now actually shrink.** Capping the height had no effect because
+  Qt never draws a widget below its minimum size hint; the compact controls
+  are marked and the stylesheet zeroes their minimum height.
+- **About and Settings were unreachable** after the tab bar was removed:
+  their macOS menu roles moved them into the application menu (named
+  "Python" when run from source). They now stay in Help and File.
+
+### Changed
+- Culling: minimum rating is a row of stars instead of a dropdown (click a
+  star to filter, click it again for all), and the filter block is centred.
+- MediaWiki toolbar reduced to login status, warnings switch and the upload
+  button; Add files / Remove selected / Bulk edit / Clear live in the menus.
+- Bulk edit selected added to the Edit menu (Ctrl/Cmd+B).
+- The editor's Suggest button sits on the Categories row.
+
+## [0.12.4] - 2026-07-18
+
+### Added
+- **Channel marks are set automatically by uploading**: a Commons upload
+  marks its files CC/Commons, an FTP or Flickr upload marks them
+  commercial. Set when the run starts, so an interrupted upload still
+  records the decision.
+
+### Changed
+- Commons channel mark is teal instead of green (green clashed with the
+  green colour label).
+- View menu: working sections only (Cmd/Ctrl+1…n) plus Loupe (E), Grid (G),
+  Fullscreen (F) - plain keys without modifiers. About and Log moved to
+  Help without shortcuts; Login and Test connection moved to Upload.
+- Culling and MediaWiki toolbars are much shorter; the culling filter block
+  is set apart by separators; the Grid button left the toolbar.
+- MediaWiki: "Clear all" is now "Clear"; the upload button says "Upload
+  all" or "Upload selected" depending on the selection.
+- The Suggest buttons sit in the label column now, so the Categories and
+  "created during" fields use the full field width.
+
+### Fixed
+- Pressing Upload while logged out opens the login instead of a warning.
+- Overlapping buttons in the right-hand column (the settings
+  import/export row wraps now).
+
+## [0.12.3] - 2026-07-18
+
+### Added
+- **Native menu bar** (File / Edit / View / Upload / Help), in the macOS
+  system menu bar and in the window on Windows/Linux. It gathers the
+  existing commands with their shortcuts; About, Settings and Quit carry
+  the standard menu roles so macOS files them in the application menu.
+  The View menu switches sections with Cmd/Ctrl+1…9.
+
+### Removed
+- **The tab bar.** Sections are now reached from the View menu; the pages
+  themselves are unchanged.
+
+### Fixed
+- The culling **reload button** showed a barely visible glyph (invisible in
+  some system fonts) and now uses the platform's reload icon.
+
+### Changed
+- **Culling: one file open per image instead of up to six.** The embedded
+  preview and the orientation are now read in a single open, and the
+  orientation is cached per session (cleared on folder reload). Filmstrip
+  thumbs, the screen view and the 100% zoom all reuse it — noticeably
+  faster browsing of large RAW folders, especially on slow volumes.
+
+## [0.12.2] - 2026-07-18
+
+### Added
+- **OAuth: out-of-band (manual code) sign-in.** The sign-in dialog gained a
+  "Enter the confirmation code manually" option. When enabled, Cammello
+  authorizes with `oauth_callback=oob` instead of the loopback redirect:
+  after clicking "Allow" the wiki shows a short verifier code that you paste
+  into Cammello. This works with any consumer regardless of its callback
+  URL, its "callback is prefix" flag, or its approval status — a reliable
+  fallback when the automatic loopback confirmation cannot be used. The
+  loopback flow is unchanged and remains the default.
+
+### Fixed
+- Corrected the consumer-registration guidance in the `mw_oauth` module
+  docstring: the loopback callback must be registered as the bare host
+  (`http://127.0.0.1`, or `http://127.0.0.1:`), because Special:OAuth checks
+  the callback with a plain string prefix and the random loopback port would
+  otherwise break the match. (Documentation only; no runtime change.)
+
+## [0.12.1] - 2026-07-17
+
+### Added
+- **Channel marks: Commons (CC) vs. commercial (FTP/Flickr).** Right-click
+  files in the MediaWiki table or the FTP/Flickr list to mark them for one
+  channel (green = Commons, orange = commercial) or to remove the mark.
+  Marked files stay visible in every list, but are grayed out, unselectable
+  and excluded from uploads in the *other* channel — a CC-released file
+  cannot slip to a stock agency, a commercial file cannot slip onto Commons.
+  The exclusion also covers the "nothing selected = all files" fallback of
+  every upload path. Marks persist across sessions (per file path, new
+  module `channels.py`, QSettings scope 'Channels'). Unmarked files behave
+  exactly as before.
+
+## [0.12.0] - 2026-07-17
+
+### Added
+- **F2 rename in the MediaWiki tab (Lightroom habit).** One selected row: F2
+  edits the target Commons filename inline (extension fixed, as before).
+  Several rows: F2 opens a bulk-rename dialog with a name template — `{n}`
+  becomes a zero-padded running number (auto-appended if missing), free start
+  number, live preview; template and start number persist. Only the Commons
+  target name changes, never the source files.
 - **OAuth sign-in now signs real API requests.** The stored access token is
   used to build an `Authorization` header (RFC 5849 HMAC-SHA1, reusing the
   verified Flickr signing) on every request, with multipart upload bodies
@@ -24,6 +259,29 @@ adheres to [Semantic Versioning](https://semver.org/).
   user has authorized, Login uses OAuth automatically instead of prompting for
   a password; BotPassword remains the default until a consumer key/secret are
   filled in.
+- A permanent "(takes effect after a restart)" hint next to the language
+  dropdown in Settings.
+- **Wikidata release automation.** `release.sh` records each release on
+  Cammello's Wikidata item (Q140509313) via wikibase-cli: P348 with
+  publication date (P577) and release-tag URL as reference (P854), new
+  version *preferred*, superseded versions demoted to *normal*; idempotent
+  and non-fatal (see `wikidata_version.js`).
+
+### Changed
+- **Culling toolbar tidied up.** "Open folder…" is now "Open…", with Reload
+  moved next to it as a ⟳ icon button (glyph scaled up for legibility). The
+  zoom −/read-out/+ controls were removed (zoom stays on the mouse wheel and
+  Cmd/Ctrl +/-). The rating, rejects and colour filters are grouped under one
+  "Filter:" label. The staging button is now "Add to tabs" (de: "Übernehmen";
+  "Apply" was misleading) and the folder-export button "Save to…"; the
+  "Send to:" label is gone.
+- **MediaWiki editor gives categories more room.** The "Suggest category"
+  buttons are now a compact "Suggest" behind the Categories field; the tooltips
+  still spell out what each adds.
+
+### Removed
+- Dead code: the culling tab's direct FTP/Flickr send handlers (orphaned since
+  their buttons were removed in 0.11.8) and duplicate i18n dictionary keys.
 
 ## [0.11.9] - 2026-07-17
 

@@ -1,0 +1,26 @@
+Cammello 0.12.7 - Hinweis zu mw_oauth.py
+========================================
+
+Im Zip liegt die geaenderte OAuth-Datei ABSICHTLICH NICHT unter
+cammello/mw_oauth.py, sondern in der Wurzel als
+
+    mw_oauth_0.12.7_KEYS_EINTRAGEN.py
+
+Grund: sie stammt aus der Kopie, die Du hochgeladen hast, und deren
+CONSUMER_KEY / CONSUMER_SECRET sind leer. Wuerde sie strukturgetreu
+entpackt, ueberschriebe sie Deine echte Datei und OAuth waere still tot.
+
+Zu tun:
+  1. Die beiden Zeilen
+
+         CONSUMER_KEY = ''
+         CONSUMER_SECRET = ''
+
+     in der neuen Datei mit Deinen Werten fuellen (aus der bisherigen
+     cammello/mw_oauth.py uebernehmen).
+  2. Datei nach cammello/mw_oauth.py verschieben.
+  3. Die Datei mw_oauth_0.12.7_KEYS_EINTRAGEN.py und diese LIESMICH
+     danach loeschen - beide gehoeren nicht ins Repo.
+
+Alle anderen Dateien im Zip sind strukturgetreu und koennen wie immer
+per verteile-cammello.command eingespielt werden.

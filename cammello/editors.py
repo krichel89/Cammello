@@ -1,10 +1,10 @@
-"""Caption/description editors and the bulk-edit dialog."""
+"""Caption/description editors (the bulk-edit dialog was removed in
+0.12.6 - multi-select editing in the editor covers it)."""
 import re
-import os
 from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QWidget, QLabel, QLineEdit, QPushButton,
                              QComboBox, QTextEdit, QVBoxLayout, QHBoxLayout,
-                             QFormLayout, QDialog, QDialogButtonBox)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QFormLayout)
+from PyQt5.QtCore import pyqtSignal
 from .constants import *
 from .constants import _caption_extra_langs
 from .sdc import *
@@ -36,7 +36,7 @@ class CaptionsEditor(QWidget):
         self._rows_box.setSpacing(4)
         outer.addLayout(self._rows_box)
 
-        btn_row = QHBoxLayout()
+        btn_row = FlowLayout(spacing=8)
         btn_row.setContentsMargins(0, 0, 0, 0)
         add_btn = QPushButton(tr('Add language'))
         add_btn.clicked.connect(
@@ -48,7 +48,6 @@ class CaptionsEditor(QWidget):
                'caption text, where the Information field is still empty.'))
         info_btn.clicked.connect(self._info_from_captions)
         btn_row.addWidget(info_btn)
-        btn_row.addStretch()
         outer.addLayout(btn_row)
 
         self.add_row()  # start with one empty row
@@ -61,7 +60,9 @@ class CaptionsEditor(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
 
-        combo = QComboBox()
+        # NoWheelComboBox: scrolling the page must not change the language
+        # (and this combo's action entries open dialogs) - see widgets.
+        combo = NoWheelComboBox()
         self._populate_combo(combo, lang)
         combo.setMaximumWidth(150)
         combo.currentIndexChanged.connect(
@@ -336,7 +337,7 @@ class StructuredDescriptionEditor(QWidget):
         # labels (the checkbox texts were too long to sit side by side).
         # itemData: '' = no override; else the depicts_override= value.
         if not self.is_base:
-            self.override_combo = QComboBox()
+            self.override_combo = NoWheelComboBox()
             self.override_combo.addItem(tr('depicts is set (required)'), '')
             self.override_combo.addItem(tr('No Wikidata item'), 'no_item')
             self.override_combo.addItem(tr('Not applicable'), 'not_applicable')
@@ -380,32 +381,25 @@ class StructuredDescriptionEditor(QWidget):
             form.addRow(tr('Depicts (P180):'), self.depicts)
             form.addRow(tr('If no depicts:'), self.override_combo)
         if self.is_base:
-            # 'created during' lives in the base description; its category
-            # suggestion belongs here too (was wrongly in the per-file editor).
-            cd_row = QHBoxLayout()
-            cd_row.addWidget(self.created_during, 1)
-            suggest_btn = QPushButton(tr('Suggest'))
-            suggest_btn.setMaximumWidth(96)
-            suggest_btn.setToolTip(
+            # Plain row: the button that fills a category FROM this field sits
+            # on the Categories row below, where its result lands (0.12.5).
+            form.addRow(tr('Created during (P10408):'), self.created_during)
+        # Categories row - with the Suggest button in the label column, so
+        # the input keeps the full field width.
+        cat_btn = QPushButton(tr('Suggest'))
+        if self.is_base:
+            cat_btn.setToolTip(
                 tr('Adds a base category from the "created during" event '
                    '(Commons category P373, or the label; a missing year is '
                    'taken from the Date column).'))
-            suggest_btn.clicked.connect(self.suggest_requested)
-            cd_row.addWidget(suggest_btn)
-            form.addRow(tr('Created during (P10408):'), cd_row)
-        if not self.is_base:
-            cat_row = QHBoxLayout()
-            cat_row.addWidget(self.categories, 1)
-            depicts_cat_btn = QPushButton(tr('Suggest'))
-            depicts_cat_btn.setMaximumWidth(96)
-            depicts_cat_btn.setToolTip(
+            cat_btn.clicked.connect(self.suggest_requested)
+        else:
+            cat_btn.setToolTip(
                 tr('Adds categories from the depicts entries (Commons '
                    'category P373, or the label).'))
-            depicts_cat_btn.clicked.connect(self.suggest_depicts_requested)
-            cat_row.addWidget(depicts_cat_btn)
-            form.addRow(tr('Categories:'), cat_row)
-        else:
-            form.addRow(tr('Categories:'), self.categories)
+            cat_btn.clicked.connect(self.suggest_depicts_requested)
+        form.addRow(_label_with_button(tr('Categories:'), cat_btn),
+                    self.categories)
         if self.is_base:
             form.addRow(tr('Gallery suffix:'), self.gallery_suffix)
         apply_form_ratio(form)
@@ -508,74 +502,23 @@ class StructuredDescriptionEditor(QWidget):
 # ── Main window ────────────────────────────────────────────────────────────────
 
 
-class BulkEditDialog(QDialog):
-    """Pick one field and a value to apply to all selected rows.
 
-    Fields:
-      depicts / categories  -> per-file description keys
-      caption:en / caption:de -> per-file caption in that language
-      date                  -> the Date column
-    An empty value clears that field on the selected rows.
+def _label_with_button(text, button):
+    """Form label that carries an action button (0.12.4).
+
+    Harald's layout call: the "Suggest" buttons belong in the LEFT half,
+    directly after the caption - not squeezed in beside the input field,
+    where they ate the field's width. The caption keeps as much room as it
+    needs; the button sits right behind it and the input field gets the
+    whole right column.
     """
-    FIELDS = [
-        ('Depicts (P180)', 'depicts'),
-        ('Categories', 'categories'),
-        ('Caption (en)', 'caption:en'),
-        ('Caption (de)', 'caption:de'),
-        ('Date', 'date'),
-    ]
-
-    def __init__(self, n_selected, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(tr('Bulk edit selected files'))
-        self.setStyleSheet(current_input_style())
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(
-            tr('Apply a value to the {n} selected file(s):').format(
-                n=n_selected)))
-
-        form = QFormLayout()
-        self.field_combo = QComboBox()
-        for label, key in self.FIELDS:
-            self.field_combo.addItem(tr(label), key)
-        self.value_edit = QLineEdit()
-        form.addRow(tr('Field:'), self.field_combo)
-        form.addRow(tr('Value:'), self.value_edit)
-        apply_form_ratio(form)
-        layout.addLayout(form)
-
-        self.hint = QLabel('')
-        self.hint.setStyleSheet('color:#888;')
-        self.hint.setWordWrap(True)
-        layout.addWidget(self.hint)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        # Wikidata suggestions on the value field, active only for Depicts.
-        self._suggest = WikidataSuggest(self.value_edit, multi=True)
-        self.field_combo.currentIndexChanged.connect(self._on_field_changed)
-        self._on_field_changed()
-
-    def _on_field_changed(self):
-        key = self.field_combo.currentData()
-        is_depicts = (key == 'depicts')
-        self._suggest.set_enabled(is_depicts)
-        if is_depicts:
-            _style_wd_field(self.value_edit, multi=True, searchable=True)
-        else:
-            self.value_edit.setStyleSheet('')
-        hints = {
-            'depicts': tr('Semicolon-separated QIDs; type a name to search Wikidata.'),
-            'categories': tr('Semicolon-separated, without [[Category:]].'),
-            'caption:en': tr('Sets the English SDC caption.'),
-            'caption:de': tr('Sets the German SDC caption.'),
-            'date': tr('Sets the Date column (e.g. 2026-02-15).'),
-        }
-        self.hint.setText(hints.get(key, '') + '  Empty value clears this field.')
-
-    def result_field_value(self):
-        return self.field_combo.currentData(), self.value_edit.text().strip()
+    box = QWidget()
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(4)
+    label = QLabel(text)
+    label.setWordWrap(True)
+    row.addWidget(label, 1)
+    button.setMaximumHeight(22)
+    row.addWidget(button, 0)
+    return box

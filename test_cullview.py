@@ -71,9 +71,8 @@ open(os.path.join(folder, 'IMG_0001.CR3'), 'wb').write(b'\0' * 32)
 
 w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 tabs = [w.tabs.tabText(i) for i in range(w.tabs.count())]
-check('tabs order',
-      tabs == ['Culling', 'MediaWiki', 'IPTC', 'FTP', 'Settings', 'Log',
-               'About'],
+check('tabs order (0.12.6: workflow tabs only)',
+      tabs == ['Culling', 'MediaWiki', 'IPTC', 'FTP'],
       str(tabs))
 w.tabs.setCurrentWidget(w._cull_tab_widget)
 w._cull_tab_widget.setFocus()
@@ -154,21 +153,22 @@ check('pair got a sidecar',
 check('no write errors', w._cull_wb.errors == [], str(w._cull_wb.errors))
 
 # Filters: ≥3 hides everything except item 0 (rating 3).
-w.cull_minrating_combo.setCurrentIndex(3)
+w._cull_set_min_rating(3)
 check('filter >=3 leaves 1 image', len(w._cull_visible) == 1,
       str([i.stem for i in w._cull_visible]))
-check('reject hidden by default',
-      all(i.rating != -1 for i in w._cull_visible))
-w.cull_rejects_cb.setChecked(True)
-check('rejects appear on demand',
+# 0.12.7: rejects are VISIBLE by default; the checkbox hides them.
+w._cull_set_min_rating(0)
+check('reject shown by default',
       any(i.rating == -1 for i in w._cull_visible))
-w.cull_rejects_cb.setChecked(False)
-w.cull_minrating_combo.setCurrentIndex(0)
-check('filter reset shows 5 (reject stays hidden)',
-      len(w._cull_visible) == 5)
+w.cull_hide_rejects_cb.setChecked(True)
+check('rejects disappear when hiding is requested',
+      all(i.rating != -1 for i in w._cull_visible))
+check('hiding the reject leaves 5', len(w._cull_visible) == 5)
+w.cull_hide_rejects_cb.setChecked(False)
+check('filter reset shows all 6', len(w._cull_visible) == 6)
 
 # Hand-over: pair mode "JPEG" adds one file per image.
-w.cull_minrating_combo.setCurrentIndex(3)
+w._cull_set_min_rating(3)
 w.cull_pair_combo.setCurrentIndex(0)
 w._cull_to_table()
 spin(150)
@@ -180,8 +180,8 @@ check('in-table badge set', w._cull_items[0].in_table)
 
 # Pair mode "both": include rejects (the pair was rejected above), add -
 # the pair contributes 2 paths.
-w.cull_minrating_combo.setCurrentIndex(0)
-w.cull_rejects_cb.setChecked(True)
+w._cull_set_min_rating(0)
+w.cull_hide_rejects_cb.setChecked(False)
 w.cull_pair_combo.setCurrentIndex(2)
 w._cull_to_table()
 spin(150)
@@ -403,8 +403,8 @@ w6 = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 check('auto-advance persisted', w6.cull_advance_cb.isChecked() is False)
 check('label set persisted', w6.cull_labelset_combo.currentText() == 'en')
 check('pair mode persisted', w6.cull_pair_combo.currentIndex() == 2)
-check('Settings tab exists',
-      'Settings' in [w6.tabs.tabText(i) for i in range(w6.tabs.count())])
+check('Settings page exists (0.12.6: dialog, not a tab)',
+      w6._settings_tab_widget is not None)
 
 
 # ── Unreleased: current-image frame, zoom ladder, slider snap + fill range ────
@@ -645,7 +645,7 @@ check('thumbnails rendered at 2x source (no blur when enlarged)',
 
 # IPTC list mirrors thumbnails from the main table (no own decoding).
 w11.cull_strip.clearSelection()
-w11.cull_minrating_combo.setCurrentIndex(0)
+w11._cull_set_min_rating(0)
 w11._cull_to_table()
 spin(150)
 w11.tabs.setCurrentWidget(w11._iptc_tab_widget)

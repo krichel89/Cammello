@@ -9,7 +9,10 @@ signed API calls afterwards go to commons.wikimedia.org):
     4. user clicks "Allow" -> browser is redirected to the loopback server,
        which captures oauth_verifier (and checks the token matches)
     5. Special:OAuth/token    -> access token + access secret
-    6. Special:OAuth/identify -> username (JWT, verified here)
+    6. action=query&meta=userinfo on the consumer's wiki (Commons) -> the
+       authorizing user's name.  (NOT Special:OAuth/identify on meta: a
+       Commons-restricted consumer's token is not valid there.  The old JWT
+       identify() helper is kept below for reference but unused.)
 
 The access token/secret pair never expires and belongs in the OS keyring
 (credentials.mw_oauth_slot).  There is no login API call and no session
@@ -23,13 +26,34 @@ oauth_signature/oauth_base_params/_enc there and import from both sides.)
 
 Consumer registration (one-time, on Meta):
     Special:OAuthConsumerRegistration/propose, OAuth 1.0a, NOT owner-only,
-    applicable project: commonswiki, grants: edit + upload,
-    callback URL http://127.0.0.1/cammello/ with
-    "Allow consumer to specify a callback in requests" CHECKED
-    (that prefix option is what permits the random port below).
-    Paste the resulting key/secret into CONSUMER_KEY / CONSUMER_SECRET.
-    Until OAuth admins approve the consumer, only the proposer can
-    authorize it - keep the BotPassword path as the default until then.
+    applicable project: commons.wikimedia.org, grants: edit + upload.
+    Callback URL: http://127.0.0.1:8127/cammello/  (the FIXED loopback port,
+    LOOPBACK_PORT), with "Allow consumer to specify a callback in requests
+    ... as a required prefix" CHECKED.
+
+    Why a fixed port with the full path: after "Allow", Wikimedia redirects
+    the browser to the callback, and in practice it uses the REGISTERED
+    callback URL as the redirect target.  So the port Cammello listens on
+    must equal the registered port, and the registered path must be the one
+    Cammello's little server answers on - otherwise the browser lands on a
+    port/path where nothing is listening ("cannot connect to 127.0.0.1").
+    A fixed port makes the redirect land on the running server every time,
+    so the verifier is captured automatically (no manual code entry).
+
+    Special:OAuth checks the callback with a PLAIN STRING PREFIX (a substr
+    compare - no port wildcard).  With the box checked, the request callback
+    http://127.0.0.1:8127/cammello/ must start with the registered one; keep
+    them identical.
+
+    For OTHER users (not the proposer) to sign in, the consumer must be
+    APPROVED by OAuth admins - submit it and wait.  As the proposer you can
+    use it immediately.  Paste the resulting key/secret into
+    CONSUMER_KEY / CONSUMER_SECRET; both ship in the binary by design.
+
+    Fallback - out-of-band (oob) flow (begin_oob / finish_oob): if the fixed
+    loopback port is busy or blocked, authorize with oauth_callback='oob'
+    instead (the dialog's "Enter the confirmation code manually" box).  'oob'
+    is always accepted; the user pastes a verifier code by hand.
 
 The consumer secret ships inside the binary by design.  It cannot be used
 to access any account (every request needs the per-user access secret on
@@ -47,6 +71,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -61,13 +86,41 @@ from .flickr import oauth_base_params, oauth_signature
 from .i18n import tr
 
 # ── Consumer registration values (fill in after registering on Meta) ─────────
-CONSUMER_KEY = ''       # from Special:OAuthConsumerRegistration
-CONSUMER_SECRET = ''    # ships in the binary on purpose - see module docstring
+CONSUMER_KEY = '5e47974d7554dd00ec45ecb84f671d19'       # from Special:OAuthConsumerRegistration
+CONSUMER_SECRET = 'da6a904e70f715956fc10ac2e72321ee3e92c347'    # ships in the binary on purpose - see module docstring
 
 OAUTH_INDEX = 'https://meta.wikimedia.org/w/index.php'
 OAUTH_ISSUER = 'https://meta.wikimedia.org'   # `iss` claim in identify JWTs
+# The username is fetched from the consumer's own wiki (Commons), NOT from
+# meta: a consumer restricted to commons.wikimedia.org gets an access token
+# that is only valid on Commons, so Special:OAuth/identify on meta fails with
+# mwoauth-invalid-authorization-wrong-wiki.  A signed userinfo call to the
+# Commons API uses the token where it IS valid (the same place uploads go).
+USERINFO_API = 'https://commons.wikimedia.org/w/api.php'
 CALLBACK_PATH = '/cammello/'                  # must match registered prefix
 LOOPBACK_HOST = '127.0.0.1'
+# A FIXED loopback port (not a random one): Wikimedia redirects the browser
+# to the registered callback URL, so the port Cammello listens on must be the
+# exact port that was registered.  A random port would leave the redirect
+# pointing at a port where nothing is listening ("cannot connect to
+# 127.0.0.1").  The registered consumer callback must therefore be exactly
+# http://127.0.0.1:8127/cammello/ (with the prefix box checked).  If the port
+# is busy, the sign-in dialog falls back to the manual (oob) code entry.
+LOOPBACK_PORT = 8127
+
+# 0.12.7: this module used to log NOTHING. A sign-in that failed left no
+# trace at all in cammello_debug.log - not the bind result, not the callback
+# that was requested, not a timeout - so the cause could not be told apart
+# from the outside (Harald's failed manual sign-in, 18.07.2026). Every
+# station below now logs. No secrets: tokens and verifiers are never
+# written, only whether they arrived.
+_log = logging.getLogger('Cammello')
+
+# How long the loopback server waits for the browser round-trip. Generous on
+# purpose: the user may have to sign in to the wiki first, pick an account,
+# or move to another browser. Being slow must never be the reason a sign-in
+# fails (Harald: "the manual way should not have to be faster").
+DEFAULT_TIMEOUT_S = 600
 
 
 def is_configured():
@@ -206,15 +259,51 @@ def authorization_header(method, url, params, access_token, access_secret):
     return f'OAuth realm="Cammello", {parts}'
 
 
+# ── Who am I: username via the consumer's own wiki (Commons) ─────────────────
+
+def whoami(access_token, access_secret, api_url=USERINFO_API, timeout=30):
+    """Authorizing user's name, via a signed action=query&meta=userinfo call
+    to the consumer's wiki (Commons by default).
+
+    Used instead of the meta JWT identify endpoint: a Commons-restricted
+    consumer's token is not valid on meta, so identify() there returns
+    mwoauth-invalid-authorization-wrong-wiki.  This call signs a normal API
+    request the same way api.py does, against the wiki where the token is
+    valid, and reads the name straight out of the userinfo block.
+    """
+    params = {'action': 'query', 'meta': 'userinfo', 'format': 'json'}
+    header = authorization_header('GET', api_url, params,
+                                  access_token, access_secret)
+    r = requests.get(api_url, params=params,
+                     headers={'User-Agent': WD_USER_AGENT,
+                              'Authorization': header}, timeout=timeout)
+    try:
+        data = r.json()
+    except ValueError:
+        raise MWOAuthError(f'userinfo: non-JSON reply (HTTP {r.status_code}): '
+                           f'{r.text[:200]}')
+    if 'error' in data:
+        err = data['error']
+        raise MWOAuthError(f'userinfo: {err.get("code")}: {err.get("info", "")}')
+    name = data.get('query', {}).get('userinfo', {}).get('name', '')
+    if not name:
+        raise MWOAuthError(f'userinfo: no username in reply {data!r}')
+    return name
+
+
 # ── Loopback callback server ─────────────────────────────────────────────────
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlsplit(self.path)
-        if not parsed.path.startswith(CALLBACK_PATH):
+        query = dict(parse_qsl(parsed.query))
+        # Capture as long as this looks like the OAuth redirect (carries a
+        # verifier), whatever path Wikimedia sent it to - the redirect target
+        # is the registered callback, whose path we do not fully control.
+        if 'oauth_verifier' not in query and 'oauth_token' not in query:
             self.send_error(404)
             return
-        self.server.captured = dict(parse_qsl(parsed.query))
+        self.server.captured = query
         msg = tr("Authorization received. You can close this window "
                  "and return to Cammello.")
         body = ('<!doctype html><meta charset="utf-8"><title>Cammello</title>'
@@ -231,25 +320,48 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
 
 class _LoopbackServer:
-    """One-shot HTTP server bound to 127.0.0.1 on a random free port."""
+    """One-shot HTTP server bound to 127.0.0.1 on the FIXED LOOPBACK_PORT so
+    it matches the registered consumer callback."""
 
     def __init__(self):
-        self.httpd = HTTPServer((LOOPBACK_HOST, 0), _CallbackHandler)
+        try:
+            self.httpd = HTTPServer((LOOPBACK_HOST, LOOPBACK_PORT),
+                                    _CallbackHandler)
+        except OSError as e:
+            _log.warning('OAuth: could not listen on %s:%s (%s) - the '
+                         'browser redirect will land nowhere.',
+                         LOOPBACK_HOST, LOOPBACK_PORT, e)
+            raise MWOAuthError(tr(
+                'The local port {port} needed for sign-in is already in use. '
+                'Close the program using it, or tick "Enter the confirmation '
+                'code manually" to sign in without it.').format(
+                    port=LOOPBACK_PORT)) from e
         self.httpd.timeout = 0.5        # poll interval for cancellation
         self.httpd.captured = None
-        self.port = self.httpd.server_address[1]
-        self.callback = f'http://{LOOPBACK_HOST}:{self.port}{CALLBACK_PATH}'
+        self.port = LOOPBACK_PORT
+        self.callback = f'http://{LOOPBACK_HOST}:{LOOPBACK_PORT}{CALLBACK_PATH}'
+        _log.info('OAuth: listening on %s for the callback.', self.callback)
 
     def wait(self, timeout_s, cancelled):
         """Block until one callback arrived, timeout, or cancelled()."""
         deadline = time.monotonic() + timeout_s
+        _log.debug('OAuth: waiting up to %s s for the browser to come back.',
+                   timeout_s)
         while self.httpd.captured is None:
             if cancelled():
+                _log.info('OAuth: wait for the callback cancelled.')
                 raise MWOAuthError(tr('Authorization cancelled.'))
             if time.monotonic() > deadline:
+                # Explicit, because a silent expiry is indistinguishable
+                # from "nothing ever arrived" in the log.
+                _log.warning('OAuth: no callback within %s s - giving up on '
+                             'the automatic return.', timeout_s)
                 raise MWOAuthError(tr('Authorization timed out.'))
             self.httpd.handle_request()
-        return self.httpd.captured
+        got = self.httpd.captured
+        _log.info('OAuth: callback received (verifier present: %s).',
+                  'yes' if got.get('oauth_verifier') else 'no')
+        return got
 
     def close(self):
         try:
@@ -260,7 +372,7 @@ class _LoopbackServer:
 
 # ── Full blocking flow + Qt worker ───────────────────────────────────────────
 
-def run_authorization(timeout_s=300, cancelled=lambda: False,
+def run_authorization(timeout_s=DEFAULT_TIMEOUT_S, cancelled=lambda: False,
                       open_url=webbrowser.open):
     """Blocking end-to-end authorization.
 
@@ -272,7 +384,10 @@ def run_authorization(timeout_s=300, cancelled=lambda: False,
                            '(mw_oauth.CONSUMER_KEY).')
     server = _LoopbackServer()
     try:
+        _log.info('OAuth: requesting a request token (callback: %s).',
+                  server.callback)
         req_token, req_secret = initiate(server.callback)
+        _log.info('OAuth: request token received; opening the browser.')
         open_url(authorize_url(req_token))
         captured = server.wait(timeout_s, cancelled)
     finally:
@@ -285,8 +400,182 @@ def run_authorization(timeout_s=300, cancelled=lambda: False,
     if not verifier:
         raise MWOAuthError('callback carried no oauth_verifier')
     access_token, access_secret = complete(req_token, req_secret, verifier)
-    claims = identify(access_token, access_secret)
-    return access_token, access_secret, claims.get('username', '')
+    username = whoami(access_token, access_secret)
+    return access_token, access_secret, username
+
+
+# ── Out-of-band (oob) flow: no loopback, user pastes a verifier code ─────────
+# Works with ANY consumer no matter its callback URL, its "callback is
+# prefix" flag, or its approval status, because oauth_callback='oob' is
+# always accepted by Special:OAuth/initiate.  The trade-off is manual: after
+# clicking "Allow" the wiki shows a short verifier code that the user copies
+# back into Cammello.  Split into two steps because the user acts in between.
+
+def begin_oob(timeout=30, use_loopback=True):
+    """Manual step 1: -> (request_token, request_secret, url, server).
+
+    0.12.7 - why this no longer asks for 'oob' by default
+    -----------------------------------------------------
+    It used to call initiate('oob'), on the assumption that the wiki would
+    then DISPLAY a verifier code. With this consumer it does not: the
+    callback is registered "as a required prefix", 'oob' does not match that
+    prefix, and Special:OAuth redirects the browser to the REGISTERED
+    callback anyway. With no loopback server running, the browser hit
+    127.0.0.1 and showed ERR_CONNECTION_REFUSED - exactly what Harald saw on
+    18.07.2026. The verifier was in the address bar all along and nobody was
+    there to take it.
+
+    So the manual mode now starts the loopback server TOO and asks for the
+    same callback as the automatic flow. Effect:
+      * if the redirect arrives, the caller's watcher completes the sign-in
+        without the user pasting anything;
+      * if it does not (server on another machine, browser blocked), the
+        user pastes the address from the browser, which works whether or
+        not the page loaded.
+    Only when the port cannot be bound does it fall back to a true 'oob'
+    request - the one situation where that is the honest thing to ask for.
+
+    `server` is None in the fallback case; the caller must close it.
+    """
+    if not is_configured():
+        raise MWOAuthError('OAuth consumer key/secret not configured '
+                           '(mw_oauth.CONSUMER_KEY).')
+    server = None
+    callback = 'oob'
+    if use_loopback:
+        try:
+            server = _LoopbackServer()
+            callback = server.callback
+        except MWOAuthError as exc:
+            # Not fatal here: the manual path exists precisely for this.
+            _log.warning('OAuth manual: no loopback server (%s) - falling '
+                         'back to a true oob request.', exc)
+    _log.info('OAuth manual: requesting a request token (callback: %s).',
+              callback)
+    try:
+        req_token, req_secret = initiate(callback, timeout)
+    except Exception:
+        if server is not None:
+            server.close()
+        raise
+    return req_token, req_secret, authorize_url(req_token), server
+
+
+def finish_oob(request_token, request_secret, verifier, timeout=30):
+    """oob step 2: the pasted verifier code ->
+    (access_token, access_secret, username)."""
+    verifier = (verifier or '').strip()
+    if not verifier:
+        raise MWOAuthError(tr('Please paste the confirmation code first.'))
+    _log.info('OAuth manual: exchanging the pasted confirmation.')
+    access_token, access_secret = complete(
+        request_token, request_secret, verifier, timeout)
+    username = whoami(access_token, access_secret)
+    _log.info('OAuth manual: sign-in completed for user "%s".', username)
+    return access_token, access_secret, username
+
+
+class OAuthOOBBeginWorker(QThread):
+    """Manual phase 1 off the GUI thread -> authorize URL.
+
+    Since 0.12.7 this also starts the loopback server (see begin_oob); the
+    server object is left on `.server` for the caller, which starts an
+    OAuthCallbackWatchWorker on it and is responsible for closing it.
+
+    Signals:
+        ready(request_token, request_secret, url, loopback_active)
+        failed(message)
+    """
+
+    ready = pyqtSignal(str, str, str, bool)
+    failed = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.server = None
+
+    def run(self):
+        try:
+            req_token, req_secret, url, server = begin_oob()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.server = server
+        self.ready.emit(req_token, req_secret, url, server is not None)
+
+
+class OAuthCallbackWatchWorker(QThread):
+    """Waits on an ALREADY RUNNING loopback server during the manual flow.
+
+    Runs in parallel with the user pasting something by hand: whichever
+    completes first wins. A timeout is NOT a failure here - the manual path
+    is still open - so it gets its own quiet signal instead of failed().
+
+    Signals:
+        succeeded(access_token, access_secret, username)
+        expired(message)   - timed out or cancelled; the dialog stays open
+    """
+
+    succeeded = pyqtSignal(str, str, str)
+    expired = pyqtSignal(str)
+
+    def __init__(self, server, request_token, request_secret,
+                 timeout_s=DEFAULT_TIMEOUT_S, parent=None):
+        super().__init__(parent)
+        self._server = server
+        self._rt = request_token
+        self._rs = request_secret
+        self._timeout_s = timeout_s
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            captured = self._server.wait(self._timeout_s,
+                                         lambda: self._cancelled)
+        except Exception as exc:
+            self.expired.emit(str(exc))
+            return
+        try:
+            if captured.get('oauth_token') != self._rt:
+                raise MWOAuthError('callback token mismatch')
+            verifier = captured.get('oauth_verifier', '')
+            if not verifier:
+                raise MWOAuthError('callback carried no oauth_verifier')
+            token, secret, username = finish_oob(self._rt, self._rs, verifier)
+        except Exception as exc:
+            self.expired.emit(str(exc))
+            return
+        self.succeeded.emit(token, secret, username)
+
+
+class OAuthOOBFinishWorker(QThread):
+    """oob phase 2 off the GUI thread: verifier -> access token + identify.
+
+    Signals:
+        succeeded(access_token, access_secret, username)
+        failed(message)
+    """
+
+    succeeded = pyqtSignal(str, str, str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, request_token, request_secret, verifier, parent=None):
+        super().__init__(parent)
+        self._rt = request_token
+        self._rs = request_secret
+        self._verifier = verifier
+
+    def run(self):
+        try:
+            token, secret, username = finish_oob(
+                self._rt, self._rs, self._verifier)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.succeeded.emit(token, secret, username)
 
 
 class OAuthAuthorizeWorker(QThread):

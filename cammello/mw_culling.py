@@ -24,22 +24,48 @@ from PyQt5.QtWidgets import (
     QListWidgetItem, QComboBox, QCheckBox, QFileDialog, QMessageBox, QSplitter,
     QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
     QToolButton)
-from PyQt5.QtGui import QIcon, QPixmap, QColor, QBrush, QPen
+from PyQt5.QtGui import QIcon, QPixmap, QColor, QPen, QPainter
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 
 from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 
 from .constants import *
-from . import culling, previews
+from . import culling
+from . import channels, previews
 from .culling_view import CullImageView
-from .ftp_workers import FtpUploadWorker
-from .widgets import UploadProgressDialog
+from .widgets import (UploadProgressDialog, toolbar_separator,
+                      slim_toolbar)
 from .i18n import tr
 
 # Zoom ladder: 12 roughly proportional steps (factor ~1.4-1.5) between 5% and
 # 400%, all of them easy mental-arithmetic values (thirds, halves, doublings);
 # 100% is an exact member.
 ZOOM_STEPS = [5, 10, 15, 25, 33, 50, 67, 100, 150, 200, 300, 400]
+
+
+# 0.12.7: rating -> glyphs, in ONE place and structurally bounded.
+#
+# Harald saw a file drawn with an endless row of stars. The read path now
+# clamps (culling.read_item_metadata), but a value can also reach the UI
+# from elsewhere (an item built by hand, a future importer), and every
+# painter used its own `'*' * rating` expression - three chances to repeat
+# the same unbounded multiplication. Public name: `from .widgets import *`
+# style imports skip underscored names, and this is used across modules.
+def rating_marks(rating, empty=False):
+    """Return the rating as text: 'X' for rejected, else up to five stars.
+
+    `empty=True` pads with hollow stars to a constant width of five.
+    Any value outside -1..5 is clamped, so the result can never grow
+    beyond five glyphs no matter what reaches this function.
+    """
+    try:
+        value = int(rating)
+    except (TypeError, ValueError):
+        value = 0
+    value = max(-1, min(5, value))
+    if value == -1:
+        return '✕'
+    return '★' * value + ('☆' * (5 - value) if empty else '')
 
 
 class _LabelBarDelegate(QStyledItemDelegate):
@@ -105,7 +131,7 @@ class _LabelBarDelegate(QStyledItemDelegate):
         half = (r.width() - 2 * inset) // 2
         rating = index.data(Qt.UserRole + 1)
         if rating:
-            marks = '✕' if rating == -1 else '★' * int(rating)
+            marks = rating_marks(rating)
             painter.setPen(text_color)
             painter.drawText(r.x() + inset,
                              band_top + band_h - fm.descent() - 1, marks)
@@ -115,6 +141,29 @@ class _LabelBarDelegate(QStyledItemDelegate):
                              band_top + (band_h - self.BAR) // 2,
                              half - 2, self.BAR,
                              QColor(culling.LABEL_COLORS[idx]))
+        # Channel mark (0.12.6): a small filled dot in the TOP-LEFT corner -
+        # teal = Commons, orange = commercial. Top-left because the top-right
+        # corner carries the reject cross.
+        mark = index.data(Qt.UserRole + 3)
+        if mark:
+            color = (channels.COLOR_COMMONS if mark == channels.MARK_COMMONS
+                     else channels.COLOR_COMMERCIAL)
+            d = 10
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(QPen(QColor('#00000060'), 1))
+            painter.setBrush(QColor(color))
+            painter.drawEllipse(r.x() + inset, r.y() + inset, d, d)
+            painter.setBrush(Qt.NoBrush)
+        if rating == -1:
+            # Rejected (0.12.6): grey the thumbnail out and put a small x in
+            # the top-right corner - visible at a glance in strip and grid.
+            painter.fillRect(r.adjusted(2, 2, -3, -3), QColor(0, 0, 0, 110))
+            painter.setPen(QPen(QColor('#e05050'), 2))
+            f = painter.font()
+            f.setPixelSize(14)
+            f.setBold(True)
+            painter.setFont(f)
+            painter.drawText(r.right() - inset - 14, r.y() + inset + 12, '✕')
         if selected:
             painter.setPen(QPen(self.sel_frame, w))
             painter.drawRect(r.adjusted(2, 2, -3, -3))
@@ -307,15 +356,29 @@ class MWCullingMixin:
         w = _CullTab(self)
         outer = QVBoxLayout(w)
 
-        # Toolbar
+        # Toolbar - deliberately slim (0.12.4): tight margins and a fixed,
+        # short control height, so the bar costs as little vertical room as
+        # possible and the images get the space.
         bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 2)
+        bar.setSpacing(6)
         open_btn = QPushButton(tr('Open…'))
         open_btn.setToolTip(tr('Open a folder of images for culling.'))
         open_btn.clicked.connect(self._cull_open_folder)
         bar.addWidget(open_btn)
-        # Reload sits right next to Open as a compact icon button.
+        # Reload sits right next to Open as a compact icon button. The ⟳ glyph
+        # is tiny at the default font size, so scale it up to button height.
         self.cull_reload_btn = QToolButton()
-        self.cull_reload_btn.setText('⟳')
+        # The "⟳" glyph rendered as a barely-visible hairline (and as tofu in
+        # some font fallbacks), so use the platform's own reload icon and keep
+        # a text label as the fallback when a style has no such icon.
+        _reload_icon = self.style().standardIcon(QStyle.SP_BrowserReload)
+        if _reload_icon.isNull():
+            self.cull_reload_btn.setText(tr('Reload'))
+        else:
+            self.cull_reload_btn.setIcon(_reload_icon)
+            self.cull_reload_btn.setIconSize(QSize(18, 18))
+        self.cull_reload_btn.setMinimumSize(32, 28)
         self.cull_reload_btn.setToolTip(tr('Read the current folder again from disk.'))
         self.cull_reload_btn.clicked.connect(self._cull_reload_folder)
         bar.addWidget(self.cull_reload_btn)
@@ -323,28 +386,46 @@ class MWCullingMixin:
         self.cull_mode_lbl.setToolTip(tr('Number keys 1-5 set stars or colors; '
                                       'M toggles the mode.'))
         bar.addWidget(self.cull_mode_lbl)
-        # Zoom is driven by the mouse wheel / trackpad and Cmd/Ctrl +/- (the
-        # keyboard shortcuts stay live); the toolbar buttons were redundant.
-        self.cull_grid_btn = QPushButton(tr('Grid'))
-        self.cull_grid_btn.setCheckable(True)
-        self.cull_grid_btn.setToolTip(tr('Grid view (G): thumbnails instead of '
-                                      'the large image.'))
-        self.cull_grid_btn.toggled.connect(self._cull_set_grid)
-        bar.addWidget(self.cull_grid_btn)
-        bar.addSpacing(12)
+        # Zoom (wheel / Cmd+-), the view modes (E loupe, G grid, F fullscreen)
+        # and the folder actions all live on the keyboard and in the View
+        # menu now - the toolbar only keeps what needs a widget.
+        # The filter cluster is CENTRED between two separators: stretch on
+        # both sides pushes the folder actions left and the hand-off actions
+        # right (0.12.5).
+        bar.addStretch(1)
+        bar.addWidget(toolbar_separator())
         bar.addWidget(QLabel(tr('Filter:')))
-        self.cull_minrating_combo = QComboBox()
-        self.cull_minrating_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.cull_minrating_combo.addItems(
-            [tr('all'), '≥ 1', '≥ 2', '≥ 3', '≥ 4', '= 5'])
-        self.cull_minrating_combo.setToolTip(
-            tr('Show only images at or above this star rating.'))
-        self.cull_minrating_combo.currentIndexChanged.connect(
-            self._cull_apply_filter)
-        bar.addWidget(self.cull_minrating_combo)
-        self.cull_rejects_cb = QCheckBox(tr('incl. rejects'))
-        self.cull_rejects_cb.stateChanged.connect(self._cull_apply_filter)
-        bar.addWidget(self.cull_rejects_cb)
+        # Minimum rating as STARS, not a dropdown (Harald): click a star to
+        # show that rating and up, click the active star again for "all".
+        self._cull_minrating = 0
+        self.cull_star_btns = []
+        for n in range(1, 6):
+            b = QToolButton()
+            b.setText('★')
+            b.setCheckable(True)
+            b.setAutoRaise(True)
+            b.setFixedSize(22, 22)
+            # Fixed-size square: opt out of the common horizontal padding
+            # (constants.BUTTON_STYLE), which would clip the glyph.
+            b.setProperty('cammelloCompact', True)
+            b.setToolTip(tr('Show only images with {n} stars or more '
+                            '(click again for all).').format(n=n))
+            b.clicked.connect(lambda _c, n=n: self._cull_set_min_rating(n))
+            self.cull_star_btns.append(b)
+            bar.addWidget(b)
+        self._cull_update_stars()
+        # 0.12.7 (Harald's decision): rejects stay VISIBLE by default - grey
+        # with a red X, courtesy of _LabelBarDelegate - instead of vanishing
+        # from the strip. The checkbox is therefore INVERTED: it now hides
+        # them, and starts unchecked. Renamed rather than reused with the
+        # opposite meaning, because a `cull_rejects_cb` that means "hide"
+        # would mislead every later reader (and every later test).
+        self.cull_hide_rejects_cb = QCheckBox(tr('hide rejects'))
+        self.cull_hide_rejects_cb.setToolTip(
+            tr('Rejected images are shown greyed out with a red X. Check '
+               'this to hide them completely.'))
+        self.cull_hide_rejects_cb.stateChanged.connect(self._cull_apply_filter)
+        bar.addWidget(self.cull_hide_rejects_cb)
         # Colour filter: multi-select swatches, part of the same filter cluster.
         # None active = all colours; any active = only those colours (grey
         # swatch = "no label"). Each swatch's tooltip names the colour.
@@ -355,21 +436,30 @@ class MWCullingMixin:
             b = QToolButton()
             b.setCheckable(True)
             b.setFixedSize(20, 20)
-            b.setStyleSheet(
-                f'QToolButton{{background:{col};border:1px solid #444;'
-                f'border-radius:4px;}}'
-                f'QToolButton:checked{{border:2px solid #fff;}}')
+            # Frame/checked marker come from constants.BUTTON_STYLE
+            # (cammelloSwatch); only the fill is per-swatch. The rule needs
+            # to stay a widget stylesheet because the colour differs per
+            # button - but it no longer duplicates the chrome.
+            b.setProperty('cammelloSwatch', True)
+            b.setProperty('cammelloCompact', True)
+            # The :checked variant must be repeated here: the generic
+            # "pressed/checked = blue" rule in BUTTON_STYLE would otherwise
+            # win over a plain QToolButton rule and paint the swatch blue.
+            b.setStyleSheet(f'QToolButton, QToolButton:checked,'
+                            f' QToolButton:hover, QToolButton:pressed'
+                            f' {{background:{col};}}')
             b.setToolTip(tr('no label') if i == len(swatches) - 1
                          else tr('colour {n}').format(n=i + 1))
             b.clicked.connect(self._cull_apply_filter)
             self._cull_color_btns.append(b)
             bar.addWidget(b)
-        bar.addStretch()
+        bar.addWidget(toolbar_separator())
+        bar.addStretch(1)      # second half of the centring pair
         # "Apply" (Übernehmen) hands the selection (or all filtered images) to
         # the MediaWiki tab AND the IPTC tab AND the FTP tab's list at once (the
         # three share one file list; nothing is uploaded yet). "Save to…"
         # (folder export) stays a separate action.
-        apply_btn = QPushButton(tr('Apply'))
+        apply_btn = QPushButton(tr('Add to tabs'))
         apply_btn.setToolTip(tr('Adds the selected images (or all filtered '
                                 'images when nothing is selected) to the '
                                 'MediaWiki, IPTC and FTP tabs. Nothing is '
@@ -383,6 +473,7 @@ class MWCullingMixin:
             'are never overwritten.'))
         to_folder_btn.clicked.connect(self._cull_to_folder)
         bar.addWidget(to_folder_btn)
+        slim_toolbar(bar)
         outer.addLayout(bar)
 
         split = QSplitter(Qt.Vertical)
@@ -542,8 +633,21 @@ class MWCullingMixin:
     # ── Filter and filmstrip ──────────────────────────────────────────────────
 
     def _cull_min_rating(self):
-        return {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}[
-            self.cull_minrating_combo.currentIndex()]
+        return getattr(self, '_cull_minrating', 0)
+
+    def _cull_set_min_rating(self, stars):
+        """Star filter: `stars` (1-5) shows that rating and up; clicking the
+        star that is already the threshold clears the filter (0 = all)."""
+        self._cull_minrating = 0 if stars == self._cull_minrating else stars
+        self._cull_update_stars()
+        self._cull_apply_filter()
+
+    def _cull_update_stars(self):
+        """Fill the stars up to the current threshold."""
+        for i, b in enumerate(getattr(self, 'cull_star_btns', []), start=1):
+            active = i <= self._cull_minrating
+            b.setChecked(active)
+            b.setText('★' if active else '☆')
 
     def _cull_label_filter(self):
         """Selected colour swatches -> a set of label indices for
@@ -563,7 +667,7 @@ class MWCullingMixin:
         self._cull_visible = culling.filter_items(
             self._cull_items,
             min_rating=self._cull_min_rating(),
-            exclude_rejects=not self.cull_rejects_cb.isChecked(),
+            exclude_rejects=self.cull_hide_rejects_cb.isChecked(),
             label_indices=self._cull_label_filter())
         self.cull_strip.blockSignals(True)
         self.cull_strip.clear()
@@ -607,6 +711,20 @@ class MWCullingMixin:
         li.setData(Qt.UserRole, item.label_color_index)
         li.setData(Qt.UserRole + 1, item.rating)
         li.setData(Qt.UserRole + 2, f'{item.stem}{pair}{table}')
+        # Channel mark AT the image (0.12.6): the delegate paints a small
+        # colored dot in the thumbnail corner - teal for Commons, orange for
+        # commercial. The mark is path-based (channels.py); the culling item
+        # may sit on the RAW while the mark was set on the staged JPEG, so
+        # both paths of a pair are checked.
+        mark = None
+        if hasattr(self, '_channel_mark'):
+            for cand in filter(None, (item.display_path,
+                                      getattr(item, 'raw_path', None),
+                                      getattr(item, 'jpg_path', None))):
+                mark = self._channel_mark(cand)
+                if mark:
+                    break
+        li.setData(Qt.UserRole + 3, mark)
         tips = []
         if item.is_pair:
             tips.append(tr('[P] RAW+JPEG pair (one picture, two files)'))
@@ -687,7 +805,7 @@ class MWCullingMixin:
                 if 0 <= self._cull_index < len(self._cull_visible) else None)
         detail = ''
         if item:
-            stars = 'X' if item.rating == -1 else '★' * item.rating
+            stars = rating_marks(item.rating)
             detail = (f' — {os.path.basename(item.display_path)}'
                       f'{" [pair]" if item.is_pair else ""} {stars} '
                       f'{item.label}')
@@ -700,12 +818,29 @@ class MWCullingMixin:
         # Fullscreen overlay: running number, stars/X, and a dot in the label
         # color.
         if item is not None:
-            stars = ('✕' if item.rating == -1
-                     else '★' * item.rating + '☆' * (5 - max(item.rating, 0)))
+            stars = rating_marks(item.rating, empty=True)
             idx = item.label_color_index
             dot = (f'<span style="color:{culling.LABEL_COLORS[idx]};">'
                    f'&#11044;</span> ' if idx is not None else '')
-            self.cull_view.set_overlay(f'{pos}/{shown} &nbsp; {dot}{stars}')
+            # Channel mark in the overlay too (0.12.6): same dot colors as
+            # on the thumbnails; toggles with the whole overlay.
+            mark = None
+            if hasattr(self, '_channel_mark'):
+                for cand in filter(None, (item.display_path,
+                                          getattr(item, 'raw_path', None),
+                                          getattr(item, 'jpg_path', None))):
+                    mark = self._channel_mark(cand)
+                    if mark:
+                        break
+            chan = ''
+            if mark:
+                color = (channels.COLOR_COMMONS
+                         if mark == channels.MARK_COMMONS
+                         else channels.COLOR_COMMERCIAL)
+                chan = (f'&nbsp; <span style="color:{color};">'
+                        f'&#11044;</span>')
+            self.cull_view.set_overlay(
+                f'{pos}/{shown} &nbsp; {dot}{stars}{chan}')
         else:
             self.cull_view.set_overlay('')
 
@@ -786,13 +921,7 @@ class MWCullingMixin:
             self._cull_request_full()
             self.cull_view.toggle_zoom()
         elif key == Qt.Key_E:
-            # Standard (loupe) view, like Lightroom's E: leave fullscreen and
-            # grid, fit the image.
-            if self._cull_fs is not None:
-                self._cull_toggle_fullscreen()
-            if self._cull_grid:
-                self.cull_grid_btn.setChecked(False)
-            self.cull_view.fit()
+            self._cull_loupe_view()
         elif (key in (Qt.Key_Plus, Qt.Key_Equal)
               and event.modifiers() & Qt.ControlModifier):
             # Qt maps macOS Cmd to ControlModifier, so this is Cmd+ on the
@@ -802,10 +931,7 @@ class MWCullingMixin:
         elif key == Qt.Key_Minus and event.modifiers() & Qt.ControlModifier:
             self._cull_zoom_out()
         elif key == Qt.Key_G:
-            # From fullscreen, G means: leave fullscreen, then grid.
-            if self._cull_fs is not None:
-                self._cull_toggle_fullscreen()
-            self.cull_grid_btn.toggle()
+            self._cull_toggle_grid()
         elif key == Qt.Key_F:
             self._cull_toggle_fullscreen()
         elif key == Qt.Key_Escape and self._cull_fs is not None:
@@ -865,6 +991,24 @@ class MWCullingMixin:
         if 0 <= self._cull_index < self.cull_strip.count():
             self.cull_strip.scrollToItem(self.cull_strip.item(self._cull_index))
 
+    # ── View modes (keyboard E/G/F and the View menu share these) ────────────
+
+    def _cull_loupe_view(self):
+        """Loupe view (E, Lightroom-style): leave fullscreen and grid, show
+        the single image fitted to the window."""
+        if self._cull_fs is not None:
+            self._cull_toggle_fullscreen()
+        if self._cull_grid:
+            self._cull_set_grid(False)
+        self.cull_view.fit()
+
+    def _cull_toggle_grid(self):
+        """Grid view (G): thumbnails instead of the large image. From
+        fullscreen this leaves fullscreen first."""
+        if self._cull_fs is not None:
+            self._cull_toggle_fullscreen()
+        self._cull_set_grid(not self._cull_grid)
+
     def _cull_toggle_fullscreen(self):
         """Image-only fullscreen: the view is reparented into a borderless
         fullscreen window; keys keep working (same forwarding container).
@@ -873,7 +1017,7 @@ class MWCullingMixin:
             # From the grid, F used to do nothing (looked broken): leave the
             # grid first, then go fullscreen.
             if self._cull_grid:
-                self.cull_grid_btn.setChecked(False)
+                self._cull_set_grid(False)
             fs = _CullTab(self)
             lay = QVBoxLayout(fs)
             lay.setContentsMargins(0, 0, 0, 0)
@@ -1036,71 +1180,9 @@ class MWCullingMixin:
                'skipped, {failed} failed.').format(
                 added=added, dupes=dupes, failed=failed))
 
-    def _cull_to_ftp(self):
-        """Target 2: the FTP/FTPS/SFTP server from the FTP tab. Files are
-        sent AS THEY ARE (no IPTC writing - that workflow stays on the
-        IPTC/FTP tabs)."""
-        rows = self._cull_send_rows()
-        if rows is None:
-            return
-        paths = self._cull_paths_for_rows(rows)
-        if not paths:
-            return
-        host = self.ftp_host_edit.text().strip()
-        if not host:
-            QMessageBox.warning(self, 'FTP', tr('Host is missing (FTP tab or '
-                                'Settings tab).'))
-            return
-        password = self.ftp_password_edit.text()
-        if not password:
-            QMessageBox.warning(self, 'FTP', tr('Password is missing (it is '
-                                'asked per session unless you chose to '
-                                'store it).'))
-            return
-        files = [(p, os.path.basename(p)) for p in paths]
-        self.cull_ftp_btn.setEnabled(False)
-        self._cull_ftp_dlg = UploadProgressDialog(len(files), self)
-        self._cull_ftp_done = 0
-        self._cull_ftp_worker = FtpUploadWorker(
-            self.ftp_protocol_combo.currentText(), host,
-            self.ftp_port_edit.text().strip(),
-            self.ftp_user_edit.text().strip(), password,
-            self.ftp_dir_edit.text().strip(), files, self.logger)
-        self._cull_ftp_worker.file_started.connect(
-            self._cull_ftp_dlg.set_current)
-        self._cull_ftp_worker.progress.connect(self._cull_on_send_progress)
-        self._cull_ftp_worker.error.connect(
-            lambda i, m: self.logger.error('Culling -> FTP: %s', m))
-        self._cull_ftp_worker.finished.connect(self._cull_on_ftp_finished)
-        self._cull_ftp_dlg.cancel_requested.connect(
-            self._cull_ftp_worker.cancel)
-        self._cull_ftp_dlg.show()
-        self._cull_ftp_worker.start()
-
-    def _cull_to_flickr(self):
-        """Target: Flickr (files as they are, title = filename stem)."""
-        if not self._flickr_credentials_ok(need_token=True):
-            return
-        rows = self._cull_send_rows()
-        if rows is None:
-            return
-        paths = self._cull_paths_for_rows(rows)
-        if not paths:
-            return
-        files = [(p, os.path.splitext(os.path.basename(p))[0])
-                 for p in paths]
-        self._flickr_start_upload(files, self.cull_flickr_btn)
-
-    def _cull_on_send_progress(self, _index, status):
-        if status.startswith(('✓', '✗', '•')):
-            self._cull_ftp_done += 1
-            self._cull_ftp_dlg.set_done(self._cull_ftp_done)
-
-    def _cull_on_ftp_finished(self, summary):
-        self.cull_ftp_btn.setEnabled(True)
-        self._cull_ftp_dlg.force_close()
-        self.cull_status.setText(f'FTP: {summary}')
-        QMessageBox.information(self, tr('FTP upload'), summary)
+    # (The direct FTP/Flickr send targets were removed with their buttons in
+    # 0.11.8 - "Add to tabs" stages files into the MW/IPTC/FTP tabs instead,
+    # and Flickr keeps its own tab. Their handlers were deleted in 0.12.0.)
 
     def _cull_to_folder(self):
         """Target 3: a local folder. Copies (never moves) the files chosen by

@@ -111,78 +111,7 @@ class MWEditorMixin:
             self.table.removeRow(row)
         self._update_upload_btn()   # the row count changed
 
-    def bulk_edit_selected(self):
-        # Commit any pending per-file edit before touching the rows.
-        self._commit_editor()
-        rows = sorted(set(i.row() for i in self.table.selectedItems()))
-        if not rows:
-            QMessageBox.information(
-                self, tr('No selection'),
-                tr('Please select one or more rows first '
-                '(Ctrl/Shift-click to select several).'))
-            return
-        dlg = BulkEditDialog(len(rows), self)
-        if dlg.exec_() != QDialog.Accepted:
-            return
-        key, value = dlg.result_field_value()
 
-        # Disable sorting so row indices stay valid while we write cells.
-        was_sorting = self.table.isSortingEnabled()
-        self.table.setSortingEnabled(False)
-        try:
-            for row in rows:
-                self._apply_bulk_field(row, key, value)
-                self._refresh_effective(row)
-        finally:
-            self.table.setSortingEnabled(was_sorting)
-
-        # Refresh the per-file editor from the (now-updated) table. Clear the
-        # tracked editor row first so the reload does not flush the stale
-        # editor content back over the bulk change.
-        self._editor_item = None
-        self.on_row_selected()
-        self.status_bar.showMessage(
-            tr('Applied "{key}" to {n} file(s).').format(key=key, n=len(rows)),
-            6000)
-
-    def _apply_bulk_field(self, row, key, value):
-        """Apply one (key, value) to a single row."""
-        if key == 'date':
-            item = self.table.item(row, self.COL_DATE)
-            if item is None:
-                item = QTableWidgetItem()
-                self.table.setItem(row, self.COL_DATE, item)
-            item.setText(value)
-            return
-
-        # Description-based fields: round-trip through a scratch editor so the
-        # existing load/assemble logic (captions, depicts, categories, extra)
-        # is reused and other fields on the row are preserved.
-        if not hasattr(self, '_scratch_editor'):
-            self._scratch_editor = StructuredDescriptionEditor(is_base=False)
-        ed = self._scratch_editor
-        desc_item = self.table.item(row, self.COL_DESC)
-        if desc_item is None:
-            desc_item = QTableWidgetItem('')
-            self.table.setItem(row, self.COL_DESC, desc_item)
-        ed.load(desc_item.text())
-
-        if key == 'depicts':
-            ed.depicts.setText(value)
-        elif key == 'categories':
-            ed.categories.setText(value)
-        elif key.startswith('caption:'):
-            lang = key.split(':', 1)[1]
-            caps = ed.captions_editor.get_captions()
-            if value:
-                caps[lang] = value
-            else:
-                caps.pop(lang, None)
-            # Keep the per-language information wikitext intact.
-            ed.captions_editor.set_language_data(
-                caps, ed.captions_editor.get_infos())
-
-        desc_item.setText(ed.assemble())
 
     def clear_all(self):
         self.table.setRowCount(0)

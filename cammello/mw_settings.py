@@ -18,6 +18,7 @@ from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
 from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
+from . import native_exec
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
@@ -312,6 +313,9 @@ class MWSettingsMixin:
         self._save_settings()
         if hasattr(self, '_cull_wb'):
             self._cull_shutdown()
+        # Stop the metadata helper process AFTER the flush (the flush may
+        # still need it for the last queued writes).
+        native_exec.shutdown()
         super().closeEvent(event)
 
     def _get_timeout(self):

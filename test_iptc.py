@@ -192,10 +192,12 @@ try:
     check('no IPTC tab without pyexiv2', 'IPTC' not in tabs, str(tabs))
     check('no Culling tab without pyexiv2', 'Culling' not in tabs, str(tabs))
     check('no FTP tab without pyexiv2', 'FTP' not in tabs, str(tabs))
-    check('Settings tab exists even without pyexiv2 (MW settings live '
-          'there)', 'Settings' in tabs, str(tabs))
-    check('MediaWiki and Log tabs still there',
-          'MediaWiki' in tabs and 'Log' in tabs, str(tabs))
+    # 0.12.6: Settings/Log/About are DIALOG pages, no longer tabs - they
+    # must exist as widgets even without pyexiv2 (MW settings live there).
+    check('Settings page exists even without pyexiv2 (MW settings live '
+          'there)', w4._settings_tab_widget is not None, str(tabs))
+    check('MediaWiki tab and Log page still there',
+          'MediaWiki' in tabs and w4._log_tab is not None, str(tabs))
     img = os.path.join(tmp, 'x.png')
     QPixmap(50, 50).save(img)
     w4._add_paths([img])
@@ -214,9 +216,9 @@ for _k in _saved_feat:
 _s5.sync()
 w5 = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 tabs5 = [w5.tabs.tabText(i) for i in range(w5.tabs.count())]
-check('IPTC tab present with pyexiv2',
-      tabs5 == ['Culling', 'MediaWiki', 'IPTC', 'FTP / Flickr', 'Settings',
-                'Log', 'About'],
+check('IPTC tab present with pyexiv2 (0.12.6: only the four workflow '
+      'tabs remain; Settings/Log/About are dialogs)',
+      tabs5 == ['Culling', 'MediaWiki', 'IPTC', 'FTP / Flickr'],
       str(tabs5))
 w5._add_paths([src])
 w5.tabs.setCurrentWidget(w5._iptc_tab_widget)

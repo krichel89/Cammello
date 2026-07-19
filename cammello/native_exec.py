@@ -1,98 +1,112 @@
-"""Single-thread executor for the non-thread-safe native imaging libraries.
+"""Metadata calls in a dedicated HELPER PROCESS (0.12.6; was a thread).
 
 Why this exists
 ---------------
-pyexiv2's C++ core (exiv2 + the Adobe XMP toolkit) is documented as NOT thread
-safe: "Not thread safe, because pyexiv2 uses some global variables in C++"
-(pyexiv2 README). On Windows this is worse than it sounds - the XMP toolkit
-keeps global, thread-affine state, so it is unsafe not only to call pyexiv2
-CONCURRENTLY but even to call it from DIFFERENT threads at different times.
-
-A plain lock (which we tried first) serializes calls but does not fix the
-thread-affinity: Cammello opened pyexiv2 from the metadata-reader QThread AND
-from the preview-pool threads (read_orientation). The result was a hard access
-violation in pyexiv2.Image.__init__ that a Python try/except cannot catch -
-observed reproducibly on Windows/Python 3.13 while scanning a folder, even
-after the lock was added. The single files read fine in isolation (one thread,
-one XMP init/terminate cycle); only the multi-thread app crashed.
+pyexiv2's C++ core is documented as NOT thread safe ("uses some global
+variables in C++"), and on Windows its ERROR paths have repeatedly killed the
+whole application with access violations that no Python try/except can catch:
+once while writing a freshly created sidecar (first exiv2 call of the
+process), once while opening a Canon DNG whose maker note exiv2 cannot parse.
+Isolated reproduction scripts - same file, same wheel, main thread or worker
+thread - raise a clean RuntimeError instead, so the trigger inside the full
+application (Qt loaded, event loop running, preview threads busy) was never
+pinned down. The 0.11.2 folder-scan crash followed the same pattern and was
+only solved by removing exiv2 from that path entirely.
 
 The fix
 -------
-Confine ALL native imaging-library work to ONE dedicated worker thread. Every
-pyexiv2 and rawpy call is submitted to this thread and the caller blocks for
-the result. From exiv2's point of view there is now exactly one thread that
-ever touches it - no concurrency and no cross-thread global state. The Qt image
-decode (QImageReader) is thread-safe for separate readers and deliberately
-stays OFF this thread, so preview decoding remains parallel across the pool;
-only the short native metadata/thumb calls serialize here.
+Stop sharing an address space with exiv2. Every call runs in a single-worker
+helper PROCESS (spawn context - identical semantics on all three platforms,
+and the only context PyInstaller supports well). If exiv2 takes the helper
+down, the pool reports it, Cammello raises a catchable NativeCrash carrying
+the file name, rebuilds the pool lazily, and keeps running; ratings queued in
+the write-behind land in .errors instead of vanishing with the process.
 
-The worker thread is a daemon and lives for the whole process. run() is safe to
-call from any thread, including the GUI thread and QThreadPool workers.
+The helper imports only cammello.native_ops (pyexiv2 + stdlib, no Qt), so it
+starts quickly and stays small. The first call pays the spawn cost once; the
+process then lives until app exit.
+
+run() keeps its old signature and blocking behaviour, so callers are
+unchanged. Functions passed in must be top-level in native_ops (picklable by
+reference) and all arguments/results must be picklable - they are: paths,
+dicts, strings.
 """
+import concurrent.futures
 import logging
-import queue
+import multiprocessing
+import sys
 import threading
 
-# Sentinel used only internally; never returned to callers.
-_UNSET = object()
-
-_queue = queue.Queue()
-_thread = None
-_start_lock = threading.Lock()
+__all__ = ['run', 'NativeCrash', 'shutdown']
 
 
-def _worker():
-    log = logging.getLogger('Cammello')
-    while True:
-        fn, args, kwargs, box, ev = _queue.get()
-        # Diagnostic: the file is logged (and flushed) BEFORE the native call,
-        # so if that call dies with a hard access violation - which no Python
-        # try/except can catch - the last line in cammello_debug.log names the
-        # exact operation and file that brought the native library down.
-        try:
-            target = args[0] if args else ''
-            log.debug('native: %s %r', getattr(fn, '__name__', fn), target)
-        except Exception:
-            pass
-        try:
-            box[0] = ('ok', fn(*args, **kwargs))
-        except BaseException as exc:      # propagate EVERYTHING to the caller
-            box[0] = ('err', exc)
-        finally:
-            ev.set()
+class NativeCrash(RuntimeError):
+    """The native library killed the helper process (hard crash, not a normal
+    exception). The operation and file are in the message."""
 
 
-def _ensure_started():
-    global _thread
-    if _thread is not None:
-        return
-    with _start_lock:
-        if _thread is None:
-            t = threading.Thread(target=_worker, name='native-imaging',
-                                 daemon=True)
-            t.start()
-            _thread = t
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _ensure_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                # Windows has only 'spawn'; Cammello.py carries the required
+                # __main__ guard + freeze_support for it. On POSIX 'fork' is
+                # used deliberately: spawn RE-IMPORTS the __main__ module,
+                # which would re-run any script without a main guard (the CI
+                # test scripts) inside the helper. The fork child touches
+                # only pyexiv2 + stdlib (native_ops), no Qt, so inheriting
+                # the parent's address space is safe here.
+                method = 'spawn' if sys.platform == 'win32' else 'fork'
+                ctx = multiprocessing.get_context(method)
+                _pool = concurrent.futures.ProcessPoolExecutor(
+                    max_workers=1, mp_context=ctx)
+    return _pool
 
 
 def run(fn, *args, **kwargs):
-    """Run fn(*args, **kwargs) on the dedicated native-imaging thread and
-    return its result (or re-raise its exception) in the calling thread.
+    """Run fn(*args, **kwargs) in the metadata helper process; return its
+    result or re-raise its exception in the calling thread.
 
-    Blocks the caller until the work is done. Safe to call from any thread.
-    Re-entrancy note: fn itself must NOT call run() again - that would enqueue
-    onto the thread that is currently busy and deadlock. All fns here are leaf
-    native calls, so this does not arise.
+    Blocks the caller. Safe to call from any thread. A hard native crash
+    surfaces as NativeCrash (instead of taking the application down), and the
+    helper is respawned on the next call.
     """
-    _ensure_started()
-    # If we are already ON the worker thread (should not happen, but guard
-    # against accidental nesting), just run inline to avoid a self-deadlock.
-    if threading.current_thread() is _thread:
-        return fn(*args, **kwargs)
-    box = [_UNSET]
-    ev = threading.Event()
-    _queue.put((fn, args, kwargs, box, ev))
-    ev.wait()
-    kind, value = box[0]
-    if kind == 'err':
-        raise value
-    return value
+    global _pool
+    log = logging.getLogger('Cammello')
+    target = args[0] if args else ''
+    # Logged (and flushed to the debug log) BEFORE the call, so even a crash
+    # of the HELPER process is attributable to an exact file.
+    log.debug('native: %s %r', getattr(fn, '__name__', fn), target)
+    pool = _ensure_pool()
+    try:
+        return pool.submit(fn, *args, **kwargs).result()
+    except concurrent.futures.process.BrokenProcessPool:
+        with _pool_lock:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            if _pool is pool:
+                _pool = None            # respawn lazily on the next call
+        msg = (f'The metadata library crashed while processing {target!r}. '
+               f'The file was skipped; Cammello keeps running.')
+        log.error('native: helper process crashed on %r (%s)', target,
+                  getattr(fn, '__name__', fn))
+        raise NativeCrash(msg) from None
+
+
+def shutdown():
+    """App exit: stop the helper process (best effort)."""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            _pool = None

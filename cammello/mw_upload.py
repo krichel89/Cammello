@@ -23,6 +23,7 @@ from .sdc import (extract_structured_data, DEPICTS_OVERRIDES,
                   canonical_override)
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
+from . import channels
 from .sdc import *
 from .sdc import _strip_sd_lines
 from .exif import *
@@ -38,13 +39,28 @@ class MWUploadMixin:
     def _upload_rows(self):
         """Table rows the Upload button acts on.
 
-        Selected rows only; if nothing is selected, every row. Returns a sorted
-        list of table row indices.
+        Selected rows only; if nothing is selected, every row. Rows marked
+        for the commercial channel (0.12.1) are excluded either way - their
+        items are disabled (unselectable), but the all-rows path and any
+        stale selection are filtered here as well. Returns a sorted list of
+        table row indices.
         """
         selected = sorted({idx.row() for idx in self.table.selectedIndexes()})
-        if selected:
-            return selected
-        return list(range(self.table.rowCount()))
+        rows = selected if selected else list(range(self.table.rowCount()))
+        out = []
+        excluded = 0
+        for r in rows:
+            item = self.table.item(r, self.COL_FILENAME)
+            fp = item.data(Qt.UserRole) if item else None
+            if fp and self._channel_mark(fp) == channels.MARK_COMMERCIAL:
+                excluded += 1
+                continue
+            out.append(r)
+        if excluded:
+            self.logger.info(
+                'Commons upload: %d file(s) excluded (marked commercial).',
+                excluded)
+        return out
 
     def _update_upload_btn(self):
         """Keep the button label honest about what a click would do."""
@@ -128,8 +144,12 @@ class MWUploadMixin:
         # These early exits used to be silent in the log, which made an
         # apparently dead Upload button impossible to diagnose from the Log tab.
         if not self.api:
-            self.logger.info('Upload aborted: not logged in.')
-            QMessageBox.warning(self, tr('Not logged in'), tr('Please log in first.'))
+            # Not logged in: take the user straight to the login instead of a
+            # dead-end warning (0.12.4). After a successful login they press
+            # Upload again - the table and all edits are untouched.
+            self.logger.info('Upload requested while not logged in: opening '
+                             'the login.')
+            self.do_login()
             return
         if self.table.rowCount() == 0:
             self.logger.info('Upload aborted: the file table is empty.')
@@ -224,6 +244,13 @@ class MWUploadMixin:
         self.progress_bar.setMaximum(len(rows))
         self.progress_bar.setValue(0)
         self.upload_btn.setEnabled(False)
+
+        # Uploading to Commons IS the channel decision (0.12.4): mark these
+        # files as the CC/Commons channel so they are greyed out and skipped
+        # in the FTP/Flickr lists from now on. Done at the start, not on
+        # success, so an interrupted run still leaves the decision recorded.
+        self._mark_uploaded_channel([r['filepath'] for r in rows],
+                                    channels.MARK_COMMONS)
 
         # Progress window with a Cancel button. Modeless on purpose: the table
         # stays readable (per-row status keeps updating behind it) while the

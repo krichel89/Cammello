@@ -36,6 +36,8 @@ from .mw_flickr import FlickrMixin
 from . import iptc as iptc_mod
 from . import mw_oauth
 from . import credentials
+from . import channels
+from .menus import MenusMixin
 from .wikidata import refresh_wd_fields
 from .i18n import (tr, UI_LANGUAGES, set_language,
                    default_language_from_locale, current_language)
@@ -47,7 +49,7 @@ _APPLIED_SCHEME = ['system']  # the app starts in the system scheme
 
 class MainWindow(FlickrMixin,
                  MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin,
-                 MWIptcMixin, MWCullingMixin, QMainWindow):
+                 MWIptcMixin, MWCullingMixin, MenusMixin, QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
             'Description (file, hidden)', 'Wikitext', 'Status']
     COL_THUMB = 0
@@ -90,6 +92,11 @@ class MainWindow(FlickrMixin,
         QApplication.instance().setStyleSheet(app_style())
         self.api = None
         self.settings = QSettings(APP_NAME, 'Main')
+        # Channel marks (0.12.1): Commons/CC vs. commercial, persisted across
+        # sessions keyed by normalized path - loaded BEFORE the UI is built so
+        # list population can style rows right away.
+        self._channel_settings = QSettings(APP_NAME, 'Channels')
+        self._channel_marks = channels.load_marks(self._channel_settings)
         self._loading_desc = False  # guard against feedback loops while loading
         self._editor_item = None     # COL_FILENAME item of the row loaded in the
         #                              per-file editor; item.row() stays correct
@@ -105,7 +112,20 @@ class MainWindow(FlickrMixin,
 
     def _build_ui(self):
         self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        # Lightroom-style module strip (0.12.6): a flat text row ABOVE the
+        # pages, right-aligned, replaces the hidden Qt tab bar as the visible
+        # workflow map (Harald: 'Tabs wiederhaben ... wie bei Lightroom oben
+        # rechts'). The QTabWidget stays the page container - every mixin
+        # and feature switch keeps addressing it - but its own bar remains
+        # hidden; the strip is a separate widget synced both ways.
+        central = QWidget()
+        _central_lay = QVBoxLayout(central)
+        _central_lay.setContentsMargins(0, 0, 0, 0)
+        _central_lay.setSpacing(0)
+        self.module_strip = ModuleStrip(self.tabs)
+        _central_lay.addWidget(self.module_strip)
+        _central_lay.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         # The MediaWiki (upload) tab is built first (its widgets are read by
         # the IPTC tab), but added to the tab bar AFTER the Culling tab.
@@ -171,6 +191,7 @@ class MainWindow(FlickrMixin,
             self.tabs.addTab(self._cull_tab_widget, tr('Culling'))
             self._cull_load_settings()
         if self._feat_mediawiki:
+            self._mw_tab_widget = mw_tab
             self.tabs.addTab(mw_tab, 'MediaWiki')
         if self._feat_iptc:
             self._iptc_tab_widget = self._build_iptc_tab()
@@ -193,9 +214,14 @@ class MainWindow(FlickrMixin,
         if (self._feat_culling or self._feat_iptc or self._feat_ftp
                 or self._feat_flickr):
             self.tabs.currentChanged.connect(self._on_tab_changed)
-        # The Settings tab collects EVERYTHING configurable and exists
-        # regardless of pyexiv2 (the MediaWiki upload settings live here).
-        self.tabs.addTab(self._build_settings_tab(), tr('Settings'))
+        # Settings, Log and About are DIALOGS since 0.12.6 (Harald: 'der
+        # Konvention nach je ein Unterfenster') - the tab row carries only
+        # the four workflow steps. The page WIDGETS are built exactly as
+        # before and re-parented into lazy dialogs by _open_page_dialog, so
+        # every existing reference (mirrors, log handler, feature switches)
+        # keeps working; they are simply not added to the QTabWidget.
+        self._page_dialogs = {}
+        self._settings_tab_widget = self._build_settings_tab()
         # Restore the persisted color scheme (setCurrentText fires
         # _apply_color_scheme; 'system' applies explicitly for the delegate).
         saved_scheme = self.settings.value('color_scheme', 'system')
@@ -210,9 +236,12 @@ class MainWindow(FlickrMixin,
         self.scheme_combo.blockSignals(False)
         self._apply_color_scheme(saved_scheme, repolish=False)
         self._log_tab = self._build_log_tab()  # always built: the GUI log
-        if self._feat_log:                     # handler writes into it even
-            self.tabs.addTab(self._log_tab, tr('Log'))  # when the tab is hidden
-        self.tabs.addTab(self._build_about_tab(), tr('About'))
+        # handler writes into it even while no window shows it
+        self._about_tab_widget = self._build_about_tab()
+
+        # Native menu bar (0.12.3). Built last: it enumerates the pages that
+        # exist, and hides the now-redundant tab bar.
+        self._build_menus()
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -223,6 +252,12 @@ class MainWindow(FlickrMixin,
         main_layout = QVBoxLayout(page)
 
         # ── Toolbar ──
+        # Deliberately minimal (0.12.5): the file actions all live in the
+        # menus now (File > Add files, Metadata/File > list commands, Upload >
+        # Log in / Test connection). Long German labels used to squeeze the
+        # row until the buttons painted over each other - and a row of eight
+        # buttons cannot be made slim at all. What stays is the session state
+        # and the one action that is used constantly.
         toolbar = QHBoxLayout()
         self.login_btn = QPushButton(tr('Login'))
         self.login_btn.clicked.connect(self.do_login)
@@ -231,38 +266,30 @@ class MainWindow(FlickrMixin,
         self.test_btn.clicked.connect(self.test_connection)
         self.test_btn.setEnabled(False)
 
-        self.login_label = QLabel(tr('Not logged in'))
-        self.login_label.setStyleSheet('color: red')
+        # 'Not logged in' is a LINK (0.12.6): one click opens the (OAuth)
+        # login instead of making the user hunt for the menu entry. The
+        # logged-in state shows the plain username.
+        self.login_label = QLabel()
+        self.login_label.setTextFormat(Qt.RichText)
+        self.login_label.linkActivated.connect(lambda _url: self.do_login())
+        self._set_login_state('out')
 
-        add_btn = QPushButton(tr('Add files'))
-        add_btn.clicked.connect(self.add_files)
-        remove_btn = QPushButton(tr('Remove selected'))
-        remove_btn.clicked.connect(self.remove_selected)
-        bulk_btn = QPushButton(tr('Bulk edit selected'))
-        bulk_btn.clicked.connect(self.bulk_edit_selected)
-        clear_btn = QPushButton(tr('Clear all'))
-        clear_btn.clicked.connect(self.clear_all)
+        self.ignore_warnings_cb = QCheckBox(tr('Ignore warnings (overwrite)'))
 
         # Label is kept in sync with the selection by _update_upload_btn:
         # selected rows are uploaded, or all rows when nothing is selected.
         self.upload_btn = QPushButton(tr('Upload all'))
         self.upload_btn.clicked.connect(self.start_upload)
-        self.upload_btn.setStyleSheet(
-            'font-weight: bold; background: #2a7; color: white; padding: 4px 12px;')
+        # The accent look lives in constants.BUTTON_STYLE (0.12.7) so that
+        # every button in the app is styled from ONE place; an inline
+        # stylesheet here would win over it and drift again.
+        self.upload_btn.setProperty('cammelloPrimary', True)
 
-        self.ignore_warnings_cb = QCheckBox(tr('Ignore warnings (overwrite)'))
-
-        toolbar.addWidget(self.login_btn)
-        toolbar.addWidget(self.test_btn)
         toolbar.addWidget(self.login_label)
-        toolbar.addSpacing(20)
-        toolbar.addWidget(add_btn)
-        toolbar.addWidget(remove_btn)
-        toolbar.addWidget(bulk_btn)
-        toolbar.addWidget(clear_btn)
         toolbar.addStretch()
         toolbar.addWidget(self.ignore_warnings_cb)
         toolbar.addWidget(self.upload_btn)
+        slim_toolbar(toolbar)
         main_layout.addLayout(toolbar)
 
         # ── Splitter ──
@@ -271,7 +298,8 @@ class MainWindow(FlickrMixin,
         self.table = FileDropTableWidget(
             0, len(self.COLS),
             on_files_dropped=self._add_dropped_files,
-            logger=self.logger)
+            logger=self.logger,
+            on_rename=self._rename_selected)
         self.table.setHorizontalHeaderLabels(self.COLS)
         # Thumbnails on the left: icon size and row height.
         self.table.setIconSize(QSize(THUMB_W, THUMB_H))
@@ -285,7 +313,9 @@ class MainWindow(FlickrMixin,
         if ht:
             ht.setToolTip(tr('Name under which the file is stored on Commons '
                           '(without "File:"). The extension is taken from the '
-                          'source file and cannot be changed. Empty = source filename.'))
+                          'source file and cannot be changed. Empty = source filename.')
+                          + ' ' + tr('F2 renames; with several rows selected '
+                                     'F2 opens the bulk rename.'))
         hs = self.table.horizontalHeaderItem(self.COL_FILENAME)
         if hs:
             hs.setToolTip(tr('Local source file (not modified).'))
@@ -341,6 +371,9 @@ class MainWindow(FlickrMixin,
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        # Right-click menu: channel marks (Commons/CC vs. commercial, 0.12.1).
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_context_menu)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.table.itemSelectionChanged.connect(self.on_row_selected)
         self.table.itemSelectionChanged.connect(self._update_upload_btn)
@@ -354,7 +387,7 @@ class MainWindow(FlickrMixin,
         right_layout = QVBoxLayout(right)
         right.setMinimumWidth(360)
 
-        settings_group = CollapsibleGroupBox(tr('Upload settings'))
+        settings_group = CollapsibleGroupBox(tr('Author and license'))
         settings_form = QFormLayout(settings_group.content)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText(tr('e.g.') + ' [[User:Seewolf|Harald Krichel]]')
@@ -394,7 +427,6 @@ class MainWindow(FlickrMixin,
         settings_form.addRow(tr('License:'), self.license_edit)
         settings_form.addRow(tr('License (P275):'), self.license_sdc_edit)
         settings_form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_edit)
-        settings_form.addRow(tr('Other templates:'), self.other_templates_edit)
         settings_form.addRow(tr('Other fields:'), self.other_fields_edit)
         settings_form.addRow(tr('Gallery prefix:'), self.gallery_prefix_edit)
         settings_form.addRow(tr('HTTP timeout (s):'), self.timeout_edit)
@@ -436,6 +468,14 @@ class MainWindow(FlickrMixin,
         self.base_struct.changed.connect(self._on_base_struct_changed)
         self.base_struct.setVisible(False)
         base_layout.addWidget(self.base_struct)
+        # 0.12.6: event-bound templates ({{WikiPortraits at ...}}) belong to
+        # the per-event base description, not to the constant author/license
+        # block. The field object keeps its identity (QSettings key
+        # 'other_templates', file export, live wikitext all unchanged).
+        ot_form = QFormLayout()
+        ot_form.addRow(tr('Other templates:'), self.other_templates_edit)
+        apply_form_ratio(ot_form)
+        base_layout.addLayout(ot_form)
         clear_base_btn = QPushButton(tr('Clear base description'))
         clear_base_btn.clicked.connect(self._clear_base_description)
         base_layout.addWidget(clear_base_btn)
@@ -448,8 +488,10 @@ class MainWindow(FlickrMixin,
         right_layout.addWidget(save_settings_btn)
 
         # Settings import/export to a plain text file (optionally incl. the
-        # selected file's description).
-        file_io = QHBoxLayout()
+        # selected file's description). FlowLayout, not QHBoxLayout: the right
+        # column is ~380 px wide, where three side-by-side controls used to
+        # overlap each other (0.12.4). Now they wrap onto a second line.
+        file_io = FlowLayout(margin=0, spacing=6)
         save_file_btn = QPushButton(tr('Save to file…'))
         save_file_btn.setToolTip(tr('Write settings + base description to a text file.'))
         save_file_btn.clicked.connect(self._save_settings_to_file)
@@ -462,7 +504,6 @@ class MainWindow(FlickrMixin,
         file_io.addWidget(save_file_btn)
         file_io.addWidget(load_file_btn)
         file_io.addWidget(self.export_file_desc_cb)
-        file_io.addStretch()
         right_layout.addLayout(file_io)
 
         # ── Selected file description ──
@@ -531,17 +572,18 @@ class MainWindow(FlickrMixin,
         when it is unavailable."""
         from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QCheckBox
         avail = iptc_mod.available()
-        box = QGroupBox(tr('Tabs'))
+        box = QGroupBox(tr('Modules'))
         v = QVBoxLayout(box)
-        v.addWidget(QLabel(tr('Show these tabs (applies after restart):')))
+        v.addWidget(QLabel(tr('Show these modules (applies after restart):')))
         # (settings key, label, default, needs_pyexiv2)
+        # Log is no longer listed: since 0.12.6 it is a window, not a
+        # module, and the log handler writes into it regardless.
         specs = [
             ('feature_culling', tr('Culling'), True, True),
             ('feature_mediawiki', 'MediaWiki', True, False),
             ('feature_iptc', 'IPTC', False, True),
             ('feature_ftp', 'FTP', True, True),
             ('feature_flickr', 'Flickr', True, False),
-            ('feature_log', tr('Log'), True, False),
         ]
         self._tab_feature_cbs = {}
         for key, label, default, needs in specs:
@@ -592,7 +634,13 @@ class MainWindow(FlickrMixin,
         if _li >= 0:
             self.language_combo.setCurrentIndex(_li)
         self.language_combo.currentIndexChanged.connect(self._on_ui_language)
-        af.addRow(tr('Language:'), self.language_combo)
+        _lang_row = QHBoxLayout()
+        _lang_row.addWidget(self.language_combo)
+        _lang_hint = QLabel(tr('(takes effect after a restart)'))
+        _lang_hint.setStyleSheet('color: gray;')
+        _lang_row.addWidget(_lang_hint)
+        _lang_row.addStretch()
+        af.addRow(tr('Language:'), _lang_row)
         lay.addWidget(appearance)
 
         lay.addWidget(self._build_tabs_group())
@@ -637,43 +685,28 @@ class MainWindow(FlickrMixin,
     # also refreshes the effective wikitext, via the primary's signals).
 
     def _build_mw_account_group(self):
-        """MediaWiki login credentials in the Settings tab. Same storage the
-        login dialog reads (QSettings scope 'Login'), so both stay in sync;
-        persisted in _save_settings. An empty password keeps the old
-        behavior: the login dialog asks per session."""
+        """MediaWiki login in the Settings page (0.12.6 layout): OAuth is THE
+        sign-in; the BotPassword credentials moved into a sub-dialog behind a
+        small button UNDER the OAuth row. The fields keep their object names
+        and storage (QSettings scope 'Login' + keyring), so the login dialog
+        and _save_settings stay in sync, and stored passwords are NOT
+        deleted - BotPassword remains the consumer-independent fallback (a
+        blocked OAuth consumer would invalidate every user's access tokens
+        at once)."""
         box = QGroupBox(tr('MediaWiki account'))
         form = QFormLayout(box)
         self._login_settings = QSettings(APP_NAME, 'Login')
+        # The fields exist always (login dialog + save/load read them); they
+        # are shown inside the BotPassword sub-dialog.
         self.mw_user_edit = QLineEdit(
             self._login_settings.value('username', ''))
         self.mw_user_edit.setPlaceholderText(tr('e.g.') + ' Seewolf@Cammello')
-        form.addRow(tr('Username:'), self.mw_user_edit)
         # BotPassword: loaded from the OS keyring (migrating any old plaintext
         # out of QSettings on first run); plaintext fallback without a backend.
         self.mw_password_edit = QLineEdit(
             credentials.load_mediawiki_password(
                 self._login_settings, self.mw_user_edit.text()))
         self.mw_password_edit.setEchoMode(QLineEdit.Password)
-        form.addRow(tr('Password:'), self.mw_password_edit)
-        grants = tr('Create one at Special:BotPasswords and log in with the '
-                    'name shown there (e.g. YourName@Cammello). Required '
-                    'grants: edit existing pages; create, edit and move pages; '
-                    'upload new files; upload, replace and move files.')
-        link = ('<a href="https://commons.wikimedia.org/wiki/'
-                'Special:BotPasswords">Special:BotPasswords</a>')
-        grants_html = grants.replace('Special:BotPasswords', link)
-        if credentials.backend_available():
-            store = tr('The password is stored in your system keyring - leave '
-                       'it empty to be asked at login instead.')
-        else:
-            store = tr('No system keyring available, so the password is stored '
-                       'in plain text - leave it empty to be asked at login '
-                       'instead.')
-        note = QLabel(grants_html + '<br>' + store)
-        note.setOpenExternalLinks(True)
-        note.setTextFormat(Qt.RichText)
-        note.setWordWrap(True)
-        form.addRow('', note)
         # OAuth sign-in: only offered in builds with a registered consumer
         # (mw_oauth.CONSUMER_KEY filled in) - see mw_oauth module docstring.
         if mw_oauth.is_configured():
@@ -690,10 +723,70 @@ class MainWindow(FlickrMixin,
             form.addRow('OAuth:', self.oauth_status_label)
             form.addRow('', row)
             self._refresh_oauth_status()
+        # Small, deliberately unobtrusive entry point UNDER OAuth (Harald):
+        # opens the BotPassword sub-dialog.
+        # 0.12.8: this edits the STORED bot-password credentials. Signing
+        # in with them happens in the shared sign-in window, so the label
+        # says what the button actually does.
+        bp_btn = QPushButton(tr('Edit bot password…'))
+        bp_btn.setToolTip(
+            tr('Stores the bot password used by the fallback sign-in.'))
+        bp_btn.clicked.connect(self._open_botpassword_dialog)
+        bp_row = QHBoxLayout()
+        bp_row.addWidget(bp_btn)
+        bp_row.addStretch()
+        form.addRow('', bp_row)
         apply_form_ratio(form)
         return box
 
+    def _open_botpassword_dialog(self):
+        """Sub-dialog with the BotPassword credentials (0.12.6). The field
+        widgets are the persistent self.mw_user_edit/mw_password_edit, so
+        everything that reads them keeps working; the dialog is just where
+        they live now."""
+        dlg = getattr(self, '_botpassword_dialog', None)
+        if dlg is None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(tr('Bot password'))
+            form = QFormLayout(dlg)
+            form.addRow(tr('Username:'), self.mw_user_edit)
+            form.addRow(tr('Password:'), self.mw_password_edit)
+            grants = tr('Create one at Special:BotPasswords and log in with the '
+                        'name shown there (e.g. YourName@Cammello). Required '
+                        'grants: edit existing pages; create, edit and move pages; '
+                        'upload new files; upload, replace and move files.')
+            link = ('<a href="https://commons.wikimedia.org/wiki/'
+                    'Special:BotPasswords">Special:BotPasswords</a>')
+            grants_html = grants.replace('Special:BotPasswords', link)
+            if credentials.backend_available():
+                store = tr('The password is stored in your system keyring - leave '
+                           'it empty to be asked at login instead.')
+            else:
+                store = tr('No system keyring available, so the password is stored '
+                           'in plain text - leave it empty to be asked at login '
+                           'instead.')
+            note = QLabel(grants_html + '<br>' + store)
+            note.setOpenExternalLinks(True)
+            note.setTextFormat(Qt.RichText)
+            note.setWordWrap(True)
+            form.addRow('', note)
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.rejected.connect(dlg.reject)
+            buttons.clicked.connect(lambda _b: dlg.close())
+            form.addRow(buttons)
+            dlg.resize(520, 260)
+            self._botpassword_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def _refresh_oauth_status(self):
+        # The status widgets only exist when a consumer is configured (see
+        # _build_mw_account_group). Since 0.12.8 this method is also called
+        # from the shared sign-in path, which runs in builds without one -
+        # so it has to tolerate their absence instead of raising.
+        if not hasattr(self, 'oauth_status_label'):
+            return
         token, secret = stored_oauth_tokens()
         if token and secret:
             user = self._login_settings.value('oauth_username', '') or '?'
@@ -705,11 +798,10 @@ class MainWindow(FlickrMixin,
             self.oauth_remove_btn.setEnabled(False)
 
     def _on_oauth_login(self):
-        dlg = OAuthLoginDialog(self)
-        if dlg.exec() == QDialog.Accepted:
-            self.status_bar.showMessage(
-                tr('Authorized as {username}.').format(username=dlg.username),
-                5000)
+        # 0.12.8: same window as the link on the MediaWiki page. force=True
+        # because pressing this button IS the request to see it - the user
+        # may want to re-authorize or switch account.
+        self.open_signin_dialog(force=True)
         self._refresh_oauth_status()
 
     def _on_oauth_remove(self):
@@ -734,7 +826,6 @@ class MainWindow(FlickrMixin,
         _style_wd_field(self.license_sdc_mirror)
         self.copyright_sdc_mirror = mirror_line_edit(self.copyright_sdc_edit)
         _style_wd_field(self.copyright_sdc_mirror)
-        self.other_templates_mirror = mirror_line_edit(self.other_templates_edit)
         self.other_fields_mirror = mirror_line_edit(self.other_fields_edit)
         self.gallery_prefix_mirror = mirror_line_edit(self.gallery_prefix_edit)
         self.timeout_mirror = mirror_line_edit(self.timeout_edit)
@@ -746,7 +837,6 @@ class MainWindow(FlickrMixin,
         form.addRow(tr('License:'), self.license_mirror)
         form.addRow(tr('License (P275):'), self.license_sdc_mirror)
         form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_mirror)
-        form.addRow(tr('Other templates:'), self.other_templates_mirror)
         form.addRow(tr('Other fields:'), self.other_fields_mirror)
         form.addRow(tr('Gallery prefix:'), self.gallery_prefix_mirror)
         form.addRow(tr('HTTP timeout (s):'), self.timeout_mirror)
@@ -871,6 +961,40 @@ class MainWindow(FlickrMixin,
         outer.addStretch()
         return page
 
+    def _open_page_dialog(self, key, widget, title, size=(760, 620)):
+        """Show a former tab page as a modeless dialog (0.12.6).
+
+        The widget is re-parented into a lazily created dialog and kept
+        there; all outside references to the widget stay valid. Settings is
+        large, so the dialog is resizable with a scroll area already inside
+        the page itself where needed.
+        """
+        dlg = self._page_dialogs.get(key)
+        if dlg is None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(title)
+            lay = QVBoxLayout(dlg)
+            lay.setContentsMargins(8, 8, 8, 8)
+            lay.addWidget(widget)
+            dlg.resize(*size)
+            self._page_dialogs[key] = dlg
+        widget.setVisible(True)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _open_settings_dialog(self):
+        self._open_page_dialog('settings', self._settings_tab_widget,
+                               tr('Settings'))
+
+    def _open_log_dialog(self):
+        self._open_page_dialog('log', self._log_tab, tr('Log'),
+                               size=(820, 520))
+
+    def _open_about_dialog(self):
+        self._open_page_dialog('about', self._about_tab_widget,
+                               tr('About Cammello'), size=(560, 480))
+
     def _clear_base_description(self):
         """Empties the base description (expert text AND structured editor)
         after confirmation - the live sync then updates every row."""
@@ -883,6 +1007,9 @@ class MainWindow(FlickrMixin,
             return
         self.base_text_edit.setPlainText('')
         self.base_struct.load('')
+        # Other templates belongs to the base description now (0.12.6):
+        # switching to the next event clears it too.
+        self.other_templates_edit.setText('')
         self.logger.info('Base description cleared.')
 
     def _on_ui_language(self, _index):
@@ -974,8 +1101,30 @@ class MainWindow(FlickrMixin,
             _ensure_style('Fusion')
             app.setPalette(app.style().standardPalette())
         else:
-            _ensure_style(self._system_style)
-            app.setPalette(self._system_palette)
+            # "System": follow the platform - EXCEPT on Windows.
+            #
+            # 0.12.7 (Harald, Windows dark mode): disabled menu entries were
+            # still drawn as if enabled, while macOS was fine after the
+            # 0.12.6 fix. Reason: the native "windowsvista" style paints menu
+            # items itself and honours neither the stylesheet colour nor,
+            # reliably, the palette's Disabled group. Fusion does both. The
+            # PALETTE is still the system one, so the app keeps the system's
+            # colours (dark stays dark) - only the painter changes.
+            if sys.platform.startswith('win'):
+                _ensure_style('Fusion')
+            else:
+                _ensure_style(self._system_style)
+            pal = QPalette(self._system_palette)
+            # Some platform palettes leave the Disabled group equal to the
+            # active one; then nothing looks greyed no matter who paints.
+            # Derive a grey that has contrast against the actual window
+            # colour instead of hard-coding one for a light background.
+            win = pal.color(QPalette.Window)
+            grey = QColor('#909090') if win.lightness() < 128 else QColor('#808080')
+            for role in (QPalette.Text, QPalette.ButtonText,
+                         QPalette.WindowText):
+                pal.setColor(QPalette.Disabled, role, grey)
+            app.setPalette(pal)
         # Inputs follow the scheme: re-apply the matching stylesheet variant
         # on the window (dialogs pick it up at construction).
         dark = self._is_dark_scheme_for(scheme)
@@ -1116,6 +1265,9 @@ def main():
     app = QApplication(argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
+    # Slightly larger UI font (0.12.7, Harald). Before any window exists, so
+    # every size hint is computed with the final font.
+    apply_ui_font(app)
     # Window/Dock icon, if an icon file is bundled (see assets/README.md).
     _icon_file = asset_path('icon.png')
     if os.path.exists(_icon_file):

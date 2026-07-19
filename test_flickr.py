@@ -120,7 +120,8 @@ try:
           w.flickr_license_combo.currentData() is None)
     check('license combo has CC BY-SA',
           w.flickr_license_combo.findData('5') > 0)
-    check('About tab last', names[-1] == 'About', str(names))
+    check('FTP / Flickr tab last (0.12.6: About is a dialog)',
+          names[-1] == 'FTP / Flickr', str(names))
     check('flickr mirror in settings', hasattr(w, 'flickr_api_key_mirror'))
     w.flickr_api_key_edit.setText('k123')
     check('flickr key primary->mirror', w.flickr_api_key_mirror.text() == 'k123')

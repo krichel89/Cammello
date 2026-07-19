@@ -13,19 +13,17 @@ Storage follows the concept document:
   * color labels are localized TEXT; reading matches against all configured
     label sets, writing uses the active set.
 """
+import logging
 import os
 import queue
 import re
 import threading
 
 from .constants import *
-from . import iptc as iptc_mod        # for available(); pyexiv2 access below
-from . import native_exec
 
-try:
-    import pyexiv2
-except Exception:
-    pyexiv2 = None
+# NOTE (0.12.6): this module no longer imports pyexiv2 at all. Ratings and
+# labels are read as text and written as text (sidecar XML / JPEG APP1
+# segment), so exiv2 cannot take the culling workflow down.
 
 # ── XMP rating/label reading WITHOUT pyexiv2 ────────────────────────────────
 #
@@ -38,7 +36,7 @@ except Exception:
 # text. In a sidecar the whole file is that XML; in a JPEG it sits in an APP1
 # XMP packet as UTF-8 text. Both are found by locating the <x:xmpmeta> block in
 # the raw bytes and matching the two tags (attribute form, as Photo Mechanic /
-# Lightroom write, and element form). Writing still uses pyexiv2 (write_item_
+# Lightroom write, and element form). Writing is pure Python too (write_item_
 # metadata), but that is user-triggered and one file at a time, not the scan.
 
 _XMP_META_START = b'<x:xmpmeta'
@@ -87,6 +85,142 @@ def _read_rating_label_text(path):
     if m:
         label = m.group(1)
     return rating, label
+
+# ── Pure-Python XMP sidecar writer (0.12.6 fix) ──────────────────────────────
+#
+# pyexiv2 crashes on Windows/Python 3.14 even when opening a harmless .xmp
+# file (confirmed 2026-07-18: three consecutive NativeCrash on sidecar
+# writes). Since a sidecar is plain XML text — not a binary image container —
+# we can write it without any native library. Rating and Label are the only
+# two fields Cammello's culling module writes; both live in the xmp: namespace
+# and are stored as attributes on the rdf:Description element (the compact
+# form that Lightroom, Photo Mechanic and darktable all read).
+
+_NS_XMP = 'xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
+
+_RE_XMP_NS = re.compile(r'xmlns:xmp\s*=\s*"[^"]*"')
+_RE_DESC_OPEN = re.compile(r'(<rdf:Description\b.*?)(/>|>)', re.S)
+
+
+def _patch_xmp_text(text, rating, label):
+    """Return the XMP packet with xmp:Rating / xmp:Label set (or removed).
+
+    Shared by the sidecar and the embedded-JPEG writer. Everything else in
+    the packet - whatever Lightroom, Photo Mechanic or the camera wrote -
+    is preserved untouched.
+    """
+    # Ensure the xmp namespace is declared on rdf:Description.
+    if 'xmlns:xmp=' not in text:
+        text = _RE_DESC_OPEN.sub(lambda m: m.group(1) + ' ' + _NS_XMP + m.group(2), text, count=1)
+
+    # Update or insert the xmp:Rating attribute.
+    if rating is not None and rating != 0:
+        val = str(int(rating))
+        if 'xmp:Rating=' in text:
+            text = _RE_RATING_ATTR.sub(f'xmp:Rating="{val}"', text)
+        else:
+            text = _RE_DESC_OPEN.sub(lambda m: m.group(1) + f' xmp:Rating="{val}"' + m.group(2), text, count=1)
+    else:
+        # Remove Rating entirely (0 = unrated in Lightroom).
+        text = re.sub(r'\s*xmp:Rating\s*=\s*"[^"]*"', '', text)
+
+    # Update or insert the xmp:Label attribute.
+    if label:
+        if 'xmp:Label=' in text:
+            text = _RE_LABEL_ATTR.sub(f'xmp:Label="{label}"', text)
+        else:
+            text = _RE_DESC_OPEN.sub(lambda m: m.group(1) + f' xmp:Label="{label}"' + m.group(2), text, count=1)
+    else:
+        text = re.sub(r'\s*xmp:Label\s*=\s*"[^"]*"', '', text)
+
+    return text
+
+
+def _write_xmp_sidecar(path, rating, label):
+    """Write Rating and Label into a .xmp sidecar in pure Python.
+
+    Creates the file from the skeleton when missing, amends an existing one.
+    """
+    if os.path.exists(path):
+        text = open(path, 'r', encoding='utf-8', errors='replace').read()
+    else:
+        text = _XMP_SKELETON
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(_patch_xmp_text(text, rating, label))
+
+
+# ── Embedded XMP in JPEG, in pure Python (0.12.6) ────────────────────────────
+#
+# A JPEG is a chain of marker segments; XMP lives in an APP1 segment whose
+# payload starts with the Adobe namespace header. Rewriting that segment is
+# plain byte surgery - no image data is touched and no native library is
+# needed, which matters because exiv2 crashes the helper process on Harald's
+# Windows for every single JPEG write.
+
+_XMP_APP1_HEADER = b'http://ns.adobe.com/xap/1.0/\x00'
+_APP1 = b'\xff\xe1'
+_SOI = b'\xff\xd8'
+_SOS = b'\xff\xda'
+_MAX_SEGMENT = 65533          # 2 length bytes are part of the 65535 limit
+
+
+def _jpeg_segments(data):
+    """Yield (start, end, marker) for each marker segment up to SOS."""
+    pos = 2                                   # skip SOI
+    while pos + 4 <= len(data):
+        if data[pos] != 0xFF:
+            return
+        marker = data[pos:pos + 2]
+        if marker == _SOS or marker == b'\xff\xd9':
+            return
+        length = int.from_bytes(data[pos + 2:pos + 4], 'big')
+        yield pos, pos + 2 + length, marker
+        pos += 2 + length
+
+
+def _write_xmp_jpeg(path, rating, label):
+    """Set xmp:Rating / xmp:Label in a JPEG's embedded XMP packet.
+
+    Replaces an existing XMP APP1 segment, or inserts one after the leading
+    APPn block when the file has none. Raises OSError/ValueError on a file
+    that is not a readable JPEG.
+    """
+    with open(path, 'rb') as f:
+        data = f.read()
+    if not data.startswith(_SOI):
+        raise ValueError('not a JPEG')
+
+    xmp_start = xmp_end = None
+    insert_at = 2
+    for start, end, marker in _jpeg_segments(data):
+        if marker == _APP1 and data[start + 4:start + 4 + len(_XMP_APP1_HEADER)] == _XMP_APP1_HEADER:
+            xmp_start, xmp_end = start, end
+            break
+        if marker in (b'\xff\xe0', _APP1):   # APP0/APP1 (JFIF, Exif)
+            insert_at = end
+
+    if xmp_start is not None:
+        packet = data[xmp_start + 4 + len(_XMP_APP1_HEADER):xmp_end]
+        text = packet.decode('utf-8', 'replace')
+    else:
+        text = _XMP_SKELETON
+
+    text = _patch_xmp_text(text, rating, label)
+    payload = _XMP_APP1_HEADER + text.encode('utf-8')
+    if len(payload) + 2 > _MAX_SEGMENT:
+        raise ValueError('XMP packet too large for one APP1 segment')
+    segment = _APP1 + (len(payload) + 2).to_bytes(2, 'big') + payload
+
+    if xmp_start is not None:
+        out = data[:xmp_start] + segment + data[xmp_end:]
+    else:
+        out = data[:insert_at] + segment + data[insert_at:]
+
+    tmp = path + '.cammello-tmp'
+    with open(tmp, 'wb') as f:
+        f.write(out)
+    os.replace(tmp, path)
+
 
 # ── File types ───────────────────────────────────────────────────────────────
 
@@ -209,33 +343,6 @@ _XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
                  '<?xpacket end="w"?>')
 
 
-def _read_xmp_raw(path):
-    img = pyexiv2.Image(path)
-    try:
-        return img.read_xmp() or {}
-    finally:
-        img.close()
-
-
-def _read_xmp_from(path):
-    # All pyexiv2 access is confined to the single native-imaging thread
-    # (see native_exec): exiv2/XMP is not thread-safe, and a lock alone did
-    # not prevent the Windows access-violation crash.
-    return native_exec.run(_read_xmp_raw, path)
-
-
-def _write_xmp_raw(path, payload):
-    img = pyexiv2.Image(path)
-    try:
-        img.modify_xmp(payload)
-    finally:
-        img.close()
-
-
-def _write_xmp_to(path, payload):
-    native_exec.run(_write_xmp_raw, path, payload)
-
-
 def read_item_metadata(item):
     """Fill item.rating / item.label from disk WITHOUT pyexiv2.
 
@@ -255,10 +362,27 @@ def read_item_metadata(item):
         rating, label = _read_rating_label_text(src)
         if rating is None and label is None:
             continue
+        # 0.12.7: CLAMP to the valid range. Harald hit a file that showed an
+        # endless row of stars while its XMP said 1 - the exact cause could
+        # not be reconstructed (the sidecar was overwritten before it could
+        # be inspected), so this does two things: it makes any out-of-range
+        # value harmless, and it writes the RAW string to the log so a
+        # recurrence is diagnosable instead of merely visible.
+        # -1 is "rejected", 0..5 are the stars; everything else is bogus.
         try:
-            item.rating = int(float(rating)) if rating is not None else 0
+            value = int(float(rating)) if rating is not None else 0
         except (TypeError, ValueError):
-            item.rating = 0
+            logging.getLogger('Cammello').warning(
+                'XMP rating of "%s" is not a number (raw value: %r) - '
+                'treated as unrated.', src, rating)
+            value = 0
+        if value < -1 or value > 5:
+            logging.getLogger('Cammello').warning(
+                'XMP rating of "%s" out of range (raw value: %r) - '
+                'clamped to %d.', src, rating,
+                max(-1, min(5, value)))
+            value = max(-1, min(5, value))
+        item.rating = value
         item.label = label or ''
         return item
     item.rating = 0
@@ -269,26 +393,28 @@ def read_item_metadata(item):
 def write_item_metadata(item):
     """Write rating/label: sidecar for the RAW (created if missing, existing
     ones amended), embedded for the JPEG. The RAW file itself is not touched.
-    Returns the list of paths written."""
-    if pyexiv2 is None:
-        raise RuntimeError('pyexiv2 is not installed')
-    payload = {
-        'Xmp.xmp.Rating': str(item.rating) if item.rating else None,
-        'Xmp.xmp.Label': item.label if item.label else None,
-    }
-    # Rating 0 with no label: write explicit deletions so a previous value
-    # (from LR or the camera) is cleared rather than silently kept.
+    Returns the list of paths written.
+
+    Sidecars (.xmp) are written in PURE PYTHON (no native library): they are
+    plain text, and pyexiv2 crashes on Windows even on harmless .xmp files.
+    The JPEG's embedded XMP is written the same way (APP1 segment surgery),
+    so a JPEG-only picture - which has no sidecar - keeps its rating too.
+    """
     written = []
     sc = item.sidecar_path
     if sc:
-        if not os.path.exists(sc):
-            with open(sc, 'w', encoding='utf-8') as f:
-                f.write(_XMP_SKELETON)
-        _write_xmp_to(sc, payload)
+        _write_xmp_sidecar(sc, item.rating, item.label)
         written.append(sc)
     if item.jpg_path:
-        _write_xmp_to(item.jpg_path, payload)
-        written.append(item.jpg_path)
+        # Embedded XMP in the JPEG - also pure Python (0.12.6). exiv2 is no
+        # longer involved anywhere in the culling write path, so a
+        # JPEG-only picture (which has NO sidecar) keeps its rating too.
+        try:
+            _write_xmp_jpeg(item.jpg_path, item.rating, item.label)
+            written.append(item.jpg_path)
+        except Exception as e:
+            logging.getLogger('Cammello').warning(
+                'XMP write to JPEG failed for "%s": %s', item.stem, e)
     return written
 
 
@@ -358,9 +484,14 @@ def filter_items(items, min_rating=0, exclude_rejects=True, label_indices=None):
     out = []
     for it in items:
         if it.rating == -1:
-            # A reject has no meaningful star count: the rejects switch alone
-            # decides, the min_rating filter does not apply to it.
-            if exclude_rejects:
+            # A reject has no meaningful star count. Until 0.12.6 the rejects
+            # switch alone decided; since 0.12.7 rejects are shown BY DEFAULT
+            # (Harald), and that made an active star filter show every reject
+            # alongside the selects - "3 stars and up" would have listed the
+            # discarded frames. So an active minimum rating now hides them as
+            # well: with no star filter they stay visible (greyed, red X),
+            # with one they drop out.
+            if exclude_rejects or min_rating > 0:
                 continue
         elif it.rating < min_rating:
             continue

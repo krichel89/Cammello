@@ -96,7 +96,8 @@ check('sidecar roundtrip label (DE text kept)', fresh.label == 'Rot')
 check('label maps to color index 0', fresh.label_color_index == 0)
 
 # Sidecar wins over embedded JPEG value.
-culling._write_xmp_to(pair.jpg_path, {'Xmp.xmp.Rating': '1'})
+# 0.12.6: embedded JPEG XMP is written in pure Python (no pyexiv2).
+culling._write_xmp_jpeg(pair.jpg_path, 1, None)
 again = culling.CullItem(pair.stem, pair.raw_path, pair.jpg_path)
 culling.read_item_metadata(again)
 check('sidecar has precedence over embedded JPEG', again.rating == 4)
@@ -113,18 +114,25 @@ check('reject (-1) roundtrip in JPEG', back.rating == -1)
 solo.rating = 0
 solo.label = ''
 culling.write_item_metadata(solo)
-x = culling._read_xmp_from(solo.jpg_path)
-check('rating 0 deletes the XMP tags',
-      'Xmp.xmp.Rating' not in x and 'Xmp.xmp.Label' not in x, str(x))
+# 0.12.6: everything is read/written as text now, so the checks read the
+# packet directly instead of going through pyexiv2.
+r0, l0 = culling._read_rating_label_text(solo.jpg_path)
+check('rating 0 deletes the XMP tags', r0 is None and not l0, f'{r0}/{l0}')
 
-# Existing sidecar is amended, not replaced.
-culling._write_xmp_to(pair.sidecar_path, {'Xmp.dc.subject': ['keepme']})
+# Existing sidecar is amended, not replaced: put a foreign element in and
+# make sure a rating write keeps it.
+with open(pair.sidecar_path, 'w', encoding='utf-8') as _f:
+    _f.write(culling._XMP_SKELETON.replace(
+        '<rdf:Description rdf:about=""/>',
+        '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:subject><rdf:Bag><rdf:li>keepme</rdf:li></rdf:Bag></dc:subject>'
+        '</rdf:Description>'))
 pair.rating = 5
 culling.write_item_metadata(pair)
-sc = culling._read_xmp_from(pair.sidecar_path)
-check('foreign sidecar content survives', sc.get('Xmp.dc.subject') == ['keepme'],
-      str(sc.get('Xmp.dc.subject')))
-check('new rating in amended sidecar', sc.get('Xmp.xmp.Rating') == '5')
+sc_text = open(pair.sidecar_path, encoding='utf-8').read()
+check('foreign sidecar content survives', 'keepme' in sc_text)
+r5, _ = culling._read_rating_label_text(pair.sidecar_path)
+check('new rating in amended sidecar', r5 == '5', str(r5))
 
 # ── Write-behind ─────────────────────────────────────────────────────────────
 wb = culling.WriteBehind()

@@ -27,4 +27,9 @@ from cammello.wikidata import _style_wd_field
 from cammello.widgets import _VGrip
 
 if __name__ == '__main__':
+    # MUST be first in the main guard: the metadata helper uses
+    # multiprocessing (spawn), and a frozen Windows build would
+    # otherwise start a second GUI instance instead of the helper.
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

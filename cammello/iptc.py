@@ -11,12 +11,26 @@ Design decisions (provisional, agreed defaults - easy to change):
     what stock agencies expect for non-ASCII captions (verified by roundtrip,
     not against agency documentation - their specs are not public).
 """
+import logging
 import os
 import re
 import shutil
 
 from .constants import *
 from . import native_exec
+from . import native_ops
+
+# RAW/DNG extensions exiv2 must never open (its parser has crashed on real
+# camera files). Kept in sync with previews._RAW_EXTS by test_iptc.
+RAW_EXTS = {'.cr3', '.cr2', '.crw', '.nef', '.nrw', '.arw', '.raf',
+            '.rw2', '.orf', '.pef', '.srw', '.dng', '.raw', '.x3f'}
+
+# Minimal valid XMP sidecar (same shape culling.py writes).
+XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+                '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+                '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+                '<rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>\n'
+                '<?xpacket end="w"?>')
 
 try:
     import pyexiv2
@@ -131,6 +145,100 @@ def _langalt_text(val):
     return str(val)
 
 
+def _sidecar_read_xmp(path):
+    """Read PersonInImage (bag) and Event (lang-alt) from an .xmp sidecar in
+    PURE PYTHON (0.12.6 fix).
+
+    exiv2 crashes on Windows even when merely OPENING a sidecar, so the two
+    XMP fields Cammello cares about are parsed from the XML text directly.
+    Returns a dict shaped like pyexiv2's read_xmp() for these keys.
+    """
+    try:
+        text = open(path, 'r', encoding='utf-8', errors='replace').read()
+    except OSError:
+        return {}
+    out = {}
+    # PersonInImage: an rdf:Bag of rdf:li elements.
+    m = re.search(r'<Iptc4xmpExt:PersonInImage>(.*?)</Iptc4xmpExt:PersonInImage>',
+                  text, re.S)
+    if m:
+        names = re.findall(r'<rdf:li[^>]*>(.*?)</rdf:li>', m.group(1), re.S)
+        names = [n.strip() for n in names if n.strip()]
+        if names:
+            out[PERSON_XMP] = names
+    # Event: lang-alt (rdf:Alt with xml:lang) or a plain attribute.
+    m = re.search(r'<Iptc4xmpExt:Event>(.*?)</Iptc4xmpExt:Event>', text, re.S)
+    if m:
+        li = re.search(r'<rdf:li[^>]*>(.*?)</rdf:li>', m.group(1), re.S)
+        val = (li.group(1) if li else m.group(1)).strip()
+        if val:
+            out[EVENT_XMP] = {'lang="x-default"': val}
+    else:
+        m = re.search(r'Iptc4xmpExt:Event\s*=\s*"([^"]*)"', text)
+        if m and m.group(1).strip():
+            out[EVENT_XMP] = m.group(1).strip()
+    return out
+
+
+def _sidecar_write_xmp(path, payload):
+    """Write PersonInImage / Event into an .xmp sidecar in PURE PYTHON.
+
+    Counterpart to _sidecar_read_xmp - same reason: exiv2 crashes on
+    sidecars under Windows. Only the two keys Cammello manages are touched;
+    everything else in the packet is preserved.
+    """
+    if os.path.exists(path):
+        text = open(path, 'r', encoding='utf-8', errors='replace').read()
+    else:
+        text = XMP_SKELETON
+
+    if 'xmlns:Iptc4xmpExt=' not in text:
+        text = re.sub(
+            r'(<rdf:Description\b.*?)(/>|>)',
+            lambda m: (m.group(1) +
+                       ' xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/'
+                       '2008-02-29/"' + m.group(2)),
+            text, count=1, flags=re.S)
+
+    def _drop(tag):
+        return re.sub(rf'<Iptc4xmpExt:{tag}>.*?</Iptc4xmpExt:{tag}>', '',
+                      text, flags=re.S)
+
+    names = payload.get(PERSON_XMP)
+    text = _drop('PersonInImage')
+    if names:
+        items = ''.join(f'<rdf:li>{n}</rdf:li>' for n in names)
+        block = (f'<Iptc4xmpExt:PersonInImage><rdf:Bag>{items}'
+                 f'</rdf:Bag></Iptc4xmpExt:PersonInImage>')
+        text = _insert_in_description(text, block)
+
+    event = payload.get(EVENT_XMP)
+    text = re.sub(r'<Iptc4xmpExt:Event>.*?</Iptc4xmpExt:Event>', '', text,
+                  flags=re.S)
+    if event:
+        val = (list(event.values())[0] if isinstance(event, dict) else event)
+        block = (f'<Iptc4xmpExt:Event><rdf:Alt><rdf:li xml:lang="x-default">'
+                 f'{val}</rdf:li></rdf:Alt></Iptc4xmpExt:Event>')
+        text = _insert_in_description(text, block)
+
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+
+
+def _insert_in_description(text, block):
+    """Put an element inside rdf:Description, converting a self-closing
+    <rdf:Description .../> into an open/close pair when needed."""
+    m = re.search(r'<rdf:Description\b.*?/>', text, re.S)
+    if m:
+        opened = m.group(0)[:-2] + '>'
+        return text.replace(m.group(0),
+                            opened + block + '</rdf:Description>', 1)
+    m = re.search(r'(<rdf:Description\b.*?>)', text, re.S)
+    if m:
+        return text.replace(m.group(1), m.group(1) + block, 1)
+    return text
+
+
 def read_iptc(filepath):
     """Read the editable IPTC fields (IIM + the two XMP fields) from a file.
 
@@ -140,8 +248,19 @@ def read_iptc(filepath):
     """
     if pyexiv2 is None:
         raise RuntimeError(unavailable_reason())
-    raw = native_exec.run(_read_iptc_raw, filepath)
-    xmp = native_exec.run(_read_xmp_raw, filepath)
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in RAW_EXTS:
+        # exiv2 must never open a RAW/DNG (its parser has crashed on real
+        # camera files, 0.12.6). For RAW the metadata lives in the .xmp
+        # sidecar anyway - read the XMP families from there when present.
+        sidecar = os.path.splitext(filepath)[0] + '.xmp'
+        raw = {}
+        # Pure Python: a sidecar is XML text, and exiv2 has crashed even on
+        # opening one (0.12.6). No native library on this path any more.
+        xmp = _sidecar_read_xmp(sidecar) if os.path.exists(sidecar) else {}
+    else:
+        raw = native_exec.run(native_ops.read_iptc_raw, filepath)
+        xmp = native_exec.run(native_ops.read_xmp_raw, filepath)
     out = {}
     for key, exiv_key, _label, multi in IPTC_FIELDS:
         val = raw.get(exiv_key)
@@ -210,38 +329,27 @@ def write_iptc(filepath, data, constants=None, target_path=None):
         elif kind in ('langalt', 'text'):
             xmp_payload[exiv_key] = text or None
 
-    native_exec.run(_modify_all_raw, path, iim_payload, xmp_payload)
-    return path
-
-
-def _read_iptc_raw(filepath):
-    img = pyexiv2.Image(filepath)
-    try:
-        return img.read_iptc() or {}
-    finally:
-        img.close()
-
-
-def _read_xmp_raw(filepath):
-    img = pyexiv2.Image(filepath)
-    try:
-        return img.read_xmp() or {}
-    finally:
-        img.close()
-
-
-def _modify_all_raw(path, iim_payload, xmp_payload):
-    """One open: apply the IIM payload and the XMP payload. Values of None
-    delete the respective tag; a list writes an XMP bag; a plain string writes
-    XMP text / lang-alt (x-default)."""
-    img = pyexiv2.Image(path)
-    try:
-        if iim_payload:
-            img.modify_iptc(iim_payload)
+    ext = os.path.splitext(path)[1].lower()
+    if ext in RAW_EXTS:
+        # RAW is never opened by exiv2 (see read_iptc): the XMP families go
+        # into the sidecar (created when missing); the IIM block has no place
+        # in a sidecar and is skipped with a log note.
+        sidecar = os.path.splitext(path)[0] + '.xmp'
+        if not os.path.exists(sidecar):
+            with open(sidecar, 'w', encoding='utf-8') as f:
+                f.write(XMP_SKELETON)
         if xmp_payload:
-            img.modify_xmp(xmp_payload)
-    finally:
-        img.close()
+            # Pure Python (0.12.6): no exiv2 on sidecars.
+            _sidecar_write_xmp(sidecar, xmp_payload)
+        skipped = [k for k, v in iim_payload.items()
+                   if v is not None and k != 'Iptc.Envelope.CharacterSet']
+        if skipped:
+            logging.getLogger('Cammello').info(
+                'IPTC: %d IIM field(s) not written for RAW %s (sidecars '
+                'carry XMP only).', len(skipped), os.path.basename(path))
+        return sidecar
+    native_exec.run(native_ops.modify_all_raw, path, iim_payload, xmp_payload)
+    return path
 
 
 # ── MediaWiki -> IPTC mapping ────────────────────────────────────────────────

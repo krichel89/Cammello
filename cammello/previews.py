@@ -20,7 +20,34 @@ import io
 import os
 import threading
 import time
+import ctypes
 from collections import OrderedDict
+
+# Silence libtiff's console chatter. RAW files are TIFF containers, and
+# libtiff prints "Unknown field with tag …", "Photometric tag is missing"
+# and "Old-style JPEG compression support is not configured" for practically
+# every CR2/DNG that Qt or Pillow touches. Harmless, but it floods the
+# console. Both the warning AND the error handler are silenced; the DLL is
+# looked up under the names used by Pillow, Qt and MSYS builds.
+_TIFF_LIB_NAMES = ('libtiff.so.6', 'libtiff.so.5', 'libtiff-6.dll',
+                   'libtiff-5.dll', 'tiff.dll', 'libtiff.dylib')
+_tiff = None
+for _name in _TIFF_LIB_NAMES:
+    try:
+        _tiff = ctypes.CDLL(_name)
+        break
+    except OSError:
+        continue
+if _tiff is not None:
+    try:
+        _TIFF_HANDLER = ctypes.CFUNCTYPE(None, ctypes.c_char_p,
+                                         ctypes.c_char_p, ctypes.c_void_p)
+        # Module-level references keep the callbacks alive for the process.
+        _tiff_silence = _TIFF_HANDLER(lambda *_: None)
+        _tiff.TIFFSetWarningHandler(_tiff_silence)
+        _tiff.TIFFSetErrorHandler(_tiff_silence)
+    except Exception:
+        pass
 
 from PyQt5.QtCore import (QObject, QRunnable, QThreadPool, pyqtSignal, Qt,
                           QSize, QBuffer, QIODevice, QByteArray)
@@ -64,6 +91,24 @@ def raw_unavailable_reason():
     return _RAWPY_ERROR or 'rawpy is not installed'
 
 
+# Orientation cache (0.12.3): decode_preview runs once per cache level
+# (thumb/screen/full) and used to re-read the orientation each time - for a
+# RAW that meant a fresh rawpy.imread per level ON TOP of the one for the
+# embedded JPEG, up to six opens per image. Orientation never changes during
+# a session, so one read per path is enough. Filled by read_orientation AND
+# by the combined RAW extraction below (which gets the flip for free from
+# the same open that yields the embedded JPEG).
+_ORIENT_CACHE = {}
+_ORIENT_LOCK = threading.Lock()
+
+
+def clear_orientation_cache():
+    """Folder change / reload: forget cached orientations (paths may be
+    reused by different files after a card re-import)."""
+    with _ORIENT_LOCK:
+        _ORIENT_CACHE.clear()
+
+
 def _read_orientation_pillow(path):
     """EXIF orientation via Pillow - no pyexiv2. Pillow coexists with Qt
     without the crashes exiv2 causes, and is already a dependency."""
@@ -87,20 +132,28 @@ def _raw_orientation_via_rawpy(path):
 
 
 def read_orientation(path):
-    """EXIF orientation (1-8) of a file; 1 when unknown.
+    """EXIF orientation (1-8) of a file; 1 when unknown. Cached per path.
 
     pyexiv2 is never used here - exiv2 crashes in the scan process. JPEG
     orientation comes from Pillow, RAW orientation from libraw via rawpy.
     Both libraries coexist with Qt without the exiv2 crash.
     """
+    with _ORIENT_LOCK:
+        cached = _ORIENT_CACHE.get(path)
+    if cached is not None:
+        return cached
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext in _RAW_EXTS:
-            return _raw_orientation_via_rawpy(path)
-        val = _read_orientation_pillow(path)
-        return int(val) if val else 1
+            orient = _raw_orientation_via_rawpy(path)
+        else:
+            val = _read_orientation_pillow(path)
+            orient = int(val) if val else 1
     except Exception:
-        return 1
+        orient = 1
+    with _ORIENT_LOCK:
+        _ORIENT_CACHE[path] = orient
+    return orient
 
 
 def _raw_exif_summary(path):
@@ -221,10 +274,17 @@ def _apply_orientation(qimage, orientation):
 
 
 def _extract_thumb_raw(path):
-    """Runs on the native-imaging thread; returns a rawpy Thumbnail namedtuple
-    (its .data/.format are plain bytes/enum, safe to hand back across threads)."""
+    """One rawpy open yields BOTH the embedded thumb and the orientation
+    (libraw flip) - the flip is free once the file is open, and caching it
+    saves the extra rawpy.imread that read_orientation would need per cache
+    level. Returns the rawpy Thumbnail namedtuple (its .data/.format are
+    plain bytes/enum, safe to hand back across threads)."""
     with rawpy.imread(path) as raw:
-        return raw.extract_thumb()
+        flip = getattr(raw.sizes, 'flip', 0)
+        thumb = raw.extract_thumb()
+    with _ORIENT_LOCK:
+        _ORIENT_CACHE[path] = _FLIP_TO_ORIENTATION.get(flip, 1)
+    return thumb
 
 
 def extract_preview_bytes(path):
@@ -400,6 +460,7 @@ class PreviewLoader:
 
     def new_generation(self):
         self.generation += 1
+        clear_orientation_cache()       # paths may point at new files now
         with self._lock:
             self._inflight.clear()
 

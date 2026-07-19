@@ -18,7 +18,9 @@ from PyQt5.QtGui import QDesktopServices
 from .constants import *
 from .i18n import tr
 from . import flickr
-from .widgets import UploadProgressDialog, apply_form_ratio
+from . import channels
+from .widgets import (UploadProgressDialog, apply_form_ratio,
+                      CollapsibleGroupBox)
 
 
 class FlickrMixin:
@@ -36,8 +38,9 @@ class FlickrMixin:
         self.flickr_count_lbl = self.ftp_count_lbl
         self.flickr_status = self.ftp_status
 
-        acc = QGroupBox(tr('Flickr account'))
-        form = QFormLayout(acc)
+        # Collapsible like every other section (0.12.8); open on first use.
+        acc = CollapsibleGroupBox(tr('Flickr account'))
+        form = QFormLayout(acc.content)
         self.flickr_api_key_edit = QLineEdit()
         form.addRow(tr('API key:'), self.flickr_api_key_edit)
         self.flickr_api_secret_edit = QLineEdit()
@@ -66,8 +69,8 @@ class FlickrMixin:
         apply_form_ratio(form)
         parent_layout.addWidget(acc)
 
-        up = QGroupBox(tr('Flickr upload'))
-        uform = QFormLayout(up)
+        up = CollapsibleGroupBox(tr('Flickr upload'))
+        uform = QFormLayout(up.content)
         note = QLabel(tr('Files are uploaded as they are; the Flickr title is '
                          'the target filename. Privacy follows your account '
                          'upload defaults.'))
@@ -100,7 +103,10 @@ class FlickrMixin:
 
     def _flickr_selected(self):
         """[(path, title)] for the selection, or ALL files when nothing is
-        selected (the convention used everywhere else)."""
+        selected (the convention used everywhere else). Commons-marked files
+        are excluded (channel marks, 0.12.1) - they are disabled in the list,
+        so a selection cannot contain them, but the all-files fallback is
+        filtered here."""
         items = self.flickr_list.selectedItems()
         if not items:
             items = [self.flickr_list.item(i)
@@ -108,6 +114,8 @@ class FlickrMixin:
         out = []
         for it in items:
             path = it.data(Qt.UserRole)
+            if self._channel_mark(path) == channels.MARK_COMMONS:
+                continue
             title = os.path.splitext(it.data(Qt.UserRole + 1) or
                                      os.path.basename(path))[0]
             out.append((path, title))
@@ -213,6 +221,9 @@ class FlickrMixin:
 
     def _flickr_start_upload(self, files, button=None):
         """Shared by the Flickr tab and the Culling '-> Flickr' target."""
+        # Flickr is the commercial channel too: record the decision (0.12.4).
+        self._mark_uploaded_channel([p for p, _title in files],
+                                    channels.MARK_COMMERCIAL)
         self._flickr_btn = button
         if button is not None:
             button.setEnabled(False)

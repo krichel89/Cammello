@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.12.0'
+__version__ = '0.12.8'
 
 # pyexiv2 is documented as NOT thread-safe ("Not thread safe, because pyexiv2
 # uses some global variables in C++", pyexiv2 README). A lock (this used to be
@@ -89,25 +89,151 @@ def app_style():
     sheet reaches every widget unconditionally; all rules are scoped by
     class/objectName, so the merge is equivalent on platforms that rendered
     correctly before."""
-    return current_input_style() + '\n' + GROUP_TITLE_STYLE + '\n' + ABOUT_STYLE
+    return (current_input_style() + '\n'
+            + group_title_style(current_style_is_dark()) + '\n'
+            + BUTTON_STYLE + '\n'
+            + ABOUT_STYLE + '\n'
+            # Disabled menu items (context-sensitive greying, 0.12.6/0.12.7):
+            # this rule alone was NOT enough on Windows - the native
+            # "windowsvista" style draws menu items itself and ignores the
+            # stylesheet colour, which is why the greying worked on macOS
+            # but not on Harald's Windows dark mode. The stylesheet stays
+            # (it is what makes it work under Fusion), and main_window
+            # additionally forces Fusion + explicit Disabled palette roles
+            # on Windows - see _apply_color_scheme.
+            'QMenu::item:disabled { color: #888; }'
+            'QMenu::item:disabled:selected { color: #888;'
+            ' background: transparent; }')
 
 
-GROUP_TITLE_STYLE = (
-    # Collapsible section: arrow tool-button header + framed content.
-    'QToolButton#groupTitle {'
-    ' font-weight: bold;'
-    ' color: white;'
-    ' background: #2a6db0;'
-    ' border: none;'
+def group_title_style(dark=False):
+    """Chrome for a collapsible section header, per colour scheme.
+
+    0.12.7 flattened the loud blue badge; 0.12.8 walks part of that back -
+    it had become "too small and too low in contrast" (Harald). What
+    changed: a much stronger accent colour, and one that is picked for the
+    ACTIVE scheme instead of being a single literal. A mid blue that reads
+    well on white is nearly invisible on the dark background, which is half
+    of where the contrast complaint came from. The size lives in
+    widgets.CollapsibleGroupBox (relative to the app font, so it scales).
+    """
+    if dark:
+        # White (Harald, 0.12.8): maximum contrast on the dark background,
+        # and it stops the headings competing with the blue accents used for
+        # links and selections.
+        colour, hover, rule = '#ffffff', '#ffffff', 'rgba(255, 255, 255, 0.45)'
+    else:
+        # The light-scheme counterpart of "white" is near-black, not white:
+        # white on a light background would be invisible. Same idea - a
+        # neutral, maximal-contrast heading rather than a coloured one.
+        colour, hover, rule = '#1a1a1a', '#000000', 'rgba(26, 26, 26, 0.35)'
+    return (
+        'QToolButton#groupTitle {'
+        ' font-weight: bold;'
+        f' color: {colour};'
+        ' background: transparent;'
+        ' border: none;'
+        f' border-bottom: 2px solid {rule};'
+        ' border-radius: 0px;'
+        ' padding: 3px 2px 4px 2px;'
+        ' }'
+        'QToolButton#groupTitle:hover {'
+        f' color: {hover};'
+        ' }'
+        'QFrame#groupContent {'
+        ' border: 1px solid #b9c6d6;'
+        ' border-radius: 6px;'
+        ' }'
+    )
+
+
+# Light variant as a module constant (backwards compatible import).
+GROUP_TITLE_STYLE = group_title_style(False)
+
+# ── Buttons: ONE look everywhere (0.12.7) ────────────────────────────────────
+# Harald: "the buttons are inconsistent, in the MediaWiki module they look
+# different from the Culling module - the MediaWiki style is the better one."
+# The difference came from the widget CLASS, not from any intent: the
+# MediaWiki bar uses QPushButtons (bordered, padded), the Culling bar mixes
+# in flat auto-raise QToolButtons. Rather than restyle them one by one, the
+# button chrome now lives HERE and covers both classes, so a button looks the
+# same wherever it is built.
+#
+# Two escapes from the common look, both by dynamic property:
+#   cammelloPrimary  - the accent action of a page (green Upload button)
+#   cammelloSwatch   - the colour-filter squares, which ARE their colour
+BUTTON_STYLE = (
+    'QPushButton, QToolButton {'
+    ' border: 1px solid palette(mid);'
     ' border-radius: 4px;'
-    ' padding: 3px 10px;'
-    ' font-size: 11pt;'
+    ' padding: 2px 10px;'
+    ' background: palette(button);'
+    ' color: palette(button-text);'
     ' }'
-    'QFrame#groupContent {'
-    ' border: 1px solid #b9c6d6;'
-    ' border-radius: 6px;'
+    'QPushButton:hover, QToolButton:hover {'
+    ' border-color: #2a6db0;'
+    ' }'
+    'QPushButton:pressed, QToolButton:pressed,'
+    ' QPushButton:checked, QToolButton:checked {'
+    ' background: #2a6db0;'
+    ' color: white;'
+    ' }'
+    'QPushButton:disabled, QToolButton:disabled {'
+    ' color: palette(mid);'
+    ' }'
+    # The accent action (Upload). Was an inline stylesheet on the widget.
+    'QPushButton[cammelloPrimary="true"] {'
+    ' font-weight: bold;'
+    ' background: #22aa77;'
+    ' color: white;'
+    ' border: 1px solid #1b8b60;'
+    ' padding: 2px 12px;'
+    ' }'
+    'QPushButton[cammelloPrimary="true"]:hover { background: #26c088; }'
+    'QPushButton[cammelloPrimary="true"]:pressed { background: #1b8b60; }'
+    'QPushButton[cammelloPrimary="true"]:disabled {'
+    ' background: palette(button); color: palette(mid);'
+    ' border: 1px solid palette(mid);'
+    ' }'
+    # Fixed-size square buttons (the star filter): the common horizontal
+    # padding would push their glyph out of a 22x22 box.
+    'QPushButton[cammelloCompact="true"], QToolButton[cammelloCompact="true"] {'
+    ' padding: 0; }'
+    # Colour swatches keep their own fill (set per widget); only the frame
+    # and the checked marker are unified here.
+    'QToolButton[cammelloSwatch="true"] {'
+    ' border: 1px solid #444; border-radius: 4px; padding: 0;'
+    ' }'
+    'QToolButton[cammelloSwatch="true"]:checked {'
+    ' border: 2px solid #fff;'
     ' }'
 )
+
+# ── Global UI font size (0.12.7) ─────────────────────────────────────────────
+# Harald: "the font size could be a bit bigger." Done ONCE on the
+# QApplication font instead of in stylesheets, so every widget - including
+# menus, dialogs and the ones built later - scales together and the relative
+# proportions stay intact. Point size, not pixels: that is what respects the
+# platform's own scaling.
+UI_FONT_POINT_DELTA = 1
+_BASE_FONT_POINT = [None]
+
+
+def apply_ui_font(app, delta=UI_FONT_POINT_DELTA):
+    """Enlarge the application font by `delta` points (idempotent).
+
+    The ORIGINAL point size is remembered on the first call, so repeated
+    calls (settings changes, a second window) never stack the increase.
+    """
+    font = app.font()
+    if _BASE_FONT_POINT[0] is None:
+        _BASE_FONT_POINT[0] = (font.pointSizeF() if font.pointSizeF() > 0
+                               else float(font.pointSize()))
+    base = _BASE_FONT_POINT[0]
+    if base is None or base <= 0:
+        return          # pixel-sized font: leave it alone rather than guess
+    font.setPointSizeF(base + delta)
+    app.setFont(font)
 
 # Higher-contrast input fields (applied on the main window and dialogs; the
 # rules cascade to all child QLineEdit/QTextEdit/QComboBox widgets, including
@@ -146,6 +272,23 @@ def input_style(dark=False):
         f' color: {fg};'
         f' selection-background-color: #2a6db0;'
         f' selection-color: white;'
+        f' }}'
+        # Slim toolbar controls (see widgets.slim_toolbar): Qt refuses to draw
+        # a widget below its minimumSizeHint, so the compact toolbars only
+        # work once min-height is explicitly zeroed here. Styling them also
+        # switches them to the stylesheet box model, which keeps the native
+        # macOS button bezel from painting over the next control.
+        f'QPushButton[cammelloSlim="true"], QToolButton[cammelloSlim="true"],'
+        f' QComboBox[cammelloSlim="true"], QCheckBox[cammelloSlim="true"],'
+        f' QLabel[cammelloSlim="true"] {{'
+        f' min-height: 0; padding: 1px 8px; margin: 0;'
+        f' }}'
+        f'QPushButton[cammelloSlim="true"], QToolButton[cammelloSlim="true"] {{'
+        f' border: 1px solid {border}; border-radius: 4px;'
+        f' }}'
+        f'QPushButton[cammelloSlim="true"]:pressed,'
+        f' QToolButton[cammelloSlim="true"]:pressed {{'
+        f' background: #2a6db0; color: white;'
         f' }}'
     )
 

@@ -67,10 +67,10 @@ check('every literal tr() key is translated', not uncovered,
 # The two dynamic tr(label) call sites feed table-driven labels; those labels
 # are listed explicitly in TRANSLATIONS and checked here.
 print('  (dynamic tr() call sites:', ', '.join(dynamic) or 'none', ')')
-from cammello.editors import BulkEditDialog
 from cammello import iptc as iptc_mod
-dynamic_labels = [lbl for lbl, _key in BulkEditDialog.FIELDS]
-dynamic_labels += [label for _k, _e, label, _m in iptc_mod.IPTC_FIELDS]
+# (BulkEditDialog was removed in 0.12.6 - multi-select editing in the editor
+# replaced it; only the IPTC field labels remain table-driven.)
+dynamic_labels = [label for _k, _e, label, _m in iptc_mod.IPTC_FIELDS]
 missing_dyn = [l for l in dynamic_labels if l not in TRANSLATIONS]
 check('dynamic tr(label) labels are translated', not missing_dyn,
       str(missing_dyn))

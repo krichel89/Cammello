@@ -114,9 +114,97 @@ TRANSLATIONS = {
         'de': 'Speichern unter…', 'es': 'Guardar en…',
         'fr': 'Enregistrer dans…', 'it': 'Salva in…',
     },
-    'Suggest': {
-        'de': 'Vorschlagen', 'es': 'Sugerir', 'fr': 'Suggérer',
-        'it': 'Suggerisci',
+    'Add to tabs': {
+        'de': 'Übernehmen', 'es': 'Pasar a las pestañas',
+        'fr': 'Vers les onglets', 'it': 'Passa alle schede',
+    },
+    '(takes effect after a restart)': {
+        'de': '(wirksam nach Neustart)',
+        'es': '(surte efecto tras reiniciar)',
+        'fr': '(prend effet après un redémarrage)',
+        'it': '(ha effetto dopo un riavvio)',
+    },
+    'Rename {count} files': {
+        'de': '{count} Dateien umbenennen',
+        'es': 'Renombrar {count} archivos',
+        'fr': 'Renommer {count} fichiers',
+        'it': 'Rinomina {count} file',
+    },
+    'Name template:': {
+        'de': 'Namensvorlage:', 'es': 'Plantilla de nombre:',
+        'fr': 'Modèle de nom :', 'it': 'Modello di nome:',
+    },
+    'Start number:': {
+        'de': 'Startnummer:', 'es': 'Número inicial:',
+        'fr': 'Numéro de départ :', 'it': 'Numero iniziale:',
+    },
+    'Preview:': {
+        'de': 'Vorschau:', 'es': 'Vista previa:',
+        'fr': 'Aperçu :', 'it': 'Anteprima:',
+    },
+    'F2 renames; with several rows selected F2 opens the bulk rename.': {
+        'de': 'F2 benennt um; bei mehreren markierten Zeilen öffnet F2 die '
+              'Massenumbenennung.',
+        'es': 'F2 renombra; con varias filas seleccionadas F2 abre el '
+              'renombrado en masa.',
+        'fr': 'F2 renomme ; avec plusieurs lignes sélectionnées, F2 ouvre le '
+              'renommage en masse.',
+        'it': 'F2 rinomina; con più righe selezionate F2 apre la '
+              'rinomina in blocco.',
+    },
+    'Mark for Commons (CC)': {
+        'de': 'Für Commons (CC) markieren',
+        'es': 'Marcar para Commons (CC)',
+        'fr': 'Marquer pour Commons (CC)',
+        'it': 'Contrassegna per Commons (CC)',
+    },
+    'Mark for commercial use (FTP/Flickr)': {
+        'de': 'Für kommerzielle Nutzung markieren (FTP/Flickr)',
+        'es': 'Marcar para uso comercial (FTP/Flickr)',
+        'fr': 'Marquer pour usage commercial (FTP/Flickr)',
+        'it': 'Contrassegna per uso commerciale (FTP/Flickr)',
+    },
+    'Remove channel mark': {
+        'de': 'Kanal-Markierung entfernen',
+        'es': 'Quitar la marca de canal',
+        'fr': 'Retirer le marquage de canal',
+        'it': 'Rimuovi il contrassegno di canale',
+    },
+    'Marked for commercial use - excluded from the Commons upload.': {
+        'de': 'Für kommerzielle Nutzung markiert – vom Commons-Upload '
+              'ausgeschlossen.',
+        'es': 'Marcado para uso comercial: excluido de la subida a Commons.',
+        'fr': 'Marqué pour usage commercial – exclu de l’envoi vers Commons.',
+        'it': 'Contrassegnato per uso commerciale: escluso dal caricamento '
+              'su Commons.',
+    },
+    'Marked for Commons (CC).': {
+        'de': 'Für Commons (CC) markiert.',
+        'es': 'Marcado para Commons (CC).',
+        'fr': 'Marqué pour Commons (CC).',
+        'it': 'Contrassegnato per Commons (CC).',
+    },
+    'Marked for Commons (CC) - excluded from commercial uploads (FTP/Flickr).': {
+        'de': 'Für Commons (CC) markiert – von kommerziellen Uploads '
+              '(FTP/Flickr) ausgeschlossen.',
+        'es': 'Marcado para Commons (CC): excluido de las subidas '
+              'comerciales (FTP/Flickr).',
+        'fr': 'Marqué pour Commons (CC) – exclu des envois commerciaux '
+              '(FTP/Flickr).',
+        'it': 'Contrassegnato per Commons (CC): escluso dai caricamenti '
+              'commerciali (FTP/Flickr).',
+    },
+    'Marked for commercial use.': {
+        'de': 'Für kommerzielle Nutzung markiert.',
+        'es': 'Marcado para uso comercial.',
+        'fr': 'Marqué pour usage commercial.',
+        'it': 'Contrassegnato per uso commerciale.',
+    },
+    '{n} file(s) excluded (marked for Commons).': {
+        'de': '{n} Datei(en) ausgeschlossen (für Commons markiert).',
+        'es': '{n} archivo(s) excluido(s) (marcados para Commons).',
+        'fr': '{n} fichier(s) exclu(s) (marqués pour Commons).',
+        'it': '{n} file esclusi (contrassegnati per Commons).',
     },
     'Read the current folder again from disk.': {
         'de': 'Den aktuellen Ordner erneut von der Festplatte einlesen.',
@@ -395,6 +483,368 @@ TRANSLATIONS = {
         'es': 'Iniciar autorización',
         'fr': 'Démarrer l’autorisation',
         'it': 'Avvia autorizzazione',
+    },
+    '&File': {
+        'de': '&Datei', 'es': '&Archivo', 'fr': '&Fichier', 'it': '&File',
+    },
+    '&Edit': {
+        'de': '&Bearbeiten', 'es': '&Editar', 'fr': '&Édition',
+        'it': '&Modifica',
+    },
+    '&View': {
+        'de': '&Ansicht', 'es': '&Ver', 'fr': '&Affichage',
+        'it': '&Visualizza',
+    },
+    '&Upload': {
+        'de': '&Hochladen', 'es': '&Subir', 'fr': '&Envoi',
+        'it': '&Caricamento',
+    },
+    '&Help': {
+        'de': '&Hilfe', 'es': 'A&yuda', 'fr': '&Aide', 'it': '&Aiuto',
+    },
+    '&Open folder…': {
+        'de': 'Ordner &öffnen…', 'es': 'Abrir &carpeta…',
+        'fr': 'Ouvrir un &dossier…', 'it': 'Apri &cartella…',
+    },
+    '&Reload folder': {
+        'de': 'Ordner &neu laden', 'es': '&Recargar carpeta',
+        'fr': '&Recharger le dossier', 'it': '&Ricarica cartella',
+    },
+    'Reload': {
+        'de': 'Neu laden', 'es': 'Recargar', 'fr': 'Recharger',
+        'it': 'Ricarica',
+    },
+    '&Add files…': {
+        'de': 'Dateien &hinzufügen…', 'es': '&Añadir archivos…',
+        'fr': '&Ajouter des fichiers…', 'it': '&Aggiungi file…',
+    },
+    '&Save selection to folder…': {
+        'de': 'Auswahl in Ordner &speichern…',
+        'es': '&Guardar la selección en una carpeta…',
+        'fr': '&Enregistrer la sélection dans un dossier…',
+        'it': '&Salva la selezione in una cartella…',
+    },
+    'Settings…': {
+        'de': 'Einstellungen…', 'es': 'Configuración…',
+        'fr': 'Préférences…', 'it': 'Impostazioni…',
+    },
+    '&Quit': {
+        'de': '&Beenden', 'es': '&Salir', 'fr': '&Quitter', 'it': '&Esci',
+    },
+    '&Rename…': {
+        'de': '&Umbenennen…', 'es': '&Renombrar…', 'fr': '&Renommer…',
+        'it': '&Rinomina…',
+    },
+    'Remove &selected': {
+        'de': 'Aus&wahl entfernen', 'es': 'Eliminar lo &seleccionado',
+        'fr': 'Supprimer la &sélection', 'it': 'Rimuovi &selezionati',
+    },
+    '&Clear all': {
+        'de': '&Alle entfernen', 'es': '&Vaciar todo', 'fr': '&Tout effacer',
+        'it': '&Rimuovi tutto',
+    },
+    'Clear &base description': {
+        'de': '&Basisbeschreibung leeren',
+        'es': 'Vaciar la descripción &base',
+        'fr': 'Effacer la description de &base',
+        'it': 'Svuota la descrizione di &base',
+    },
+    'Channel &mark': {
+        'de': '&Kanal-Markierung', 'es': '&Marca de canal',
+        'fr': '&Marquage de canal', 'it': '&Contrassegno di canale',
+    },
+    'About Cammello': {
+        'de': 'Über Cammello', 'es': 'Acerca de Cammello',
+        'fr': 'À propos de Cammello', 'it': 'Informazioni su Cammello',
+    },
+    'Yellow': {
+        'de': 'Gelb', 'es': 'Amarillo', 'fr': 'Jaune', 'it': 'Giallo',
+    },
+    'Rejected': {
+        'de': 'Aussortiert', 'es': 'Rechazada',
+        'fr': 'Rejetée', 'it': 'Scartata',
+    },
+    'Red': {
+        'de': 'Rot', 'es': 'Rojo', 'fr': 'Rouge', 'it': 'Rosso',
+    },
+    'Purple': {
+        'de': 'Violett', 'es': 'Violeta', 'fr': 'Violet', 'it': 'Viola',
+    },
+    'No stars': {
+        'de': 'Keine Sterne', 'es': 'Sin estrellas',
+        'fr': 'Aucune étoile', 'it': 'Nessuna stella',
+    },
+    'Green': {
+        'de': 'Grün', 'es': 'Verde', 'fr': 'Vert', 'it': 'Verde',
+    },
+    'No label': {
+        'de': 'Keine Markierung', 'es': 'Sin etiqueta',
+        'fr': 'Aucun libellé', 'it': 'Nessuna etichetta',
+    },
+    'M toggles the digit keys between stars and colors; in color mode 5 is purple.': {
+        'de': 'M schaltet die Zifferntasten zwischen Sternen und Farben um; '
+              'im Farbmodus ist 5 Violett.',
+        'es': 'M alterna las teclas numéricas entre estrellas y colores; en '
+              'modo color, 5 es violeta.',
+        'fr': 'M bascule les touches numériques entre étoiles et couleurs ; '
+              'en mode couleur, 5 correspond au violet.',
+        'it': 'M alterna i tasti numerici tra stelle e colori; in modalità '
+              'colore 5 è viola.',
+    },
+    'Blue': {
+        'de': 'Blau', 'es': 'Azul', 'fr': 'Bleu', 'it': 'Blu',
+    },
+    'C&lear list': {
+        'de': '&Liste leeren', 'es': '&Vaciar la lista',
+        'fr': 'Vider la &liste', 'it': 'Svuota l&’elenco',
+    },
+    'Not logged in – sign in': {
+        'de': 'Nicht angemeldet – jetzt anmelden',
+        'es': 'Sin sesión: iniciar sesión',
+        'fr': 'Non connecté – se connecter',
+        'it': 'Non connesso – accedi',
+    },
+    'Logging in…': {
+        'de': 'Anmeldung läuft…', 'es': 'Iniciando sesión…',
+        'fr': 'Connexion…', 'it': 'Accesso in corso…',
+    },
+    'Modules': {
+        'de': 'Module', 'es': 'Módulos', 'fr': 'Modules', 'it': 'Moduli',
+    },
+    'Show these modules (applies after restart):': {
+        'de': 'Diese Module anzeigen (gilt nach Neustart):',
+        'es': 'Mostrar estos módulos (se aplica tras reiniciar):',
+        'fr': 'Afficher ces modules (au redémarrage) :',
+        'it': 'Mostra questi moduli (si applica al riavvio):',
+    },
+    'Author and license': {
+        'de': 'Urheber und Lizenz', 'es': 'Autoría y licencia',
+        'fr': 'Auteur et licence', 'it': 'Autore e licenza',
+    },
+    'Bot password…': {
+        'de': 'Bot-Passwort…', 'es': 'Contraseña de bot…',
+        'fr': 'Mot de passe bot…', 'it': 'Password bot…',
+    },
+    'Bot password': {
+        'de': 'Bot-Passwort', 'es': 'Contraseña de bot',
+        'fr': 'Mot de passe bot', 'it': 'Password bot',
+    },
+    'Fallback sign-in with a bot password - independent of the OAuth consumer.': {
+        'de': 'Ersatz-Anmeldung mit Bot-Passwort – unabhängig vom '
+              'OAuth-Consumer.',
+        'es': 'Inicio de sesión alternativo con contraseña de bot, '
+              'independiente del consumidor OAuth.',
+        'fr': 'Connexion de secours par mot de passe bot – indépendante du '
+              'consommateur OAuth.',
+        'it': 'Accesso di riserva con password bot – indipendente dal '
+              'consumer OAuth.',
+    },
+    '&Metadata': {
+        'de': '&Metadaten', 'es': '&Metadatos',
+        'fr': '&Métadonnées', 'it': '&Metadati',
+    },
+    '&Rating': {
+        'de': '&Bewertung', 'es': '&Valoración',
+        'fr': '&Note', 'it': '&Valutazione',
+    },
+    '&Color label': {
+        'de': '&Farbmarkierung', 'es': 'Etiqueta de &color',
+        'fr': 'Libellé de &couleur', 'it': 'Etichetta &colore',
+    },
+    '&Settings…': {
+        'de': '&Einstellungen…', 'es': '&Configuración…',
+        'fr': '&Préférences…', 'it': '&Impostazioni…',
+    },
+    '&Bulk edit selected': {
+        'de': 'Auswahl &massenbearbeiten',
+        'es': 'Edición en &lote de la selección',
+        'fr': 'Édition en &lot de la sélection',
+        'it': 'Modifica in &blocco della selezione',
+    },
+    '&Clear': {
+        'de': '&Leeren', 'es': '&Vaciar', 'fr': '&Effacer', 'it': '&Svuota',
+    },
+    'Show only images with {n} stars or more (click again for all).': {
+        'de': 'Nur Bilder mit {n} Sternen oder mehr zeigen (nochmal klicken '
+              'für alle).',
+        'es': 'Mostrar solo imágenes con {n} estrellas o más (haz clic de '
+              'nuevo para todas).',
+        'fr': 'N’afficher que les images avec {n} étoiles ou plus (cliquez à '
+              'nouveau pour tout afficher).',
+        'it': 'Mostra solo immagini con {n} stelle o più (clicca di nuovo '
+              'per tutte).',
+    },
+    '&Fullscreen': {
+        'de': '&Vollbild', 'es': 'Pantalla &completa',
+        'fr': 'Plein &écran', 'it': 'Schermo &intero',
+    },
+    '&Loupe view': {
+        'de': '&Lupenansicht', 'es': 'Vista de &lupa',
+        'fr': 'Vue &loupe', 'it': 'Vista &lente',
+    },
+    'Single image, fitted to the window (E).': {
+        'de': 'Einzelbild, ins Fenster eingepasst (E).',
+        'es': 'Imagen única, ajustada a la ventana (E).',
+        'fr': 'Image seule, ajustée à la fenêtre (E).',
+        'it': 'Immagine singola, adattata alla finestra (E).',
+    },
+    '&Grid view': {
+        'de': '&Rasteransicht', 'es': 'Vista de &cuadrícula',
+        'fr': 'Vue en &grille', 'it': 'Vista a &griglia',
+    },
+    'Grid view: thumbnails instead of the large image (G).': {
+        'de': 'Rasteransicht: Miniaturen statt des großen Bildes (G).',
+        'es': 'Vista de cuadrícula: miniaturas en vez de la imagen grande (G).',
+        'fr': 'Vue en grille : vignettes au lieu de la grande image (G).',
+        'it': 'Vista a griglia: miniature invece dell’immagine grande (G).',
+    },
+    '&Test connection': {
+        'de': 'Verbindung &testen', 'es': '&Probar la conexión',
+        'fr': '&Tester la connexion', 'it': '&Prova la connessione',
+    },
+    'Show &log': {
+        'de': '&Log anzeigen', 'es': 'Mostrar el &registro',
+        'fr': 'Afficher le &journal', 'it': 'Mostra il &log',
+    },
+    'Remove every file from the list.': {
+        'de': 'Entfernt alle Dateien aus der Liste.',
+        'es': 'Quita todos los archivos de la lista.',
+        'fr': 'Retire tous les fichiers de la liste.',
+        'it': 'Rimuove tutti i file dall’elenco.',
+    },
+    'Zoom &in': {
+        'de': '&Vergrößern', 'es': '&Acercar', 'fr': '&Zoom avant',
+        'it': '&Ingrandisci',
+    },
+    'Zoom &out': {
+        'de': 'Ver&kleinern', 'es': 'A&lejar', 'fr': 'Zoom a&rrière',
+        'it': '&Riduci',
+    },
+    '&Log in…': {
+        'de': '&Anmelden…', 'es': '&Iniciar sesión…', 'fr': '&Se connecter…',
+        'it': '&Accedi…',
+    },
+    '&Upload to Commons': {
+        'de': 'Zu Commons &hochladen', 'es': '&Subir a Commons',
+        'fr': '&Envoyer vers Commons', 'it': '&Carica su Commons',
+    },
+    'Add culling selection to &tabs': {
+        'de': 'Culling-Auswahl in die &Bereiche übernehmen',
+        'es': 'Añadir la selección de culling a las &secciones',
+        'fr': 'Ajouter la sélection du tri aux &sections',
+        'it': 'Aggiungi la selezione del culling alle &sezioni',
+    },
+    '&About Cammello': {
+        'de': '&Über Cammello', 'es': '&Acerca de Cammello',
+        'fr': 'À &propos de Cammello', 'it': '&Informazioni su Cammello',
+    },
+    'Open &log file': {
+        'de': '&Logdatei öffnen', 'es': 'Abrir el archivo de &registro',
+        'fr': 'Ouvrir le fichier &journal', 'it': 'Apri il file di &log',
+    },
+    'Open log &folder': {
+        'de': 'Log-&Ordner öffnen', 'es': 'Abrir la &carpeta de registros',
+        'fr': 'Ouvrir le &dossier des journaux',
+        'it': 'Apri la &cartella dei log',
+    },
+    '&Copy log': {
+        'de': 'Log &kopieren', 'es': '&Copiar el registro',
+        'fr': '&Copier le journal', 'it': '&Copia il log',
+    },
+    'Sign in to Wikimedia Commons.': {
+        'de': 'Bei Wikimedia Commons anmelden.',
+        'es': 'Iniciar sesión en Wikimedia Commons.',
+        'fr': 'Se connecter à Wikimedia Commons.',
+        'it': 'Accedi a Wikimedia Commons.',
+    },
+    'Add image files to the upload list.': {
+        'de': 'Bilddateien zur Upload-Liste hinzufügen.',
+        'es': 'Añadir archivos de imagen a la lista de subida.',
+        'fr': 'Ajouter des fichiers image à la liste d’envoi.',
+        'it': 'Aggiungi file immagine all’elenco di caricamento.',
+    },
+    'Copy the selected images to a folder.': {
+        'de': 'Die ausgewählten Bilder in einen Ordner kopieren.',
+        'es': 'Copiar las imágenes seleccionadas a una carpeta.',
+        'fr': 'Copier les images sélectionnées dans un dossier.',
+        'it': 'Copia le immagini selezionate in una cartella.',
+    },
+    'Rename the selected files for Commons.': {
+        'de': 'Die ausgewählten Dateien für Commons umbenennen.',
+        'es': 'Renombrar los archivos seleccionados para Commons.',
+        'fr': 'Renommer les fichiers sélectionnés pour Commons.',
+        'it': 'Rinomina i file selezionati per Commons.',
+    },
+    'Enter the confirmation code manually (use if the automatic confirmation does not work)': {
+        'de': 'Bestätigungscode manuell eingeben (falls die automatische '
+              'Bestätigung nicht klappt)',
+        'es': 'Introducir el código de confirmación manualmente (si la '
+              'confirmación automática no funciona)',
+        'fr': 'Saisir le code de confirmation manuellement (si la '
+              'confirmation automatique ne fonctionne pas)',
+        'it': 'Inserisci manualmente il codice di conferma (se la conferma '
+              'automatica non funziona)',
+    },
+    'The local port {port} needed for sign-in is already in use. Close the program using it, or tick "Enter the confirmation code manually" to sign in without it.': {
+        'de': 'Der lokale Port {port} für die Anmeldung ist bereits belegt. '
+              'Beende das Programm, das ihn nutzt, oder hake „Bestätigungscode '
+              'manuell eingeben" an, um dich ohne ihn anzumelden.',
+        'es': 'El puerto local {port} necesario para iniciar sesión ya está '
+              'en uso. Cierra el programa que lo usa, o marca «Introducir el '
+              'código de confirmación manualmente» para iniciar sesión sin él.',
+        'fr': 'Le port local {port} nécessaire à la connexion est déjà '
+              'utilisé. Fermez le programme qui l’utilise, ou cochez « Saisir '
+              'le code de confirmation manuellement » pour vous connecter '
+              'sans lui.',
+        'it': 'La porta locale {port} necessaria per l’accesso è già in uso. '
+              'Chiudi il programma che la usa, oppure seleziona «Inserisci '
+              'manualmente il codice di conferma» per accedere senza di essa.',
+    },
+    'Confirmation code:': {
+        'de': 'Bestätigungscode:',
+        'es': 'Código de confirmación:',
+        'fr': 'Code de confirmation :',
+        'it': 'Codice di conferma:',
+    },
+    'paste the code shown after "Allow"': {
+        'de': 'den nach „Zulassen" angezeigten Code einfügen',
+        'es': 'pega el código mostrado tras «Permitir»',
+        'fr': 'collez le code affiché après « Autoriser »',
+        'it': 'incolla il codice mostrato dopo «Consenti»',
+    },
+    'Finish': {
+        'de': 'Fertigstellen',
+        'es': 'Finalizar',
+        'fr': 'Terminer',
+        'it': 'Completa',
+    },
+    'Requesting an authorization link…': {
+        'de': 'Fordere einen Autorisierungslink an…',
+        'es': 'Solicitando un enlace de autorización…',
+        'fr': 'Demande d’un lien d’autorisation…',
+        'it': 'Richiesta di un link di autorizzazione…',
+    },
+    'Open the link, click "Allow", then paste the confirmation code here and press Finish.': {
+        'de': 'Öffne den Link, klicke auf „Zulassen", füge dann den '
+              'Bestätigungscode hier ein und klicke auf Fertigstellen.',
+        'es': 'Abre el enlace, haz clic en «Permitir», luego pega aquí el '
+              'código de confirmación y pulsa Finalizar.',
+        'fr': 'Ouvrez le lien, cliquez sur « Autoriser », puis collez ici le '
+              'code de confirmation et cliquez sur Terminer.',
+        'it': 'Apri il link, fai clic su «Consenti», poi incolla qui il '
+              'codice di conferma e premi Completa.',
+    },
+    'Completing sign-in…': {
+        'de': 'Schließe die Anmeldung ab…',
+        'es': 'Completando el inicio de sesión…',
+        'fr': 'Finalisation de la connexion…',
+        'it': 'Completamento dell’accesso…',
+    },
+    'Please paste the confirmation code first.': {
+        'de': 'Bitte zuerst den Bestätigungscode einfügen.',
+        'es': 'Primero pega el código de confirmación.',
+        'fr': 'Veuillez d’abord coller le code de confirmation.',
+        'it': 'Incolla prima il codice di conferma.',
     },
     'Authorization link:': {
         'de': 'Autorisierungslink:',
@@ -721,7 +1171,7 @@ TRANSLATIONS = {
         'it': 'Carica tutto ({n})',
     },
     'Upload selected ({n})': {
-        'de': 'Auswahl hochladen ({n})',
+        'de': 'Ausgewählte hochladen ({n})',
         'es': 'Subir selección ({n})',
         'fr': 'Envoyer la sélection ({n})',
         'it': 'Carica selezione ({n})',
@@ -845,12 +1295,6 @@ TRANSLATIONS = {
         'es': 'Permiso:',
         'fr': 'Autorisation :',
         'it': 'Autorizzazione:',
-    },
-    'License:': {
-        'de': 'Lizenz:',
-        'es': 'Licencia:',
-        'fr': 'Licence :',
-        'it': 'Licenza:',
     },
     'License (P275):': {
         'de': 'Lizenz (P275):',
@@ -1139,12 +1583,6 @@ TRANSLATIONS = {
         'es': 'Representa (P180)',
         'fr': 'Représente (P180)',
         'it': 'Raffigura (P180)',
-    },
-    'Categories': {
-        'de': 'Kategorien',
-        'es': 'Categorías',
-        'fr': 'Catégories',
-        'it': 'Categorie',
     },
     'Caption (en)': {
         'de': 'Bildunterschrift (en)',
@@ -2315,5 +2753,84 @@ TRANSLATIONS = {
         'es': '{n} archivos seleccionados: un campo modificado se aplica a todos.',
         'fr': '{n} fichiers sélectionnés – un champ modifié est appliqué à tous.',
         'it': '{n} file selezionati: un campo modificato viene applicato a tutti.',
+    },
+    # ── 0.12.7 ───────────────────────────────────────────────────────────
+    'hide rejects': {
+        'de': 'Aussortierte ausblenden',
+        'es': 'ocultar descartadas',
+        'fr': 'masquer les rejetées',
+        'it': 'nascondi gli scarti',
+    },
+    'Rejected images are shown greyed out with a red X. Check this to hide them completely.': {
+        'de': 'Aussortierte Bilder werden grau mit rotem ✕ angezeigt. Hier ankreuzen, um sie ganz auszublenden.',
+        'es': 'Las imágenes descartadas se muestran en gris con una ✕ roja. Marque esta casilla para ocultarlas por completo.',
+        'fr': 'Les images rejetées sont affichées en gris avec une ✕ rouge. Cochez cette case pour les masquer complètement.',
+        'it': 'Le immagini scartate vengono mostrate in grigio con una ✕ rossa. Selezionare questa casella per nasconderle del tutto.',
+    },
+    'Confirmation code or URL:': {
+        'de': 'Bestätigungscode oder URL:',
+        'es': 'Código de confirmación o URL:',
+        'fr': 'Code de confirmation ou URL :',
+        'it': 'Codice di conferma o URL:',
+    },
+    'paste the code - or the whole address from the browser': {
+        'de': 'Code einfügen – oder die komplette Adresse aus dem Browser',
+        'es': 'pegue el código o la dirección completa del navegador',
+        'fr': 'collez le code – ou l’adresse complète du navigateur',
+        'it': 'incollare il codice oppure l’indirizzo completo dal browser',
+    },
+    'If the browser shows a code after "Allow", paste it here. If it instead jumps to a 127.0.0.1 address - even one that fails to load - copy that entire address from the address bar and paste it here; Cammello reads the confirmation out of it.': {
+        'de': 'Zeigt der Browser nach „Zulassen“ einen Code, diesen hier einfügen. Springt er stattdessen auf eine 127.0.0.1-Adresse – auch auf eine, die nicht lädt –, die ganze Adresse aus der Adresszeile kopieren und hier einfügen; Cammello liest die Bestätigung daraus.',
+        'es': 'Si el navegador muestra un código tras «Permitir», péguelo aquí. Si en su lugar salta a una dirección 127.0.0.1 —aunque no se cargue—, copie esa dirección completa de la barra de direcciones y péguela aquí; Cammello extrae de ella la confirmación.',
+        'fr': 'Si le navigateur affiche un code après « Autoriser », collez-le ici. S’il bascule à la place vers une adresse 127.0.0.1 – même si elle ne se charge pas –, copiez cette adresse entière depuis la barre d’adresse et collez-la ici ; Cammello en extrait la confirmation.',
+        'it': 'Se dopo «Consenti» il browser mostra un codice, incollarlo qui. Se invece passa a un indirizzo 127.0.0.1 – anche se non si carica –, copiare l’intero indirizzo dalla barra degli indirizzi e incollarlo qui; Cammello ne ricava la conferma.',
+    },
+    'Confirm manually (use if the automatic confirmation does not work - a code or the address from the browser)': {
+        'de': 'Manuell bestätigen (falls die automatische Bestätigung nicht klappt – Code oder Adresse aus dem Browser)',
+        'es': 'Confirmar manualmente (si la confirmación automática no funciona: un código o la dirección del navegador)',
+        'fr': 'Confirmer manuellement (si la confirmation automatique échoue – un code ou l’adresse du navigateur)',
+        'it': 'Conferma manuale (se la conferma automatica non funziona: un codice o l’indirizzo dal browser)',
+    },
+    'Open the link and click "Allow". Then paste either the code shown, or - if the browser jumps to a 127.0.0.1 address, even a failing one - that whole address, and press Finish.': {
+        'de': 'Den Link öffnen und auf „Zulassen“ klicken. Dann entweder den angezeigten Code einfügen oder – falls der Browser auf eine 127.0.0.1-Adresse springt, auch auf eine fehlschlagende – diese ganze Adresse, und auf „Fertigstellen“ klicken.',
+        'es': 'Abra el enlace y haga clic en «Permitir». Después pegue el código mostrado o —si el navegador salta a una dirección 127.0.0.1, aunque falle— esa dirección completa, y pulse «Finalizar».',
+        'fr': 'Ouvrez le lien et cliquez sur « Autoriser ». Collez ensuite le code affiché ou – si le navigateur bascule vers une adresse 127.0.0.1, même en échec – cette adresse entière, puis cliquez sur « Terminer ».',
+        'it': 'Aprire il collegamento e fare clic su «Consenti». Quindi incollare il codice mostrato oppure – se il browser passa a un indirizzo 127.0.0.1, anche non funzionante – l’intero indirizzo, e premere «Fine».',
+    },
+    'No confirmation found in what was pasted. Paste either the code or the complete 127.0.0.1 address from the browser.': {
+        'de': 'In der Einfügung war keine Bestätigung zu finden. Bitte entweder den Code oder die komplette 127.0.0.1-Adresse aus dem Browser einfügen.',
+        'es': 'No se encontró ninguna confirmación en lo pegado. Pegue el código o la dirección 127.0.0.1 completa del navegador.',
+        'fr': 'Aucune confirmation trouvée dans le texte collé. Collez soit le code, soit l’adresse 127.0.0.1 complète du navigateur.',
+        'it': 'Nessuna conferma trovata nel testo incollato. Incollare il codice oppure l’indirizzo 127.0.0.1 completo dal browser.',
+    },
+    'Open the link and click "Allow". If the browser returns on its own you are done. Otherwise paste the code shown - or the whole 127.0.0.1 address from the browser, even if the page failed to load.': {
+        'de': 'Den Link öffnen und auf „Zulassen“ klicken. Kehrt der Browser von selbst zurück, ist alles erledigt. Andernfalls den angezeigten Code einfügen – oder die komplette 127.0.0.1-Adresse aus dem Browser, auch wenn die Seite nicht geladen hat.',
+        'es': 'Abra el enlace y haga clic en «Permitir». Si el navegador vuelve por sí solo, ya está. Si no, pegue el código mostrado o la dirección 127.0.0.1 completa del navegador, aunque la página no se haya cargado.',
+        'fr': 'Ouvrez le lien et cliquez sur « Autoriser ». Si le navigateur revient de lui-même, c’est terminé. Sinon, collez le code affiché – ou l’adresse 127.0.0.1 complète du navigateur, même si la page n’a pas chargé.',
+        'it': 'Aprire il collegamento e fare clic su «Consenti». Se il browser torna da solo, è tutto fatto. Altrimenti incollare il codice mostrato oppure l’intero indirizzo 127.0.0.1 dal browser, anche se la pagina non si è caricata.',
+    },
+    'Sign in with a bot password…': {
+        'de': 'Mit Botpasswort anmelden…',
+        'es': 'Iniciar sesión con una contraseña de bot…',
+        'fr': 'Se connecter avec un mot de passe de bot…',
+        'it': 'Accedi con una password bot…',
+    },
+    'Fallback: sign in with a bot password instead of the browser authorization.': {
+        'de': 'Rückfallweg: Anmeldung mit einem Botpasswort statt über die Browser-Autorisierung.',
+        'es': 'Alternativa: iniciar sesión con una contraseña de bot en lugar de la autorización por navegador.',
+        'fr': 'Solution de repli : connexion avec un mot de passe de bot au lieu de l’autorisation par navigateur.',
+        'it': 'Ripiego: accesso con una password bot invece dell’autorizzazione tramite browser.',
+    },
+    'Edit bot password…': {
+        'de': 'Botpasswort bearbeiten…',
+        'es': 'Editar la contraseña de bot…',
+        'fr': 'Modifier le mot de passe de bot…',
+        'it': 'Modifica la password bot…',
+    },
+    'Stores the bot password used by the fallback sign-in.': {
+        'de': 'Speichert das Botpasswort, das der Rückfall-Anmeldung dient.',
+        'es': 'Guarda la contraseña de bot que utiliza el inicio de sesión alternativo.',
+        'fr': 'Enregistre le mot de passe de bot utilisé par la connexion de repli.',
+        'it': 'Salva la password bot usata dall’accesso di ripiego.',
     },
 }
