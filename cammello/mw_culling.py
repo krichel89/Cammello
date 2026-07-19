@@ -580,8 +580,13 @@ class MWCullingMixin:
         self._cull_wb.flush(10)
         self._cull_loader.new_generation()
 
-        self._cull_items = culling.scan_folder(folder)
+        report = {}
+        self._cull_items = culling.scan_folder(folder, report)
         self._cull_folder = folder
+        # Always logged, not just on demand: when a folder yields fewer
+        # entries than expected, this line says whether files were skipped
+        # (unknown extension) or folded into RAW+JPEG pairs.
+        self.logger.info('Culling scan: %s', culling.scan_report_text(report))
         if not previews.raw_available():
             raw_only = sum(1 for i in self._cull_items
                            if i.raw_path and not i.jpg_path)
@@ -811,6 +816,14 @@ class MWCullingMixin:
                       f'{item.label}')
         text = (tr('{pos}/{shown} shown ({total} in folder)').format(
                     pos=pos, shown=shown, total=total) + detail)
+        # Folder name up front (Harald, 0.12.10): with several cards or
+        # shoots open in sequence, the counts alone do not say WHICH folder
+        # they belong to. Name only, not the whole path - the path is in the
+        # log and would push the picture details off the bar.
+        folder = getattr(self, '_cull_folder', '')
+        if folder:
+            text = (os.path.basename(os.path.normpath(folder))
+                    + '  ·  ' + text)
         n_sel = len(self.cull_strip.selectedItems())
         if n_sel:
             text += '  ·  ' + tr('{n} selected').format(n=n_sel)

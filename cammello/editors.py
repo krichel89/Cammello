@@ -2,7 +2,7 @@
 0.12.6 - multi-select editing in the editor covers it)."""
 import re
 from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QWidget, QLabel, QLineEdit, QPushButton,
-                             QComboBox, QTextEdit, QVBoxLayout, QHBoxLayout,
+                             QTextEdit, QVBoxLayout, QHBoxLayout,
                              QFormLayout)
 from PyQt5.QtCore import pyqtSignal
 from .constants import *

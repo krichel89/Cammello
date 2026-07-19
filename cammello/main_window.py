@@ -168,7 +168,6 @@ class MainWindow(FlickrMixin,
         # the tab is withheld from the bar. Applied at the next start.
         self._feat_mediawiki = self.settings.value(
             'feature_mediawiki', True, type=bool)
-        self._feat_log = self.settings.value('feature_log', True, type=bool)
         if not self._feat_flickr:
             self.logger.info('Flickr tab disabled via hidden switch '
                              '(re-enable with --enable-tab flickr).')
@@ -613,10 +612,10 @@ class MainWindow(FlickrMixin,
 
         # Appearance: color scheme (system / light / dark), applied app-wide
         # via a Fusion palette and persisted.
-        from PyQt5.QtWidgets import QGroupBox, QFormLayout, QComboBox
         appearance = QGroupBox(tr('Appearance'))
         af = QFormLayout(appearance)
-        self.scheme_combo = QComboBox()
+        # NoWheel: this page scrolls; the wheel must not flip the scheme.
+        self.scheme_combo = NoWheelComboBox()
         self.scheme_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         for _code, _label in (('system', tr('system')), ('light', tr('light')),
                               ('dark', tr('dark'))):
@@ -626,7 +625,7 @@ class MainWindow(FlickrMixin,
         af.addRow(tr('Color scheme:'), self.scheme_combo)
         # UI language: persisted immediately, applied at the NEXT start (no
         # live retranslation of an already-built window).
-        self.language_combo = QComboBox()
+        self.language_combo = NoWheelComboBox()
         self.language_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         for _code, _name in UI_LANGUAGES:
             self.language_combo.addItem(_name, _code)

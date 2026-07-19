@@ -296,7 +296,7 @@ class MWIptcMixin:
             # would just look like a missing feature.
             box = CollapsibleGroupBox(tr('FTP server'))
             fv = QFormLayout(box.content)
-            self.ftp_protocol_combo = QComboBox()
+            self.ftp_protocol_combo = NoWheelComboBox()
             self.ftp_protocol_combo.setSizeAdjustPolicy(
                 QComboBox.AdjustToContents)
             self.ftp_protocol_combo.addItems(PROTOCOLS)

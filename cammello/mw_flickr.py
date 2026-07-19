@@ -20,7 +20,7 @@ from .i18n import tr
 from . import flickr
 from . import channels
 from .widgets import (UploadProgressDialog, apply_form_ratio,
-                      CollapsibleGroupBox)
+                      CollapsibleGroupBox, NoWheelComboBox)
 
 
 class FlickrMixin:
@@ -76,7 +76,7 @@ class FlickrMixin:
                          'upload defaults.'))
         note.setWordWrap(True)
         uform.addRow(note)
-        self.flickr_license_combo = QComboBox()
+        self.flickr_license_combo = NoWheelComboBox()
         self.flickr_license_combo.setSizeAdjustPolicy(
             QComboBox.AdjustToContents)
         # itemData: None = leave the account default; else the license id

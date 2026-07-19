@@ -4,6 +4,26 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.10] - 2026-07-19
+
+### Changed
+- The remaining combo boxes on SCROLLABLE pages ignore the mouse wheel,
+  like the language fields since 0.12.8: color scheme and language in the
+  settings, the FTP protocol, and the Flickr license. Combo boxes in
+  toolbars keep their wheel - there is nothing to scroll there.
+- Opening a folder in the culling module logs one line explaining the scan
+  (names listed, picture files, skipped extensions, RAW+JPEG pairs), and
+  the status bar shows the folder name.
+
+### Removed
+- Dead code found by a full source check: the read of the removed Log
+  feature flag, a local import shadowing the module imports, unused
+  imports in the caption editor and the EXIF reader.
+
+### Fixed
+- Three sidecar/XMP read sites open their file via a context manager, so
+  the handle is released promptly on every interpreter and error path.
+
 ## [0.12.9] - 2026-07-18
 
 ### Changed

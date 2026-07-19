@@ -166,7 +166,8 @@ def _sidecar_read_xmp(path):
     Returns a dict shaped like pyexiv2's read_xmp() for these keys.
     """
     try:
-        text = open(path, 'r', encoding='utf-8', errors='replace').read()
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
     except OSError:
         return {}
     out = {}
@@ -200,7 +201,8 @@ def _sidecar_write_xmp(path, payload):
     everything else in the packet is preserved.
     """
     if os.path.exists(path):
-        text = open(path, 'r', encoding='utf-8', errors='replace').read()
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
     else:
         text = XMP_SKELETON
 

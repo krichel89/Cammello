@@ -1,9 +1,6 @@
 """EXIF capture-date reading."""
-import os
-from datetime import datetime
 try:
     from PIL import Image
-    from PIL.ExifTags import TAGS
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False

@@ -162,7 +162,8 @@ def _write_xmp_sidecar(path, rating, label):
     Creates the file from the skeleton when missing, amends an existing one.
     """
     if os.path.exists(path):
-        text = open(path, 'r', encoding='utf-8', errors='replace').read()
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
     else:
         text = _XMP_SKELETON
     with open(path, 'w', encoding='utf-8') as f:
@@ -328,20 +329,38 @@ class CullItem:
                 f'label={self.label!r})')
 
 
-def scan_folder(folder):
+def scan_folder(folder, report=None):
     """Scan one folder (not recursive - SD card folders are flat) and pair
     RAW+JPEG by identical stem (case-insensitive). Returns CullItems sorted by
-    stem. Filenames only; no file is opened."""
+    stem. Filenames only; no file is opened.
+
+    `report`: an optional dict that is FILLED IN with what the scan saw -
+    see scan_report_text(). Added because "the folder has 200 pictures but
+    only 40 show up" cannot be answered from the outside: the scan can only
+    ever drop a file for an unknown extension, or fold several files into one
+    entry because they share a stem, and nothing in the UI distinguished the
+    two. Counting is cheap (names only, no file is opened), so the numbers
+    are always collected and simply ignored when no dict is passed.
+    """
     items = {}
+    by_ext = {}
+    listed = 0
+    accepted = 0
     try:
         names = sorted(os.listdir(folder))
-    except OSError:
+    except OSError as exc:
+        if report is not None:
+            report.update({'error': str(exc), 'listed': 0, 'accepted': 0,
+                           'items': 0, 'by_ext': {}})
         return []
     for name in names:
+        listed += 1
         stem, ext = os.path.splitext(name)
         ext = ext.lower()
+        by_ext[ext] = by_ext.get(ext, 0) + 1
         if ext not in RAW_EXTENSIONS and ext not in JPEG_EXTENSIONS:
             continue
+        accepted += 1
         path = os.path.join(folder, name)
         key = stem.casefold()
         item = items.get(key)
@@ -351,7 +370,31 @@ def scan_folder(folder):
             item.raw_path = path
         else:
             item.jpg_path = path
-    return [items[k] for k in sorted(items)]
+    out = [items[k] for k in sorted(items)]
+    if report is not None:
+        report.update({'error': None, 'listed': listed, 'accepted': accepted,
+                       'items': len(out), 'by_ext': by_ext})
+    return out
+
+
+def scan_report_text(report):
+    """One log line explaining a scan result: how many names the folder
+    listed, how many were picture files, how many entries came out, and the
+    extension histogram. The histogram is the part that answers the question
+    in practice - an unexpected extension (or a pile of hidden placeholder
+    files from a cloud drive) shows up immediately."""
+    if not report:
+        return ''
+    if report.get('error'):
+        return f"scan failed: {report['error']}"
+    hist = ', '.join(f'{e or "(no ext)"}={n}'
+                     for e, n in sorted(report.get('by_ext', {}).items(),
+                                        key=lambda kv: (-kv[1], kv[0])))
+    dropped = report['listed'] - report['accepted']
+    folded = report['accepted'] - report['items']
+    return (f"{report['listed']} name(s) listed, {report['accepted']} picture "
+            f"file(s), {dropped} skipped (unknown extension), {folded} folded "
+            f"into pairs -> {report['items']} entries; extensions: {hist}")
 
 
 # ── XMP I/O ──────────────────────────────────────────────────────────────────
