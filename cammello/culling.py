@@ -50,10 +50,23 @@ _RE_LABEL_ELEM = re.compile(r'<xmp:Label>\s*([^<]*?)\s*</xmp:Label>')
 # The XMP APP1 packet of a JPEG sits in the header segments, i.e. before the
 # compressed image data; a bounded read of the file head finds it without
 # pulling a 20+ MB camera JPEG fully into memory (the metadata scan of a
-# 3000-image card was dominated by exactly that I/O). Sidecars are tiny and
-# fit in the first read anyway. If the marker is NOT in the head, the full
-# read runs as a fallback, so correctness is unchanged for exotic layouts.
-_XMP_HEAD_BYTES = 4 * 1024 * 1024
+# 3000-image card was dominated by exactly that I/O).
+#
+# 0.12.9: the head read is a LADDER, not one 4 MB gulp. A JPEG APP1 segment
+# is at most 64 KiB, and cameras write EXIF + XMP within the first ~100 KiB,
+# so the first rung (192 KiB) settles virtually every file; measured on
+# 20 MB JPEGs the scan read dropped ~20x. Across a 3000-image card that is
+# the difference between ~0.6 GB and ~12 GB pulled off the card reader.
+# The 4 MiB rung and the final full read keep correctness unchanged for
+# exotic layouts (XMP behind an oversized MPF/preview block, sidecars are
+# settled by rung one anyway).
+_XMP_HEAD_LADDER = (192 * 1024, 4 * 1024 * 1024)
+# Backwards-compatible alias (tests referenced the old name).
+_XMP_HEAD_BYTES = _XMP_HEAD_LADDER[-1]
+
+
+def _xmp_block_complete(data):
+    return _XMP_META_START in data and _XMP_META_END in data
 
 
 def _read_rating_label_text(path):
@@ -63,10 +76,17 @@ def _read_rating_label_text(path):
     be read."""
     try:
         with open(path, 'rb') as f:
-            data = f.read(_XMP_HEAD_BYTES)
-            if (len(data) == _XMP_HEAD_BYTES
-                    and (_XMP_META_START not in data
-                         or _XMP_META_END not in data)):
+            requested = _XMP_HEAD_LADDER[0]
+            data = f.read(requested)
+            for rung in _XMP_HEAD_LADDER[1:]:
+                # Stop climbing when the file is exhausted (the previous read
+                # came back short) or the block is already in hand.
+                if len(data) < requested or _xmp_block_complete(data):
+                    break
+                data += f.read(rung - len(data))
+                requested = rung
+            if (len(data) == _XMP_HEAD_LADDER[-1]
+                    and not _xmp_block_complete(data)):
                 data += f.read()   # rare: XMP starts or ends beyond the head
     except OSError:
         return None, None

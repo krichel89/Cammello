@@ -16,10 +16,8 @@ threads; the viewer converts to QPixmap on the GUI thread.
 rawpy is OPTIONAL: without it, RAW-only items cannot be previewed (JPEGs and
 pairs still work); previews.raw_available() tells the UI.
 """
-import io
 import os
 import threading
-import time
 import ctypes
 from collections import OrderedDict
 
@@ -61,10 +59,10 @@ except Exception as e:
     rawpy = None
     _RAWPY_ERROR = str(e)
 
-try:
-    import pyexiv2
-except Exception:
-    pyexiv2 = None
+# 0.12.9: the pyexiv2 import that used to sit here is GONE. Nothing in this
+# module used it (every function below advertises being pyexiv2-free), yet
+# the import loaded the crash-prone native library into the GUI process at
+# startup - against the 0.12.6 architecture and ~0.2 s of launch time.
 
 # RAW extensions that must never be opened with pyexiv2 (exiv2 crashes on some,
 # e.g. .RW2). Kept in sync with culling.RAW_EXTENSIONS; duplicated here to
@@ -311,7 +309,6 @@ def extract_preview_bytes(path):
     # uniform. (Untested against a real bitmap-thumb RAW - none available.)
     h, w = thumb.data.shape[:2]
     qimg = QImage(thumb.data.tobytes(), w, h, 3 * w, QImage.Format_RGB888)
-    buf = io.BytesIO()
     from PyQt5.QtCore import QBuffer, QIODevice
     qbuf = QBuffer()
     qbuf.open(QIODevice.WriteOnly)

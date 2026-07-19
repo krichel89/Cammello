@@ -32,12 +32,24 @@ XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
                 '<rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>\n'
                 '<?xpacket end="w"?>')
 
-try:
-    import pyexiv2
+# 0.12.9: the main process no longer IMPORTS pyexiv2 - it only checks that
+# the module exists. Since 0.12.6 every real exiv2 call runs in the helper
+# process (native_exec/native_ops); importing the module here still loaded
+# the crash-prone native library into the GUI process, which is exactly what
+# that architecture exists to avoid - and it cost ~0.2 s at startup.
+# Trade-off, stated honestly: find_spec proves the module is installed, not
+# that its native library loads. A broken installation now surfaces at the
+# first metadata access (as a helper-process error naming the module)
+# instead of at startup. `pyexiv2` stays as a module attribute because
+# read_iptc/write_iptc guard on `pyexiv2 is None`; it is truthy when the
+# module exists but is NOT the imported module.
+import importlib.util as _ilu
+if _ilu.find_spec('pyexiv2') is not None:
+    pyexiv2 = True              # sentinel: installed; real import is in the child
     _PYEXIV2_ERROR = None
-except Exception as e:          # ImportError or a broken native library
+else:
     pyexiv2 = None
-    _PYEXIV2_ERROR = str(e)
+    _PYEXIV2_ERROR = 'pyexiv2 is not installed'
 
 # IPTC IIM: envelope character set marker for UTF-8 (ESC % G).
 _UTF8_MARKER = '\x1b%G'

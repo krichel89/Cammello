@@ -11,21 +11,37 @@ application on Windows with access violations that no try/except can catch
 sidecar write). pyexiv2 also documents itself as not thread safe due to C++
 globals. Running every exiv2 call in a dedicated helper process turns any
 such crash into a catchable error: the helper dies, Cammello survives.
+
+0.12.9: pyexiv2 is imported LAZILY, inside _require(). The GUI process also
+imports this module - iptc.py needs the function objects to hand to the
+executor (pickled by reference) - and a top-level import therefore loaded
+the crash-prone native library into exactly the process the whole
+architecture keeps it out of. The functions only ever RUN in the helper, so
+the import now happens there, on first use.
 """
-try:
-    import pyexiv2
-except Exception:                       # pragma: no cover - optional dep
-    pyexiv2 = None
+
+_PYEXIV2 = None
+_PYEXIV2_ERROR = None
 
 
 def _require():
-    if pyexiv2 is None:
-        raise RuntimeError('pyexiv2 is not available in the helper process')
+    """Import pyexiv2 on first use (in the helper process) and return it."""
+    global _PYEXIV2, _PYEXIV2_ERROR
+    if _PYEXIV2 is None and _PYEXIV2_ERROR is None:
+        try:
+            import pyexiv2
+            _PYEXIV2 = pyexiv2
+        except Exception as e:          # pragma: no cover - optional dep
+            _PYEXIV2_ERROR = str(e)
+    if _PYEXIV2 is None:
+        raise RuntimeError('pyexiv2 is not available in the helper process: '
+                           + (_PYEXIV2_ERROR or 'unknown import error'))
+    return _PYEXIV2
 
 
 def read_iptc_raw(path):
-    _require()
-    img = pyexiv2.Image(path)
+    px = _require()
+    img = px.Image(path)
     try:
         return img.read_iptc() or {}
     finally:
@@ -33,8 +49,8 @@ def read_iptc_raw(path):
 
 
 def read_xmp_raw(path):
-    _require()
-    img = pyexiv2.Image(path)
+    px = _require()
+    img = px.Image(path)
     try:
         return img.read_xmp() or {}
     finally:
@@ -42,8 +58,8 @@ def read_xmp_raw(path):
 
 
 def write_xmp_raw(path, payload):
-    _require()
-    img = pyexiv2.Image(path)
+    px = _require()
+    img = px.Image(path)
     try:
         img.modify_xmp(payload)
     finally:
@@ -53,8 +69,8 @@ def write_xmp_raw(path, payload):
 def modify_all_raw(path, iim_payload, xmp_payload):
     """One open for both families - IIM and XMP - like iptc.write_iptc
     always did."""
-    _require()
-    img = pyexiv2.Image(path)
+    px = _require()
+    img = px.Image(path)
     try:
         if iim_payload:
             img.modify_iptc(iim_payload)

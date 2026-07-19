@@ -4,6 +4,29 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.9] - 2026-07-18
+
+### Changed
+- **Card scans read a fraction of the data.** The rating/label scan used to
+  read up to 4 MB from the head of every JPEG; it now starts with 192 KiB
+  (where cameras put EXIF and XMP) and only climbs to 4 MB - and then the
+  whole file - when the XMP block was not found. Measured ~20x less I/O on
+  typical camera JPEGs; on a 3000-image card that is roughly 0.6 GB pulled
+  off the reader instead of 12 GB. Files with the XMP anywhere, and files
+  without any, still read exactly as before.
+- **pyexiv2 no longer loads in the GUI process.** All exiv2 work has run in
+  the crash-isolated helper since 0.12.6, but three module-level imports
+  still loaded the native library into the main process at startup - the
+  very thing that architecture exists to prevent. The feature gate now
+  checks that the module is installed without importing it, the helper
+  imports it on first use, and a dead import in the preview module is gone.
+  Startup is ~0.2 s faster; a broken pyexiv2 installation now surfaces at
+  the first metadata access (with a clear message) instead of at startup.
+
+### Removed
+- Dead code found by a lint pass in the touched modules: an unused
+  buffer in the RAW bitmap fallback and two unused imports.
+
 ## [0.12.8] - 2026-07-18
 
 ### Changed
