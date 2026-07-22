@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.12.10"
-NOTES_FILE="notes_01210.md"
+VERSION="0.12.14"
+NOTES_FILE="notes_01214.md"
 REPO_DIR="/Users/h/Documents/Python/Cammello"
 REPO_URL="https://github.com/krichel89/Cammello"
 

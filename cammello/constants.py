@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.12.10'
+__version__ = '0.12.14'
 
 # pyexiv2 is documented as NOT thread-safe ("Not thread safe, because pyexiv2
 # uses some global variables in C++", pyexiv2 README). A lock (this used to be
@@ -32,6 +32,33 @@ TRACKING_CATEGORY_WIKITEXT = f'[[Category:{TRACKING_CATEGORY}]]'
 SD_KEYS = [
     'creator', 'copyright', 'license', 'depicts', 'created_during',
     'gallery_suffix', 'depicts_override',
+]
+
+# Licence presets for the dropdowns (0.12.14). Each row pairs the WIKITEXT
+# template with the Wikidata item for the same licence, so the two halves
+# cannot drift apart: picking a licence in one field offers to set the other.
+#
+# The Q-numbers were verified against wikidata.org, not recalled:
+#   Q18199165  Creative Commons Attribution-ShareAlike 4.0 International
+#   Q20007257  Creative Commons Attribution 4.0 International
+#   Q6938433   Creative Commons CC0 License
+LICENSE_PRESETS = [
+    # (label, wikitext template, P275 item)
+    ('CC0 1.0',       '{{Cc-zero}}',       'Q6938433'),
+    ('CC BY 4.0',     '{{Cc-by-4.0}}',     'Q20007257'),
+    ('CC BY-SA 4.0',  '{{Cc-by-sa-4.0}}',  'Q18199165'),
+]
+
+# Copyright status (P6216) presets.
+#   Q73566113  work available with a Creative Commons license  (default)
+#   Q50423863  copyrighted
+#   Q19652     public domain
+# Q73566113 and Q19652 were checked on Commons by Harald (20.07.2026) after
+# my own lookup could not confirm them; Q50423863 is verified on wikidata.org.
+COPYRIGHT_PRESETS = [
+    ('work available with a Creative Commons license', 'Q73566113'),
+    ('copyrighted', 'Q50423863'),
+    ('public domain', 'Q19652'),
 ]
 
 PROPERTY_MAP = {

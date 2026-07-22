@@ -77,6 +77,216 @@ def missing_keys():
 # Grouped by UI area. Every {placeholder} of a key MUST survive
 # translation (enforced by test_i18n.py).
 TRANSLATIONS = {
+    'P6216 "copyright status": how the work stands in copyright terms.\n\nQ73566113 - available under a Creative Commons license: the right one\nfor own photographs published here (the default).\nQ50423863 - copyrighted, without such a release.\nQ19652 - public domain.\n\nThis has no wikitext counterpart of its own; it exists only as structured\ndata. Pick from the dropdown or enter another Q-number.': {
+        'de': 'P6216 „Urheberrechtsstatus": Wie das Werk urheberrechtlich dasteht.\n\nQ73566113 – unter einer Creative-Commons-Lizenz verfügbar: das Richtige\nfür eigene, hier veröffentlichte Fotos (der Vorgabewert).\nQ50423863 – urheberrechtlich geschützt, ohne eine solche Freigabe.\nQ19652 – gemeinfrei.\n\nDazu gibt es keine eigene Wikitext-Entsprechung; das existiert nur als\nstrukturierte Daten. Aus dem Dropdown wählen oder eine andere Q-Nummer\neintragen.',
+        'es': 'P6216 «estado de los derechos de autor»: cómo está la obra en términos de\nderechos de autor.\n\nQ73566113: disponible bajo una licencia Creative Commons, lo correcto para\nfotos propias publicadas aquí (el valor por defecto).\nQ50423863: con derechos de autor, sin esa liberación.\nQ19652: dominio público.\n\nNo tiene contrapartida propia en wikitexto; existe solo como datos\nestructurados. Elige del desplegable o introduce otro número Q.',
+        'fr': "P6216 « statut du droit d'auteur » : la situation de l'œuvre au regard du\ndroit d'auteur.\n\nQ73566113 – disponible sous licence Creative Commons : ce qu'il faut pour\nvos propres photos publiées ici (valeur par défaut).\nQ50423863 – protégé, sans une telle libération.\nQ19652 – domaine public.\n\nIl n'y a pas d'équivalent wikitexte ; cela n'existe qu'en données\nstructurées. Choisissez dans le menu ou saisissez un autre numéro Q.",
+        'it': "P6216 «stato del diritto d'autore»: come si colloca l'opera dal punto di\nvista del diritto d'autore.\n\nQ73566113 – disponibile con licenza Creative Commons: quello giusto per\nfoto proprie pubblicate qui (il valore predefinito).\nQ50423863 – protetto da copyright, senza tale liberatoria.\nQ19652 – pubblico dominio.\n\nNon ha una controparte propria in wikitesto; esiste solo come dati\nstrutturati. Scegli dal menu o inserisci un altro numero Q.",
+    },
+    'work available with a Creative Commons license': {
+        'de': 'unter Creative-Commons-Lizenz verfügbar',
+        'es': 'disponible con licencia Creative Commons',
+        'fr': 'disponible sous licence Creative Commons',
+        'it': 'disponibile con licenza Creative Commons',
+    },
+    'public domain': {
+        'de': 'gemeinfrei',
+        'es': 'dominio público',
+        'fr': 'domaine public',
+        'it': 'pubblico dominio',
+    },
+    'P275 "copyright license": the SAME license as the template above, as a\nWikidata item - Q18199165 is CC BY-SA 4.0 and matches {{Cc-by-sa-4.0}}.\n\nAgain the same fact twice: the template is the wikitext half, P275 the\nstructured half. Picking a license in EITHER dropdown sets the other\none too, so the two cannot contradict each other.': {
+        'de': 'P275 „Lizenz": DIESELBE Lizenz wie die Vorlage oben, als Wikidata-Objekt –\nQ18199165 ist CC BY-SA 4.0 und passt zu {{Cc-by-sa-4.0}}.\n\nWieder derselbe Sachverhalt zweimal: die Vorlage ist die Wikitext-Hälfte,\nP275 die strukturierte. Eine Lizenz in EINEM der beiden Dropdowns zu wählen\nsetzt das andere gleich mit, damit sich beide nicht widersprechen können.',
+        'es': 'P275 «licencia»: la MISMA licencia que la plantilla de arriba, como elemento\nde Wikidata: Q18199165 es CC BY-SA 4.0 y corresponde a {{Cc-by-sa-4.0}}.\n\nDe nuevo el mismo hecho dos veces: la plantilla es la mitad wikitexto, P275\nla estructurada. Elegir una licencia en CUALQUIERA de los dos desplegables\nfija también el otro, para que no puedan contradecirse.',
+        'fr': "P275 « licence » : la MÊME licence que le modèle ci-dessus, comme élément\nWikidata – Q18199165 est CC BY-SA 4.0 et correspond à {{Cc-by-sa-4.0}}.\n\nÀ nouveau le même fait deux fois : le modèle est la moitié wikitexte, P275\nla moitié structurée. Choisir une licence dans L'UN des deux menus règle\naussi l'autre, afin qu'ils ne puissent pas se contredire.",
+        'it': "P275 «licenza»: la STESSA licenza del template qui sopra, come elemento\nWikidata: Q18199165 è CC BY-SA 4.0 e corrisponde a {{Cc-by-sa-4.0}}.\n\nDi nuovo lo stesso fatto due volte: il template è la metà wikitesto, P275\nquella strutturata. Scegliere una licenza in UNO dei due menu imposta anche\nl'altro, così non possono contraddirsi.",
+    },
+    'copyrighted': {
+        'de': 'urheberrechtlich geschützt',
+        'es': 'con derechos de autor',
+        'fr': "protégé par le droit d'auteur",
+        'it': 'protetto da copyright',
+    },
+    'What probably stays the same for a photographer forever.': {
+        'de': 'Das, was für einen Fotografen vermutlich immer gleich bleibt.',
+        'es': 'Lo que para un fotógrafo probablemente permanece siempre igual.',
+        'fr': 'Ce qui, pour un photographe, reste probablement toujours identique.',
+        'it': 'Ciò che per un fotografo probabilmente resta sempre uguale.',
+    },
+    'For one upload session, e.g. all pictures of one event.': {
+        'de': 'Für eine Upload-Sitzung, z. B. alle Bilder einer Veranstaltung.',
+        'es': 'Para una sesión de subida, p. ej. todas las imágenes de un evento.',
+        'fr': "Pour une session de téléversement, p. ex. toutes les images d'un événement.",
+        'it': 'Per una sessione di caricamento, ad es. tutte le immagini di un evento.',
+    },
+    'The subject of one picture, possibly of several.': {
+        'de': 'Das Motiv auf einem, evtl. mehreren Bildern.',
+        'es': 'El motivo de una imagen, posiblemente de varias.',
+        'fr': "Le sujet d'une image, éventuellement de plusieurs.",
+        'it': "Il soggetto di un'immagine, eventualmente di più.",
+    },
+    'Searches Wikidata for the event and sets it as the "created during" (P10408) statement.': {
+        'de': 'Sucht das Event in Wikidata und setzt es als „Entstanden während"-Aussage (P10408).',
+        'es': 'Busca el evento en Wikidata y lo establece como declaración «creado durante» (P10408).',
+        'fr': 'Recherche l’événement dans Wikidata et le définit comme déclaration « créé lors de » (P10408).',
+        'it': 'Cerca l’evento in Wikidata e lo imposta come dichiarazione "creato durante" (P10408).',
+    },
+    'Adds the event as a category (resolved via Wikidata to the Commons category P373, or the name).': {
+        'de': 'Fügt das Event als Kategorie hinzu (via Wikidata zur Commons-Kategorie P373 aufgelöst, sonst der Name).',
+        'es': 'Añade el evento como categoría (resuelto vía Wikidata a la categoría de Commons P373, o el nombre).',
+        'fr': 'Ajoute l’événement comme catégorie (résolu via Wikidata en catégorie Commons P373, sinon le nom).',
+        'it': 'Aggiunge l’evento come categoria (risolto tramite Wikidata alla categoria Commons P373, altrimenti il nome).',
+    },
+    'Adds each person shown as a category - directly by name, or resolved via Wikidata (name -> item -> Commons category P373).': {
+        'de': 'Fügt jede abgebildete Person als Kategorie hinzu – direkt über den Namen oder via Wikidata aufgelöst (Name -> Objekt -> Commons-Kategorie P373).',
+        'es': 'Añade cada persona mostrada como categoría, directamente por el nombre o resuelta vía Wikidata (nombre -> elemento -> categoría de Commons P373).',
+        'fr': 'Ajoute chaque personne représentée comme catégorie, directement par le nom ou via Wikidata (nom -> élément -> catégorie Commons P373).',
+        'it': 'Aggiunge ogni persona ritratta come categoria, direttamente dal nome o risolta tramite Wikidata (nome -> elemento -> categoria Commons P373).',
+    },
+    'Searches Wikidata for each person shown and lets you pick the item to add as a depicts (P180) statement.': {
+        'de': 'Sucht für jede abgebildete Person in Wikidata und lässt dich das Objekt für eine Depicts-Aussage (P180) auswählen.',
+        'es': 'Busca en Wikidata cada persona mostrada y te permite elegir el elemento para añadir como declaración depicts (P180).',
+        'fr': 'Recherche dans Wikidata chaque personne représentée et vous laisse choisir l’élément à ajouter comme déclaration depicts (P180).',
+        'it': 'Cerca in Wikidata ogni persona ritratta e ti fa scegliere l’elemento da aggiungere come dichiarazione depicts (P180).',
+    },
+    'BotPassword recommended (Special:BotPasswords). The password is stored in your system keyring - leave it empty to be asked at login instead.': {
+        'de': 'BotPasswort empfohlen (Special:BotPasswords). Das Passwort wird im System-Schlüsselbund gespeichert – leer lassen, um stattdessen beim Login gefragt zu werden.',
+        'es': 'Se recomienda BotPassword (Special:BotPasswords). La contraseña se guarda en el llavero del sistema; déjala vacía para que se pregunte al iniciar sesión.',
+        'fr': "BotPassword recommandé (Special:BotPasswords). Le mot de passe est stocké dans le trousseau du système ; laissez-le vide pour qu'il soit demandé à la connexion.",
+        'it': "BotPassword consigliata (Special:BotPasswords). La password è salvata nel portachiavi di sistema; lasciala vuota per essere richiesta all'accesso.",
+    },
+    'BotPassword recommended (Special:BotPasswords). No system keyring available, so the password is stored in plain text - leave it empty to be asked at login instead.': {
+        'de': 'BotPasswort empfohlen (Special:BotPasswords). Kein System-Schlüsselbund verfügbar, daher wird das Passwort im Klartext gespeichert – leer lassen, um stattdessen beim Login gefragt zu werden.',
+        'es': 'Se recomienda BotPassword (Special:BotPasswords). No hay llavero del sistema disponible, así que la contraseña se guarda en texto plano; déjala vacía para que se pregunte al iniciar sesión.',
+        'fr': "BotPassword recommandé (Special:BotPasswords). Aucun trousseau système disponible ; le mot de passe est donc stocké en clair. Laissez-le vide pour qu'il soit demandé à la connexion.",
+        'it': "BotPassword consigliata (Special:BotPasswords). Nessun portachiavi di sistema disponibile, quindi la password è salvata in chiaro; lasciala vuota per essere richiesta all'accesso.",
+    },
+    'Enter the confirmation code manually (use if the automatic confirmation does not work)': {
+        'de': 'Bestätigungscode manuell eingeben (falls die automatische Bestätigung nicht klappt)',
+        'es': 'Introducir el código de confirmación manualmente (si la confirmación automática no funciona)',
+        'fr': 'Saisir le code de confirmation manuellement (si la confirmation automatique ne fonctionne pas)',
+        'it': 'Inserisci manualmente il codice di conferma (se la conferma automatica non funziona)',
+    },
+    'Open the link, click "Allow", then paste the confirmation code here and press Finish.': {
+        'de': 'Öffne den Link, klicke auf „Zulassen", füge dann den Bestätigungscode hier ein und klicke auf Fertigstellen.',
+        'es': 'Abre el enlace, haz clic en «Permitir», luego pega aquí el código de confirmación y pulsa Finalizar.',
+        'fr': 'Ouvrez le lien, cliquez sur « Autoriser », puis collez ici le code de confirmation et cliquez sur Terminer.',
+        'it': 'Apri il link, fai clic su «Consenti», poi incolla qui il codice di conferma e premi Completa.',
+    },
+    'Files and IPTC data come from the IPTC tab. Write settings (export folder) are in the IPTC tab.': {
+        'de': 'Dateien und IPTC-Daten stammen aus dem IPTC-Tab. Die Schreib-Einstellungen (Exportordner) stehen ebenfalls dort.',
+        'es': 'Los archivos y los datos IPTC vienen de la pestaña IPTC. Los ajustes de escritura (carpeta de exportación) están allí.',
+        'fr': 'Les fichiers et les données IPTC proviennent de l’onglet IPTC. Les réglages d’écriture (dossier d’export) s’y trouvent aussi.',
+        'it': 'I file e i dati IPTC provengono dalla scheda IPTC. Le impostazioni di scrittura (cartella di esportazione) sono lì.',
+    },
+    'The IPTC tab is disabled, so the "Write IPTC + upload" workflow is unavailable. These server settings are used by the Culling tab ("-> FTP").': {
+        'de': 'Der IPTC-Tab ist abgeschaltet, daher steht der Ablauf „IPTC schreiben + hochladen“ nicht zur Verfügung. Diese Servereinstellungen nutzt der Sichtungs-Tab („-> FTP“).',
+        'es': 'La pestaña IPTC está desactivada, así que el flujo «Escribir IPTC + subir» no está disponible. La pestaña de selección usa estos ajustes del servidor («-> FTP»).',
+        'fr': 'L’onglet IPTC est désactivé : le flux « Écrire l’IPTC + envoyer » n’est pas disponible. Ces réglages de serveur sont utilisés par l’onglet de tri (« -> FTP »).',
+        'it': 'La scheda IPTC è disattivata, quindi il flusso "Scrivi IPTC + carica" non è disponibile. Queste impostazioni del server sono usate dalla scheda di selezione ("-> FTP").',
+    },
+    'Adds the selected images to the MediaWiki tab; with no selection, every image passing the filter. Images can also be dragged onto the MediaWiki tab directly.': {
+        'de': 'Fügt die ausgewählten Bilder dem MediaWiki-Tab hinzu; ohne Auswahl alle Bilder, die den Filter passieren. Bilder lassen sich auch direkt auf den MediaWiki-Tab ziehen.',
+        'es': 'Añade las imágenes seleccionadas a la pestaña MediaWiki; sin selección, todas las que pasen el filtro. También se pueden arrastrar directamente a la pestaña MediaWiki.',
+        'fr': 'Ajoute les images sélectionnées à l’onglet MediaWiki ; sans sélection, toutes celles qui passent le filtre. Les images peuvent aussi être glissées directement sur l’onglet MediaWiki.',
+        'it': 'Aggiunge le immagini selezionate alla scheda MediaWiki; senza selezione, tutte quelle che passano il filtro. Le immagini si possono anche trascinare direttamente sulla scheda MediaWiki.',
+    },
+    'Uploads the selected images (as they are, no IPTC writing) to the server configured in the FTP tab / Settings.': {
+        'de': 'Lädt die ausgewählten Bilder unverändert (ohne IPTC-Schreiben) auf den im FTP-Tab bzw. in den Einstellungen konfigurierten Server.',
+        'es': 'Sube las imágenes seleccionadas tal cual (sin escribir IPTC) al servidor configurado en la pestaña FTP / Ajustes.',
+        'fr': 'Envoie les images sélectionnées telles quelles (sans écriture IPTC) vers le serveur configuré dans l’onglet FTP / Réglages.',
+        'it': 'Carica le immagini selezionate così come sono (senza scrittura IPTC) sul server configurato nella scheda FTP / Impostazioni.',
+    },
+    'Uploads the selected images (as they are) to the Flickr account authorized in the Flickr tab.': {
+        'de': 'Lädt die ausgewählten Bilder unverändert auf das im Flickr-Tab autorisierte Konto hoch.',
+        'es': 'Sube las imágenes seleccionadas tal cual a la cuenta de Flickr autorizada en la pestaña Flickr.',
+        'fr': 'Envoie les images sélectionnées telles quelles vers le compte Flickr autorisé dans l’onglet Flickr.',
+        'it': 'Carica le immagini selezionate così come sono sull’account Flickr autorizzato nella scheda Flickr.',
+    },
+    'Suggests categories from the depicts entries and the "created during" event (Commons category P373, or the label; a missing year is taken from the Date column).': {
+        'de': 'Schlägt Kategorien aus den Depicts-Einträgen und dem „Entstanden während“-Ereignis vor (Commons-Kategorie P373, sonst das Label; ein fehlendes Jahr kommt aus der Datumsspalte).',
+        'es': 'Sugiere categorías a partir de las entradas de depicts y del evento «creado durante» (categoría de Commons P373, o la etiqueta; un año que falte se toma de la columna Fecha).',
+        'fr': 'Suggère des catégories à partir des entrées depicts et de l’événement « créé lors de » (catégorie Commons P373, sinon le libellé ; une année manquante est reprise de la colonne Date).',
+        'it': 'Suggerisce categorie dalle voci depicts e dall’evento "creato durante" (categoria Commons P373, altrimenti l’etichetta; un anno mancante viene preso dalla colonna Data).',
+    },
+    'BotPassword recommended (Special:BotPasswords). The password is stored in PLAIN TEXT - leave it empty to be asked at login instead.': {
+        'de': 'BotPassword empfohlen (Special:BotPasswords). Das Passwort wird im KLARTEXT gespeichert – leer lassen, um stattdessen beim Anmelden gefragt zu werden.',
+        'es': 'Se recomienda una BotPassword (Special:BotPasswords). La contraseña se guarda en TEXTO PLANO: déjela vacía para que se pida al iniciar sesión.',
+        'fr': 'BotPassword recommandé (Special:BotPasswords). Le mot de passe est enregistré en TEXTE CLAIR – laissez-le vide pour qu’il soit demandé à la connexion.',
+        'it': 'BotPassword consigliata (Special:BotPasswords). La password è salvata in TESTO IN CHIARO: lasciala vuota per farla chiedere all’accesso.',
+    },
+    'The short caption of the file, in the language on the left - ONE sentence,\nno wiki markup: "Harald Krichel at the Berlinale 2026".\n\nThis is the STRUCTURED caption (Wikibase label). Commons stores every\nfile TWICE: as wikitext (the Information template - the field below)\nand as structured data (machine-readable statements - this field).\nThey say the same thing in two forms; that is why Cammello asks for\nboth. "Information from caption" copies this text down.': {
+        'de': 'Die kurze Bildunterschrift in der links gewählten Sprache – EIN Satz,\nkein Wiki-Markup: „Harald Krichel bei der Berlinale 2026".\n\nDies ist die STRUKTURIERTE Bildunterschrift (Wikibase-Label). Commons\nspeichert jede Datei ZWEIMAL: als Wikitext (die Information-Vorlage –\ndas Feld darunter) und als strukturierte Daten (maschinenlesbare\nAussagen – dieses Feld). Beide sagen dasselbe in zwei Formen; deshalb\nfragt Cammello nach beidem. „Information aus Bildunterschrift"\nübernimmt diesen Text nach unten.',
+        'es': 'El pie de foto breve en el idioma elegido a la izquierda: UNA frase, sin\nmarcado wiki: «Harald Krichel en la Berlinale 2026».\n\nEste es el pie ESTRUCTURADO (etiqueta de Wikibase). Commons guarda cada\narchivo DOS VECES: como wikitexto (la plantilla Information, el campo de\nabajo) y como datos estructurados (declaraciones legibles por máquina,\neste campo). Ambos dicen lo mismo en dos formas; por eso Cammello pide\nlos dos. «Information desde el pie» copia este texto abajo.',
+        'fr': "La légende courte dans la langue choisie à gauche – UNE phrase, sans\nbalisage wiki : « Harald Krichel à la Berlinale 2026 ».\n\nC'est la légende STRUCTURÉE (libellé Wikibase). Commons enregistre chaque\nfichier DEUX FOIS : en wikitexte (le modèle Information – le champ\nci-dessous) et en données structurées (déclarations lisibles par machine –\nce champ). Les deux disent la même chose sous deux formes ; c'est\npourquoi Cammello demande les deux. « Information depuis la légende »\nrecopie ce texte en dessous.",
+        'it': 'La didascalia breve nella lingua scelta a sinistra: UNA frase, senza\nmarcatura wiki: «Harald Krichel alla Berlinale 2026».\n\nQuesta è la didascalia STRUTTURATA (etichetta Wikibase). Commons salva\nogni file DUE VOLTE: come wikitesto (il template Information, il campo\nqui sotto) e come dati strutturati (dichiarazioni leggibili dalle\nmacchine, questo campo). Dicono la stessa cosa in due forme; perciò\nCammello chiede entrambi. «Information dalla didascalia» copia questo\ntesto in basso.',
+    },
+    'The description in the Information template - the WIKITEXT half of the\npair (the caption above is the structured half). May be longer than the\ncaption and may contain links and templates.\n\nUploaded as {{<language>|1=your text}}. Empty is allowed: then the file\npage shows no description text in this language.': {
+        'de': 'Die Beschreibung in der Information-Vorlage – die WIKITEXT-Hälfte des\nPaares (die Bildunterschrift darüber ist die strukturierte Hälfte). Darf\nlänger sein als die Unterschrift und Links sowie Vorlagen enthalten.\n\nWird als {{<Sprache>|1=dein Text}} hochgeladen. Leer ist erlaubt: dann\nzeigt die Dateiseite in dieser Sprache keinen Beschreibungstext.',
+        'es': 'La descripción en la plantilla Information: la mitad WIKITEXTO del par (el\npie de foto de arriba es la mitad estructurada). Puede ser más larga que\nel pie y contener enlaces y plantillas.\n\nSe sube como {{<idioma>|1=tu texto}}. Se permite vacío: entonces la página\ndel archivo no muestra texto de descripción en ese idioma.',
+        'fr': "La description dans le modèle Information – la moitié WIKITEXTE de la paire\n(la légende ci-dessus est la moitié structurée). Elle peut être plus longue\nque la légende et contenir des liens et des modèles.\n\nTéléversée sous la forme {{<langue>|1=votre texte}}. Vide est permis : la\npage du fichier n'affiche alors aucune description dans cette langue.",
+        'it': 'La descrizione nel template Information: la metà WIKITESTO della coppia (la\ndidascalia qui sopra è la metà strutturata). Può essere più lunga della\ndidascalia e contenere link e template.\n\nCaricata come {{<lingua>|1=il tuo testo}}. Vuoto è ammesso: in tal caso la\npagina del file non mostra testo descrittivo in quella lingua.',
+    },
+    'P180 "depicts": what the picture SHOWS, as Wikidata items - for\nportraits the person in the picture, e.g. Q42 for Douglas Adams.\nSeveral items separated by ;\n\nEnter Q-numbers directly, or type a name and pick from the live\nsuggestions - the field then inserts the Q-number for you.\n\nBecomes the structured "depicts" statement (P180) of the file on Commons.\nRequired for the upload; if the picture has no suitable item, choose a\nreason in the field below instead.': {
+        'de': 'P180 „zeigt": Was das Bild ZEIGT, als Wikidata-Objekte – bei Porträts die\nabgebildete Person, z. B. Q42 für Douglas Adams. Mehrere Objekte mit ;\ngetrennt\n\nQ-Nummern direkt eintragen, oder einen Namen tippen und aus den\nLive-Vorschlägen wählen – das Feld setzt dann die Q-Nummer ein.\n\nWird zur strukturierten „zeigt"-Aussage (P180) der Datei auf Commons.\nFür den Upload erforderlich; hat das Bild kein passendes Objekt,\nstattdessen im Feld darunter einen Grund wählen.',
+        'es': 'P180 «representa»: lo que MUESTRA la imagen, como elementos de Wikidata: en\nretratos, la persona retratada, p. ej. Q42 para Douglas Adams. Varios\nelementos separados por ;\n\nIntroduce números Q directamente, o escribe un nombre y elige entre las\nsugerencias en vivo: el campo insertará el número Q por ti.\n\nSe convierte en la declaración estructurada «representa» (P180) del archivo\nen Commons. Obligatorio para la subida; si la imagen no tiene un elemento\nadecuado, elige un motivo en el campo de abajo.',
+        'fr': "P180 « représente » : ce que MONTRE l'image, comme éléments Wikidata – pour\nles portraits, la personne représentée, p. ex. Q42 pour Douglas Adams.\nPlusieurs éléments séparés par ;\n\nSaisissez des numéros Q directement, ou tapez un nom et choisissez parmi\nles suggestions en direct – le champ insère alors le numéro Q pour vous.\n\nDevient la déclaration structurée « représente » (P180) du fichier sur\nCommons. Requis pour le téléversement ; si l'image n'a pas d'élément\nadapté, choisissez plutôt une raison dans le champ ci-dessous.",
+        'it': "P180 «raffigura»: ciò che l'immagine MOSTRA, come elementi Wikidata: nei\nritratti la persona raffigurata, ad es. Q42 per Douglas Adams. Più elementi\nseparati da ;\n\nInserisci direttamente i numeri Q, oppure digita un nome e scegli tra i\nsuggerimenti in tempo reale: il campo inserirà il numero Q per te.\n\nDiventa la dichiarazione strutturata «raffigura» (P180) del file su\nCommons. Obbligatorio per il caricamento; se l'immagine non ha un elemento\nadatto, scegli invece un motivo nel campo sottostante.",
+    },
+    'P10408 "created during": the event ALL these pictures were taken at,\nas ONE Wikidata item.\n\nIf the edition has its own item, take that one: "Berlinale 2026",\nnot "Berlinale". Smaller festivals often have only one item for the\nwhole series - then that one is right. Type the name and pick from\nthe suggestions, or enter the Q-number directly.\n\nBecomes the "created during" statement (P10408) of every file, and\n"Suggest" derives the base category from it.': {
+        'de': 'P10408 „entstanden während": Die Veranstaltung, bei der ALLE diese Bilder\nentstanden sind, als EIN Wikidata-Objekt.\n\nHat die Ausgabe ein eigenes Objekt, nimm dieses: „Berlinale 2026",\nnicht „Berlinale". Kleinere Festivals wie das Rudolstadt-Festival haben\noft nur ein Objekt für die ganze Reihe – dann ist dieses das richtige.\nNamen tippen und aus den Vorschlägen wählen, oder die Q-Nummer direkt\neintragen.\n\nWird zur „entstanden während"-Aussage (P10408) jeder Datei, und\n„Vorschlagen" leitet daraus die Basiskategorie ab.',
+        'es': 'P10408 «creado durante»: el evento en el que se tomaron TODAS estas\nimágenes, como UN elemento de Wikidata.\n\nSi la edición tiene su propio elemento, toma ese: «Berlinale 2026», no\n«Berlinale». Los festivales pequeños a menudo solo tienen un elemento para\ntoda la serie: entonces ese es el correcto. Escribe el nombre y elige entre\nlas sugerencias, o introduce el número Q directamente.\n\nSe convierte en la declaración «creado durante» (P10408) de cada archivo,\ny «Sugerir» deriva de ella la categoría base.',
+        'fr': "P10408 « créé pendant » : l'événement où TOUTES ces images ont été prises,\ncomme UN SEUL élément Wikidata.\n\nSi l'édition a son propre élément, prenez celui-là : « Berlinale 2026 »,\npas « Berlinale ». Les petits festivals n'ont souvent qu'un seul élément\npour toute la série – c'est alors le bon. Tapez le nom et choisissez parmi\nles suggestions, ou saisissez directement le numéro Q.\n\nDevient la déclaration « créé pendant » (P10408) de chaque fichier, et\n« Suggérer » en déduit la catégorie de base.",
+        'it': "P10408 «creato durante»: l'evento in cui sono state scattate TUTTE queste\nimmagini, come UN SOLO elemento Wikidata.\n\nSe l'edizione ha un proprio elemento, prendi quello: «Berlinale 2026»,\nnon «Berlinale». I festival più piccoli spesso hanno un solo elemento per\ntutta la serie: allora è quello giusto. Digita il nome e scegli tra i\nsuggerimenti, oppure inserisci direttamente il numero Q.\n\nDiventa la dichiarazione «creato durante» (P10408) di ogni file, e\n«Suggerisci» ne ricava la categoria di base.",
+    },
+    'P170 "creator": the photographer as a Wikidata item, IF there is one\nabout you - e.g. Q1583452 (Harald Krichel). Type your name and pick\nfrom the suggestions, or enter the Q-number.\n\nSAME FACT AS "Author" ABOVE, in the second form: the author line is\nthe wikitext half, P170 the structured half. Commons stores both.\nWithout an own item leave this empty - the author line alone is fine.': {
+        'de': 'P170 „Urheber": Der Fotograf als Wikidata-Objekt, FALLS es eines über dich\ngibt – z. B. Q1583452 (Harald Krichel). Namen tippen und aus den\nVorschlägen wählen, oder die Q-Nummer eintragen.\n\nDERSELBE SACHVERHALT WIE „Autor" OBEN, nur in der zweiten Form: die\nAutor-Zeile ist die Wikitext-Hälfte, P170 die strukturierte Hälfte.\nCommons speichert beides. Ohne eigenes Objekt leer lassen – die\nAutor-Zeile allein genügt.',
+        'es': 'P170 «creador»: el fotógrafo como elemento de Wikidata, SI existe uno sobre\nti, p. ej. Q1583452 (Harald Krichel). Escribe tu nombre y elige entre las\nsugerencias, o introduce el número Q.\n\nEL MISMO HECHO QUE «Autor» ARRIBA, en la segunda forma: la línea de autor\nes la mitad wikitexto, P170 la mitad estructurada. Commons guarda ambas.\nSin elemento propio déjalo vacío: la línea de autor basta.',
+        'fr': "P170 « créateur » : le photographe comme élément Wikidata, S'IL en existe un\nsur vous – p. ex. Q1583452 (Harald Krichel). Tapez votre nom et choisissez\nparmi les suggestions, ou saisissez le numéro Q.\n\nLE MÊME FAIT QUE « Auteur » CI-DESSUS, sous la seconde forme : la ligne\nauteur est la moitié wikitexte, P170 la moitié structurée. Commons conserve\nles deux. Sans élément propre, laissez vide – la ligne auteur suffit.",
+        'it': 'P170 «creatore»: il fotografo come elemento Wikidata, SE ne esiste uno su di\nte, ad es. Q1583452 (Harald Krichel). Digita il tuo nome e scegli tra i\nsuggerimenti, oppure inserisci il numero Q.\n\nLO STESSO FATTO DI «Autore» QUI SOPRA, nella seconda forma: la riga autore\nè la metà wikitesto, P170 la metà strutturata. Commons conserva entrambe.\nSenza un proprio elemento lascialo vuoto: la riga autore basta.',
+    },
+    'Who took the pictures, as wikitext - typically a link to your Commons\nuser page with your real name as the visible text:\n\n  [[User:Seewolf|Harald Krichel]]\n\nGoes word for word into the author= field of every upload. This is the\nWIKITEXT half; "Creator (P170)" below is the same fact as structured\ndata. Commons keeps both, so both fields exist here.': {
+        'de': 'Wer die Bilder gemacht hat, als Wikitext – üblicherweise ein Link auf\ndeine Commons-Benutzerseite mit deinem Klarnamen als sichtbarem Text:\n\n  [[User:Seewolf|Harald Krichel]]\n\nLandet wortgleich im author=-Feld jedes Uploads. Das ist die\nWIKITEXT-Hälfte; „Urheber (P170)" darunter ist derselbe Sachverhalt als\nstrukturierte Daten. Commons führt beides, deshalb gibt es hier beide\nFelder.',
+        'es': 'Quién tomó las imágenes, como wikitexto: normalmente un enlace a tu página\nde usuario de Commons con tu nombre real como texto visible:\n\n  [[User:Seewolf|Harald Krichel]]\n\nVa literalmente al campo author= de cada subida. Esta es la mitad\nWIKITEXTO; «Creador (P170)» más abajo es el mismo hecho como datos\nestructurados. Commons mantiene ambos, por eso existen los dos campos.',
+        'fr': "Qui a pris les photos, en wikitexte – généralement un lien vers votre page\nutilisateur Commons avec votre vrai nom comme texte visible :\n\n  [[User:Seewolf|Harald Krichel]]\n\nVa mot pour mot dans le champ author= de chaque téléversement. C'est la\nmoitié WIKITEXTE ; « Créateur (P170) » ci-dessous est le même fait en\ndonnées structurées. Commons conserve les deux, d'où les deux champs.",
+        'it': 'Chi ha scattato le foto, come wikitesto: di solito un link alla tua pagina\nutente di Commons con il tuo vero nome come testo visibile:\n\n  [[User:Seewolf|Harald Krichel]]\n\nFinisce parola per parola nel campo author= di ogni caricamento. Questa è\nla metà WIKITESTO; «Creatore (P170)» qui sotto è lo stesso fatto come dati\nstrutturati. Commons conserva entrambi, perciò esistono entrambi i campi.',
+    },
+    'The license template under which every file in this batch is published,\ne.g. {{Cc-by-sa-4.0}} for Creative Commons Attribution-ShareAlike 4.0.\n\nMust be one of the free licenses Commons accepts. The WIKITEXT half -\n"License (P275)" below says the same as structured data, and the two\nmust not disagree.': {
+        'de': 'Die Lizenzvorlage, unter der jede Datei dieser Serie veröffentlicht wird,\nz. B. {{Cc-by-sa-4.0}} für Creative Commons Attribution-ShareAlike 4.0.\n\nMuss eine der auf Commons zulässigen freien Lizenzen sein. Die\nWIKITEXT-Hälfte – „Lizenz (P275)" darunter sagt dasselbe als\nstrukturierte Daten, und beide dürfen sich nicht widersprechen.',
+        'es': 'La plantilla de licencia bajo la que se publica cada archivo de esta serie,\np. ej. {{Cc-by-sa-4.0}} para Creative Commons Attribution-ShareAlike 4.0.\n\nDebe ser una de las licencias libres que acepta Commons. La mitad\nWIKITEXTO: «Licencia (P275)» más abajo dice lo mismo como datos\nestructurados, y ambas no deben contradecirse.',
+        'fr': 'Le modèle de licence sous lequel chaque fichier de cette série est publié,\np. ex. {{Cc-by-sa-4.0}} pour Creative Commons Attribution-ShareAlike 4.0.\n\nDoit être une des licences libres acceptées par Commons. La moitié\nWIKITEXTE – « Licence (P275) » ci-dessous dit la même chose en données\nstructurées, et les deux ne doivent pas se contredire.',
+        'it': 'Il template di licenza sotto cui viene pubblicato ogni file di questa serie,\nad es. {{Cc-by-sa-4.0}} per Creative Commons Attribution-ShareAlike 4.0.\n\nDeve essere una delle licenze libere accettate da Commons. La metà\nWIKITESTO: «Licenza (P275)» qui sotto dice lo stesso come dati strutturati,\ne le due non devono contraddirsi.',
+    },
+    'The Commons categories this file belongs in - category NAMES only,\nwithout "Category:" and without brackets, several separated by ;\n\ne.g.:  Berlinale 2026; Harald Krichel\n\nEach name becomes a [[Category:...]] line in the wikitext. The category\nshould already exist on Commons - a red category leaves the file\npoorly findable. "Suggest" fills this from the depicts entries.': {
+        'de': 'Die Commons-Kategorien, in die diese Datei gehört – nur die NAMEN,\nohne „Category:" und ohne Klammern, mehrere mit ; getrennt\n\nz. B.:  Berlinale 2026; Harald Krichel\n\nJeder Name wird im Wikitext zu einer [[Category:…]]-Zeile. Die Kategorie\nsollte auf Commons schon existieren – eine rote Kategorie macht die\nDatei schlecht auffindbar. „Vorschlagen" füllt das Feld aus den\ndepicts-Einträgen.',
+        'es': 'Las categorías de Commons a las que pertenece este archivo: solo los NOMBRES,\nsin «Category:» y sin corchetes, varias separadas por ;\n\np. ej.:  Berlinale 2026; Harald Krichel\n\nCada nombre se convierte en una línea [[Category:…]] en el wikitexto. La\ncategoría debería existir ya en Commons: una categoría roja deja el archivo\nmal localizable. «Sugerir» rellena el campo desde las entradas de depicts.',
+        'fr': 'Les catégories Commons auxquelles ce fichier appartient – uniquement les NOMS,\nsans « Category: » et sans crochets, plusieurs séparées par ;\n\np. ex. :  Berlinale 2026; Harald Krichel\n\nChaque nom devient une ligne [[Category:…]] dans le wikitexte. La catégorie\ndevrait déjà exister sur Commons – une catégorie rouge rend le fichier\ndifficile à trouver. « Suggérer » remplit le champ depuis les entrées depicts.',
+        'it': 'Le categorie di Commons a cui appartiene questo file: solo i NOMI,\nsenza «Category:» e senza parentesi, più voci separate da ;\n\nad es.:  Berlinale 2026; Harald Krichel\n\nOgni nome diventa una riga [[Category:…]] nel wikitesto. La categoria\ndovrebbe già esistere su Commons: una categoria rossa rende il file\ndifficile da trovare. «Suggerisci» riempie il campo dalle voci depicts.',
+    },
+    'Only used when the depicts field above stays empty - pick WHY:\n\n"No Wikidata item": the person or subject shown has no item (yet).\n"Not applicable": the picture shows no identifiable subject.\n"Unidentified": there is a subject, but you do not know who or what it is.\n\nStored as depicts_override= in the description; the upload then\nproceeds without a depicts statement.': {
+        'de': 'Nur relevant, wenn das depicts-Feld darüber leer bleibt – wähle, WARUM:\n\n„Kein Wikidata-Objekt": die gezeigte Person oder das Motiv hat (noch)\nkein Objekt.\n„Nicht anwendbar": das Bild zeigt kein identifizierbares Motiv.\n„Unidentifiziert": es gibt ein Motiv, aber du weißt nicht, wer oder was\nes ist.\n\nWird als depicts_override= in der Beschreibung gespeichert; der Upload\nläuft dann ohne depicts-Aussage.',
+        'es': 'Solo relevante cuando el campo depicts de arriba queda vacío: elige POR QUÉ:\n\n«Sin elemento de Wikidata»: la persona o el motivo mostrado no tiene\nelemento (todavía).\n«No aplicable»: la imagen no muestra ningún motivo identificable.\n«Sin identificar»: hay un motivo, pero no sabes quién o qué es.\n\nSe guarda como depicts_override= en la descripción; la subida procede\nentonces sin declaración de depicts.',
+        'fr': "Uniquement pertinent quand le champ depicts ci-dessus reste vide – choisissez\nPOURQUOI :\n\n« Pas d'élément Wikidata » : la personne ou le sujet montré n'a pas (encore)\nd'élément.\n« Non applicable » : l'image ne montre aucun sujet identifiable.\n« Non identifié » : il y a un sujet, mais vous ne savez pas qui ou quoi.\n\nEnregistré comme depicts_override= dans la description ; le téléversement\nse fait alors sans déclaration depicts.",
+        'it': "Rilevante solo quando il campo depicts qui sopra resta vuoto: scegli PERCHÉ:\n\n«Nessun elemento Wikidata»: la persona o il soggetto mostrato non ha\n(ancora) un elemento.\n«Non applicabile»: l'immagine non mostra alcun soggetto identificabile.\n«Non identificato»: c'è un soggetto, ma non sai chi o cosa sia.\n\nSalvato come depicts_override= nella descrizione; il caricamento procede\nquindi senza dichiarazione depicts.",
+    },
+    'The part of the gallery page name that is specific to this batch,\ne.g. the event name: with suffix "Berlinale 2026" the uploads are\nlisted on <gallery prefix>/Berlinale 2026. Plain text, no brackets.': {
+        'de': 'Der Teil des Galerieseiten-Namens, der zu dieser Serie gehört – z. B. der\nVeranstaltungsname: mit Suffix „Berlinale 2026" werden die Uploads auf\n<Galerie-Präfix>/Berlinale 2026 gelistet. Reiner Text, keine Klammern.',
+        'es': 'La parte del nombre de la página de galería propia de esta serie, p. ej. el\nnombre del evento: con el sufijo «Berlinale 2026» las subidas se listan en\n<prefijo de galería>/Berlinale 2026. Texto simple, sin corchetes.',
+        'fr': "La partie du nom de la page de galerie propre à cette série – p. ex. le nom\nde l'événement : avec le suffixe « Berlinale 2026 », les téléversements sont\nlistés sur <préfixe de galerie>/Berlinale 2026. Texte brut, sans crochets.",
+        'it': "La parte del nome della pagina di galleria propria di questa serie, ad es.\nil nome dell'evento: con il suffisso «Berlinale 2026» i caricamenti sono\nelencati su <prefisso galleria>/Berlinale 2026. Testo semplice, senza\nparentesi.",
+    },
+    'Where the file comes from. For your own photographs enter {{own}} -\nthe template that renders as "Own work".\n\nOnly for third-party material would a description or web address of the\norigin go here instead.': {
+        'de': 'Woher die Datei stammt. Für eigene Fotografien {{own}} eintragen – die\nVorlage, die als „Eigenes Werk" angezeigt wird.\n\nNur bei fremdem Material stünde hier stattdessen eine Beschreibung oder\nWebadresse der Herkunft.',
+        'es': 'De dónde procede el archivo. Para fotografías propias introduce {{own}}:\nla plantilla que se muestra como «Trabajo propio».\n\nSolo con material ajeno iría aquí en su lugar una descripción o dirección\nweb del origen.',
+        'fr': "D'où vient le fichier. Pour vos propres photographies, saisissez {{own}} –\nle modèle affiché comme « Travail personnel ».\n\nSeul du matériel tiers appellerait ici une description ou une adresse web\nde l'origine.",
+        'it': "Da dove proviene il file. Per fotografie proprie inserisci {{own}}: il\ntemplate mostrato come «Opera propria».\n\nSolo per materiale altrui andrebbe qui invece una descrizione o un\nindirizzo web dell'origine.",
+    },
+    'Evidence of permission, ONLY for the special case that a rights holder\nhas filed a release with the volunteer team - then the VRT ticket\ntemplate goes here.\n\nFor your own pictures under a free license this stays EMPTY; the\nlicense below is the permission.': {
+        'de': 'Nachweis der Erlaubnis, NUR für den Sonderfall, dass ein Rechteinhaber\neine Freigabe beim Support-Team hinterlegt hat – dann gehört die\nVRT-Ticket-Vorlage hierher.\n\nFür eigene Bilder unter freier Lizenz bleibt das Feld LEER; die Lizenz\ndarunter ist die Erlaubnis.',
+        'es': 'Prueba del permiso, SOLO para el caso especial de que un titular de derechos\nhaya presentado una autorización al equipo de voluntarios: entonces va aquí\nla plantilla del tique VRT.\n\nPara imágenes propias bajo licencia libre este campo queda VACÍO; la\nlicencia de abajo es el permiso.',
+        'fr': "Preuve d'autorisation, UNIQUEMENT pour le cas particulier où un ayant droit\na déposé une autorisation auprès de l'équipe bénévole – le modèle du ticket\nVRT va alors ici.\n\nPour vos propres images sous licence libre, ce champ reste VIDE ; la licence\nci-dessous est l'autorisation.",
+        'it': "Prova dell'autorizzazione, SOLO per il caso particolare in cui un titolare\ndei diritti abbia depositato una liberatoria presso il team di volontari:\nallora qui va il template del ticket VRT.\n\nPer immagini proprie sotto licenza libera questo campo resta VUOTO; la\nlicenza qui sotto è l'autorizzazione.",
+    },
     'Colours:': {
         'de': 'Farben:', 'es': 'Colores:', 'fr': 'Couleurs :', 'it': 'Colori:',
     },
@@ -310,18 +520,6 @@ TRANSLATIONS = {
         'de': 'Event -> Kategorie', 'es': 'Evento -> categoría',
         'fr': 'Événement -> catégorie', 'it': 'Evento -> categoria',
     },
-    'Searches Wikidata for the event and sets it as the "created during" (P10408) statement.': {
-        'de': 'Sucht das Event in Wikidata und setzt es als „Entstanden während"-Aussage (P10408).',
-        'es': 'Busca el evento en Wikidata y lo establece como declaración «creado durante» (P10408).',
-        'fr': 'Recherche l’événement dans Wikidata et le définit comme déclaration « créé lors de » (P10408).',
-        'it': 'Cerca l’evento in Wikidata e lo imposta come dichiarazione "creato durante" (P10408).',
-    },
-    'Adds the event as a category (resolved via Wikidata to the Commons category P373, or the name).': {
-        'de': 'Fügt das Event als Kategorie hinzu (via Wikidata zur Commons-Kategorie P373 aufgelöst, sonst der Name).',
-        'es': 'Añade el evento como categoría (resuelto vía Wikidata a la categoría de Commons P373, o el nombre).',
-        'fr': 'Ajoute l’événement comme catégorie (résolu via Wikidata en catégorie Commons P373, sinon le nom).',
-        'it': 'Aggiunge l’evento come categoria (risolto tramite Wikidata alla categoria Commons P373, altrimenti il nome).',
-    },
     'No event in this file.': {
         'de': 'Kein Event in dieser Datei.',
         'es': 'No hay ningún evento en este archivo.',
@@ -378,18 +576,6 @@ TRANSLATIONS = {
         'fr': 'Personne représentée -> depicts',
         'it': 'Persona ritratta -> depicts',
     },
-    'Adds each person shown as a category - directly by name, or resolved via Wikidata (name -> item -> Commons category P373).': {
-        'de': 'Fügt jede abgebildete Person als Kategorie hinzu – direkt über den Namen oder via Wikidata aufgelöst (Name -> Objekt -> Commons-Kategorie P373).',
-        'es': 'Añade cada persona mostrada como categoría, directamente por el nombre o resuelta vía Wikidata (nombre -> elemento -> categoría de Commons P373).',
-        'fr': 'Ajoute chaque personne représentée comme catégorie, directement par le nom ou via Wikidata (nom -> élément -> catégorie Commons P373).',
-        'it': 'Aggiunge ogni persona ritratta come categoria, direttamente dal nome o risolta tramite Wikidata (nome -> elemento -> categoria Commons P373).',
-    },
-    'Searches Wikidata for each person shown and lets you pick the item to add as a depicts (P180) statement.': {
-        'de': 'Sucht für jede abgebildete Person in Wikidata und lässt dich das Objekt für eine Depicts-Aussage (P180) auswählen.',
-        'es': 'Busca en Wikidata cada persona mostrada y te permite elegir el elemento para añadir como declaración depicts (P180).',
-        'fr': 'Recherche dans Wikidata chaque personne représentée et vous laisse choisir l’élément à ajouter comme déclaration depicts (P180).',
-        'it': 'Cerca in Wikidata ogni persona ritratta e ti fa scegliere l’elemento da aggiungere come dichiarazione depicts (P180).',
-    },
     'No person shown in this file.': {
         'de': 'Keine abgebildete Person in dieser Datei.',
         'es': 'No hay ninguna persona mostrada en este archivo.',
@@ -441,18 +627,6 @@ TRANSLATIONS = {
     '(skip)': {
         'de': '(überspringen)', 'es': '(omitir)', 'fr': '(ignorer)',
         'it': '(salta)',
-    },
-    'BotPassword recommended (Special:BotPasswords). The password is stored in your system keyring - leave it empty to be asked at login instead.': {
-        'de': 'BotPasswort empfohlen (Special:BotPasswords). Das Passwort wird im System-Schlüsselbund gespeichert – leer lassen, um stattdessen beim Login gefragt zu werden.',
-        'es': 'Se recomienda BotPassword (Special:BotPasswords). La contraseña se guarda en el llavero del sistema; déjala vacía para que se pregunte al iniciar sesión.',
-        'fr': 'BotPassword recommandé (Special:BotPasswords). Le mot de passe est stocké dans le trousseau du système ; laissez-le vide pour qu\'il soit demandé à la connexion.',
-        'it': 'BotPassword consigliata (Special:BotPasswords). La password è salvata nel portachiavi di sistema; lasciala vuota per essere richiesta all\'accesso.',
-    },
-    'BotPassword recommended (Special:BotPasswords). No system keyring available, so the password is stored in plain text - leave it empty to be asked at login instead.': {
-        'de': 'BotPasswort empfohlen (Special:BotPasswords). Kein System-Schlüsselbund verfügbar, daher wird das Passwort im Klartext gespeichert – leer lassen, um stattdessen beim Login gefragt zu werden.',
-        'es': 'Se recomienda BotPassword (Special:BotPasswords). No hay llavero del sistema disponible, así que la contraseña se guarda en texto plano; déjala vacía para que se pregunte al iniciar sesión.',
-        'fr': 'BotPassword recommandé (Special:BotPasswords). Aucun trousseau système disponible ; le mot de passe est donc stocké en clair. Laissez-le vide pour qu\'il soit demandé à la connexion.',
-        'it': 'BotPassword consigliata (Special:BotPasswords). Nessun portachiavi di sistema disponibile, quindi la password è salvata in chiaro; lasciala vuota per essere richiesta all\'accesso.',
     },
     'Wikimedia sign-in (OAuth)': {
         'de': 'Wikimedia-Anmeldung (OAuth)',
@@ -775,16 +949,6 @@ TRANSLATIONS = {
         'fr': 'Renommer les fichiers sélectionnés pour Commons.',
         'it': 'Rinomina i file selezionati per Commons.',
     },
-    'Enter the confirmation code manually (use if the automatic confirmation does not work)': {
-        'de': 'Bestätigungscode manuell eingeben (falls die automatische '
-              'Bestätigung nicht klappt)',
-        'es': 'Introducir el código de confirmación manualmente (si la '
-              'confirmación automática no funciona)',
-        'fr': 'Saisir le code de confirmation manuellement (si la '
-              'confirmation automatique ne fonctionne pas)',
-        'it': 'Inserisci manualmente il codice di conferma (se la conferma '
-              'automatica non funziona)',
-    },
     'The local port {port} needed for sign-in is already in use. Close the program using it, or tick "Enter the confirmation code manually" to sign in without it.': {
         'de': 'Der lokale Port {port} für die Anmeldung ist bereits belegt. '
               'Beende das Programm, das ihn nutzt, oder hake „Bestätigungscode '
@@ -823,16 +987,6 @@ TRANSLATIONS = {
         'es': 'Solicitando un enlace de autorización…',
         'fr': 'Demande d’un lien d’autorisation…',
         'it': 'Richiesta di un link di autorizzazione…',
-    },
-    'Open the link, click "Allow", then paste the confirmation code here and press Finish.': {
-        'de': 'Öffne den Link, klicke auf „Zulassen", füge dann den '
-              'Bestätigungscode hier ein und klicke auf Fertigstellen.',
-        'es': 'Abre el enlace, haz clic en «Permitir», luego pega aquí el '
-              'código de confirmación y pulsa Finalizar.',
-        'fr': 'Ouvrez le lien, cliquez sur « Autoriser », puis collez ici le '
-              'code de confirmation et cliquez sur Terminer.',
-        'it': 'Apri il link, fai clic su «Consenti», poi incolla qui il '
-              'codice di conferma e premi Completa.',
     },
     'Completing sign-in…': {
         'de': 'Schließe die Anmeldung ab…',
@@ -2028,23 +2182,11 @@ TRANSLATIONS = {
         'fr': 'Répertoire distant :',
         'it': 'Directory remota:',
     },
-    'Files and IPTC data come from the IPTC tab. Write settings (export folder) are in the IPTC tab.': {
-        'de': 'Dateien und IPTC-Daten stammen aus dem IPTC-Tab. Die Schreib-Einstellungen (Exportordner) stehen ebenfalls dort.',
-        'es': 'Los archivos y los datos IPTC vienen de la pestaña IPTC. Los ajustes de escritura (carpeta de exportación) están allí.',
-        'fr': 'Les fichiers et les données IPTC proviennent de l’onglet IPTC. Les réglages d’écriture (dossier d’export) s’y trouvent aussi.',
-        'it': 'I file e i dati IPTC provengono dalla scheda IPTC. Le impostazioni di scrittura (cartella di esportazione) sono lì.',
-    },
     'Write IPTC + upload all': {
         'de': 'IPTC schreiben + alle hochladen',
         'es': 'Escribir IPTC + subir todo',
         'fr': 'Écrire l’IPTC + tout envoyer',
         'it': 'Scrivi IPTC + carica tutto',
-    },
-    'The IPTC tab is disabled, so the "Write IPTC + upload" workflow is unavailable. These server settings are used by the Culling tab ("-> FTP").': {
-        'de': 'Der IPTC-Tab ist abgeschaltet, daher steht der Ablauf „IPTC schreiben + hochladen“ nicht zur Verfügung. Diese Servereinstellungen nutzt der Sichtungs-Tab („-> FTP“).',
-        'es': 'La pestaña IPTC está desactivada, así que el flujo «Escribir IPTC + subir» no está disponible. La pestaña de selección usa estos ajustes del servidor («-> FTP»).',
-        'fr': 'L’onglet IPTC est désactivé : le flux « Écrire l’IPTC + envoyer » n’est pas disponible. Ces réglages de serveur sont utilisés par l’onglet de tri (« -> FTP »).',
-        'it': 'La scheda IPTC è disattivata, quindi il flusso "Scrivi IPTC + carica" non è disponibile. Queste impostazioni del server sono usate dalla scheda di selezione ("-> FTP").',
     },
     'Host is missing.': {
         'de': 'Der Host fehlt.',
@@ -2195,18 +2337,6 @@ TRANSLATIONS = {
         'es': 'Carpeta…',
         'fr': 'Dossier…',
         'it': 'Cartella…',
-    },
-    'Adds the selected images to the MediaWiki tab; with no selection, every image passing the filter. Images can also be dragged onto the MediaWiki tab directly.': {
-        'de': 'Fügt die ausgewählten Bilder dem MediaWiki-Tab hinzu; ohne Auswahl alle Bilder, die den Filter passieren. Bilder lassen sich auch direkt auf den MediaWiki-Tab ziehen.',
-        'es': 'Añade las imágenes seleccionadas a la pestaña MediaWiki; sin selección, todas las que pasen el filtro. También se pueden arrastrar directamente a la pestaña MediaWiki.',
-        'fr': 'Ajoute les images sélectionnées à l’onglet MediaWiki ; sans sélection, toutes celles qui passent le filtre. Les images peuvent aussi être glissées directement sur l’onglet MediaWiki.',
-        'it': 'Aggiunge le immagini selezionate alla scheda MediaWiki; senza selezione, tutte quelle che passano il filtro. Le immagini si possono anche trascinare direttamente sulla scheda MediaWiki.',
-    },
-    'Uploads the selected images (as they are, no IPTC writing) to the server configured in the FTP tab / Settings.': {
-        'de': 'Lädt die ausgewählten Bilder unverändert (ohne IPTC-Schreiben) auf den im FTP-Tab bzw. in den Einstellungen konfigurierten Server.',
-        'es': 'Sube las imágenes seleccionadas tal cual (sin escribir IPTC) al servidor configurado en la pestaña FTP / Ajustes.',
-        'fr': 'Envoie les images sélectionnées telles quelles (sans écriture IPTC) vers le serveur configuré dans l’onglet FTP / Réglages.',
-        'it': 'Carica le immagini selezionate così come sono (senza scrittura IPTC) sul server configurato nella scheda FTP / Impostazioni.',
     },
     'Copies the selected images into a local folder. RAW files bring their .xmp sidecar along; existing files in the target folder are never overwritten.': {
         'de': 'Kopiert die ausgewählten Bilder in einen lokalen Ordner. RAW-Dateien bringen ihre .xmp-Sidecar-Datei mit; vorhandene Dateien im Zielordner werden nie überschrieben.',
@@ -2502,12 +2632,6 @@ TRANSLATIONS = {
         'fr': 'Envoyer vers Flickr',
         'it': 'Carica su Flickr',
     },
-    'Uploads the selected images (as they are) to the Flickr account authorized in the Flickr tab.': {
-        'de': 'Lädt die ausgewählten Bilder unverändert auf das im Flickr-Tab autorisierte Konto hoch.',
-        'es': 'Sube las imágenes seleccionadas tal cual a la cuenta de Flickr autorizada en la pestaña Flickr.',
-        'fr': 'Envoie les images sélectionnées telles quelles vers le compte Flickr autorisé dans l’onglet Flickr.',
-        'it': 'Carica le immagini selezionate così come sono sull’account Flickr autorizzato nella scheda Flickr.',
-    },
     'Write IPTC + upload': {
         'de': 'IPTC schreiben + hochladen',
         'es': 'Escribir IPTC + subir',
@@ -2579,12 +2703,6 @@ TRANSLATIONS = {
         'es': 'Sugerir',
         'fr': 'Suggérer',
         'it': 'Suggerisci',
-    },
-    'Suggests categories from the depicts entries and the "created during" event (Commons category P373, or the label; a missing year is taken from the Date column).': {
-        'de': 'Schlägt Kategorien aus den Depicts-Einträgen und dem „Entstanden während“-Ereignis vor (Commons-Kategorie P373, sonst das Label; ein fehlendes Jahr kommt aus der Datumsspalte).',
-        'es': 'Sugiere categorías a partir de las entradas de depicts y del evento «creado durante» (categoría de Commons P373, o la etiqueta; un año que falte se toma de la columna Fecha).',
-        'fr': 'Suggère des catégories à partir des entrées depicts et de l’événement « créé lors de » (catégorie Commons P373, sinon le libellé ; une année manquante est reprise de la colonne Date).',
-        'it': 'Suggerisce categorie dalle voci depicts e dall’evento "creato durante" (categoria Commons P373, altrimenti l’etichetta; un anno mancante viene preso dalla colonna Data).',
     },
     'Categories': {
         'de': 'Kategorien',
@@ -2687,12 +2805,6 @@ TRANSLATIONS = {
         'es': 'Cuenta de MediaWiki',
         'fr': 'Compte MediaWiki',
         'it': 'Account MediaWiki',
-    },
-    'BotPassword recommended (Special:BotPasswords). The password is stored in PLAIN TEXT - leave it empty to be asked at login instead.': {
-        'de': 'BotPassword empfohlen (Special:BotPasswords). Das Passwort wird im KLARTEXT gespeichert – leer lassen, um stattdessen beim Anmelden gefragt zu werden.',
-        'es': 'Se recomienda una BotPassword (Special:BotPasswords). La contraseña se guarda en TEXTO PLANO: déjela vacía para que se pida al iniciar sesión.',
-        'fr': 'BotPassword recommandé (Special:BotPasswords). Le mot de passe est enregistré en TEXTE CLAIR – laissez-le vide pour qu’il soit demandé à la connexion.',
-        'it': 'BotPassword consigliata (Special:BotPasswords). La password è salvata in TESTO IN CHIARO: lasciala vuota per farla chiedere all’accesso.',
     },
     'Other (ISO code)…': {
         'de': 'Weitere (ISO-Code)…',

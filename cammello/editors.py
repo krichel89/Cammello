@@ -70,6 +70,16 @@ class CaptionsEditor(QWidget):
 
         edit = QLineEdit(value)
         edit.setPlaceholderText(tr('Caption, e.g. Harald Krichel at the Berlinale 2026'))
+        edit.setToolTip(tr(
+            'The short caption of the file, in the language on the left - '
+            'ONE sentence,\nno wiki markup: "Harald Krichel at the '
+            'Berlinale 2026".\n\n'
+            'This is the STRUCTURED caption (Wikibase label). Commons '
+            'stores every\nfile TWICE: as wikitext (the Information '
+            'template - the field below)\nand as structured data '
+            '(machine-readable statements - this field).\nThey say the '
+            'same thing in two forms; that is why Cammello asks for\nboth. '
+            '"Information from caption" copies this text down.'))
 
         remove = QPushButton('×')
         remove.setFixedWidth(28)
@@ -90,6 +100,14 @@ class CaptionsEditor(QWidget):
         info_edit.setPlaceholderText(
             tr('Information wikitext for this language (uploaded as {{%s|1=…}})')
             % lang)
+        info_edit.setToolTip(tr(
+            'The description in the Information template - the WIKITEXT '
+            'half of the\npair (the caption above is the structured half). '
+            'May be longer than the\ncaption and may contain links and '
+            'templates.\n\n'
+            'Uploaded as {{<language>|1=your text}}. Empty is allowed: '
+            'then the file\npage shows no description text in this '
+            'language.'))
         info_edit.setAcceptRichText(False)
         two_lines = info_edit.fontMetrics().lineSpacing() * 2 + 12
         info_edit.setFixedHeight(two_lines)
@@ -329,6 +347,17 @@ class StructuredDescriptionEditor(QWidget):
             self.depicts.setPlaceholderText(tr('e.g.') + ' Q42; Q64')
             _style_wd_field(self.depicts, multi=True, searchable=True)
             self._depicts_suggest = WikidataSuggest(self.depicts, multi=True)
+            self.depicts.setToolTip(tr(
+                'P180 "depicts": what the picture SHOWS, as Wikidata items '
+                '- for\nportraits the person in the picture, e.g. Q42 for '
+                'Douglas Adams.\nSeveral items separated by ;\n\n'
+                'Enter Q-numbers directly, or type a name and pick from the '
+                'live\nsuggestions - the field then inserts the Q-number '
+                'for you.\n\n'
+                'Becomes the structured "depicts" statement (P180) of the '
+                'file on Commons.\nRequired for the upload; if the picture '
+                'has no suitable item, choose a\nreason in the field '
+                'below instead.'))
         else:
             self.depicts = None
 
@@ -338,6 +367,17 @@ class StructuredDescriptionEditor(QWidget):
         # itemData: '' = no override; else the depicts_override= value.
         if not self.is_base:
             self.override_combo = NoWheelComboBox()
+            self.override_combo.setToolTip(tr(
+                'Only used when the depicts field above stays empty - pick '
+                'WHY:\n\n'
+                '"No Wikidata item": the person or subject shown has no '
+                'item (yet).\n'
+                '"Not applicable": the picture shows no identifiable '
+                'subject.\n'
+                '"Unidentified": there is a subject, but you do not know '
+                'who or what it is.\n\n'
+                'Stored as depicts_override= in the description; the upload '
+                'then\nproceeds without a depicts statement.'))
             self.override_combo.addItem(tr('depicts is set (required)'), '')
             self.override_combo.addItem(tr('No Wikidata item'), 'no_item')
             self.override_combo.addItem(tr('Not applicable'), 'not_applicable')
@@ -350,6 +390,15 @@ class StructuredDescriptionEditor(QWidget):
         # Categories — plain text (not a Wikidata field).
         self.categories = QLineEdit()
         self.categories.setPlaceholderText(tr('e.g.') + ' Berlinale 2026; Portraits')
+        self.categories.setToolTip(tr(
+            'The Commons categories this file belongs in - category NAMES '
+            'only,\nwithout "Category:" and without brackets, several '
+            'separated by ;\n\n'
+            'e.g.:  Berlinale 2026; Harald Krichel\n\n'
+            'Each name becomes a [[Category:...]] line in the wikitext. '
+            'The category\nshould already exist on Commons - a red '
+            'category leaves the file\npoorly findable. "Suggest" fills '
+            'this from the depicts entries.'))
 
         # Base-only fields.
         if self.is_base:
@@ -357,9 +406,24 @@ class StructuredDescriptionEditor(QWidget):
             self.created_during.setPlaceholderText(tr('e.g.') + ' Q124692383')
             _style_wd_field(self.created_during, searchable=True)
             self._cd_suggest = WikidataSuggest(self.created_during, multi=False)
+            self.created_during.setToolTip(tr(
+                'P10408 "created during": the event ALL these pictures were '
+                'taken at,\nas ONE Wikidata item.\n\n'
+                'If the edition has its own item, take that one: '
+                '"Berlinale 2026",\nnot "Berlinale". Smaller festivals '
+                'often have only one item for the\nwhole series - then '
+                'that one is right. Type the name and pick from\nthe '
+                'suggestions, or enter the Q-number directly.\n\n'
+                'Becomes the "created during" statement (P10408) of every '
+                'file, and\n"Suggest" derives the base category from it.'))
 
             self.gallery_suffix = QLineEdit()
             self.gallery_suffix.setPlaceholderText(tr('e.g.') + ' Berlinale 2026')
+            self.gallery_suffix.setToolTip(tr(
+                'The part of the gallery page name that is specific to this '
+                'batch,\ne.g. the event name: with suffix "Berlinale 2026" '
+                'the uploads are\nlisted on <gallery prefix>/Berlinale '
+                '2026. Plain text, no brackets.'))
         else:
             self.created_during = None
             self.gallery_suffix = None
@@ -402,6 +466,14 @@ class StructuredDescriptionEditor(QWidget):
                     self.categories)
         if self.is_base:
             form.addRow(tr('Gallery suffix:'), self.gallery_suffix)
+        # The row LABELS carry the same tooltip as their field: someone who
+        # wonders what "P180" means points at the label, not the input.
+        for w in (self.depicts, self.override_combo, self.categories,
+                  self.created_during, self.gallery_suffix):
+            if w is not None:
+                lbl = form.labelForField(w)
+                if lbl is not None:
+                    lbl.setToolTip(w.toolTip())
         apply_form_ratio(form)
         layout.addLayout(form)
 

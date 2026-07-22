@@ -122,9 +122,15 @@ class MWSettingsMixin:
         if hasattr(self, 'mw_user_edit'):
             self._login_settings.setValue('username',
                                           self.mw_user_edit.text().strip())
-            credentials.save_mediawiki_password(
-                self._login_settings, self.mw_user_edit.text(),
-                self.mw_password_edit.text())
+            # 0.12.12: the password field is loaded LAZILY (first BotPassword
+            # dialog open). Saving an untouched, never-loaded field would
+            # pass '' to save_mediawiki_password - which DELETES the stored
+            # secret. Only a loaded (and thus possibly edited) field is
+            # authoritative.
+            if getattr(self, '_mw_password_loaded', True):
+                credentials.save_mediawiki_password(
+                    self._login_settings, self.mw_user_edit.text(),
+                    self.mw_password_edit.text())
             self._login_settings.sync()
         if hasattr(self, 'ftp_host_edit'):
             self._ftp_save_settings()

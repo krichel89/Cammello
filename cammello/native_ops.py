@@ -20,6 +20,15 @@ architecture keeps it out of. The functions only ever RUN in the helper, so
 the import now happens there, on first use.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:                       # never true at runtime
+    # Bundlers (py2app, PyInstaller) build their module graph from bytecode
+    # imports. The real import below lives inside _require() and stays lazy;
+    # this dead-but-compiled import guarantees pyexiv2 is still PACKAGED.
+    # (`if False:` would not work - CPython folds it away entirely.)
+    import pyexiv2                      # noqa: F401
+
 _PYEXIV2 = None
 _PYEXIV2_ERROR = None
 

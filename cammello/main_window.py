@@ -144,7 +144,7 @@ class MainWindow(FlickrMixin,
             'feature_culling', True, type=bool)
         self.logger.info(
             'Features: pyexiv2 %s | culling=%s iptc=%s ftp=%s flickr=%s',
-            'available' if avail else
+            f'available (via {iptc_mod.GATE_MODE})' if avail else
             f'UNAVAILABLE ({iptc_mod.unavailable_reason()})',
             self._feat_culling if avail else False,
             self.settings.value('feature_iptc', False, type=bool) and avail,
@@ -387,6 +387,11 @@ class MainWindow(FlickrMixin,
         right.setMinimumWidth(360)
 
         settings_group = CollapsibleGroupBox(tr('Author and license'))
+        # Section tooltips (Harald's wording): they say what SCOPE a section
+        # has - the three blocks differ in how far their values reach, and
+        # that is exactly what is not obvious from the headings.
+        settings_group.setToolTip(tr(
+            'What probably stays the same for a photographer forever.'))
         settings_form = QFormLayout(settings_group.content)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText(tr('e.g.') + ' [[User:Seewolf|Harald Krichel]]')
@@ -398,12 +403,27 @@ class MainWindow(FlickrMixin,
         self.source_edit.setPlaceholderText(tr('e.g.') + ' {{own}}')
         self.permission_edit = QLineEdit()
         self.permission_edit.setPlaceholderText(tr('e.g. (leave empty unless needed)'))
-        self.license_edit = QLineEdit('{{Cc-by-sa-4.0}}')
+        # Licence and copyright status as DROPDOWNS (Harald, 0.12.14). All
+        # three stay editable - the presets are the common cases, not a
+        # restriction. Picking a licence in one of the two licence fields
+        # sets the matching value in the other (see _link_license_fields),
+        # because a template and a P275 item that disagree are a defect.
+        self.license_edit = PresetComboBox()
+        for _label, _tmpl, _qid in LICENSE_PRESETS:
+            self.license_edit.add_choice(_label, _tmpl)
+        self.license_edit.setText('{{Cc-by-sa-4.0}}')
         self.license_edit.setPlaceholderText(tr('e.g.') + ' {{Cc-by-sa-4.0}}')
-        self.license_sdc_edit = QLineEdit('Q18199165')
+        self.license_sdc_edit = PresetComboBox()
+        for _label, _tmpl, _qid in LICENSE_PRESETS:
+            self.license_sdc_edit.add_choice(_label, _qid)
+        self.license_sdc_edit.setText('Q18199165')
         _style_wd_field(self.license_sdc_edit)
-        self.copyright_sdc_edit = QLineEdit('Q73566113')
+        self.copyright_sdc_edit = PresetComboBox()
+        for _label, _qid in COPYRIGHT_PRESETS:
+            self.copyright_sdc_edit.add_choice(tr(_label), _qid)
+        self.copyright_sdc_edit.setText('Q73566113')
         _style_wd_field(self.copyright_sdc_edit)
+        self._link_license_fields()
         # These SDC values are prepended to every file at upload; keep the
         # per-row "Effective" preview in sync when they change.
         for _e in (self.creator_edit, self.license_sdc_edit, self.copyright_sdc_edit):
@@ -419,11 +439,70 @@ class MainWindow(FlickrMixin,
         self.timeout_edit = QLineEdit('120')
         self.timeout_edit.setMaximumWidth(80)
 
+        self.creator_edit.setToolTip(tr(
+            'P170 "creator": the photographer as a Wikidata item, IF there '
+            'is one\nabout you - e.g. Q1583452 (Harald Krichel). Type your '
+            'name and pick\nfrom the suggestions, or enter the Q-number.\n\n'
+            'SAME FACT AS "Author" ABOVE, in the second form: the author '
+            'line is\nthe wikitext half, P170 the structured half. Commons '
+            'stores both.\nWithout an own item leave this empty - the '
+            'author line alone is fine.'))
+        self.license_sdc_edit.setToolTip(tr(
+            'P275 "copyright license": the SAME license as the template '
+            'above, as a\nWikidata item - Q18199165 is CC BY-SA 4.0 and '
+            'matches {{Cc-by-sa-4.0}}.\n\n'
+            'Again the same fact twice: the template is the wikitext half, '
+            'P275 the\nstructured half. Picking a license in EITHER '
+            'dropdown sets the other\none too, so the two cannot '
+            'contradict each other.'))
+        self.copyright_sdc_edit.setToolTip(tr(
+            'P6216 "copyright status": how the work stands in copyright '
+            'terms.\n\n'
+            'Q73566113 - available under a Creative Commons license: the '
+            'right one\nfor own photographs published here (the default).\n'
+            'Q50423863 - copyrighted, without such a release.\n'
+            'Q19652 - public domain.\n\n'
+            'This has no wikitext counterpart of its own; it exists only as '
+            'structured\ndata. Pick from the dropdown or enter another '
+            'Q-number.'))
+        self.author_edit.setToolTip(tr(
+            'Who took the pictures, as wikitext - typically a link to your '
+            'Commons\nuser page with your real name as the visible text:\n\n'
+            '  [[User:Seewolf|Harald Krichel]]\n\n'
+            'Goes word for word into the author= field of every upload. '
+            'This is the\nWIKITEXT half; "Creator (P170)" below is the '
+            'same fact as structured\ndata. Commons keeps both, so both '
+            'fields exist here.'))
+        self.source_edit.setToolTip(tr(
+            'Where the file comes from. For your own photographs enter '
+            '{{own}} -\nthe template that renders as "Own work".\n\n'
+            'Only for third-party material would a description or web '
+            'address of the\norigin go here instead.'))
+        self.permission_edit.setToolTip(tr(
+            'Evidence of permission, ONLY for the special case that a '
+            'rights holder\nhas filed a release with the volunteer team - '
+            'then the VRT ticket\ntemplate goes here.\n\n'
+            'For your own pictures under a free license this stays EMPTY; '
+            'the\nlicense below is the permission.'))
+        self.license_edit.setToolTip(tr(
+            'The license template under which every file in this batch is '
+            'published,\ne.g. {{Cc-by-sa-4.0}} for Creative Commons '
+            'Attribution-ShareAlike 4.0.\n\n'
+            'Must be one of the free licenses Commons accepts. The '
+            'WIKITEXT half -\n"License (P275)" below says the same as '
+            'structured data, and the two\nmust not disagree.'))
         settings_form.addRow(tr('Author:'), self.author_edit)
         settings_form.addRow(tr('Creator (P170):'), self.creator_edit)
         settings_form.addRow(tr('Source:'), self.source_edit)
         settings_form.addRow(tr('Permission:'), self.permission_edit)
         settings_form.addRow(tr('License:'), self.license_edit)
+        for _w in (self.author_edit, self.source_edit,
+                   self.permission_edit, self.license_edit,
+                   self.creator_edit, self.license_sdc_edit,
+                   self.copyright_sdc_edit):
+            _lbl = settings_form.labelForField(_w)
+            if _lbl is not None:
+                _lbl.setToolTip(_w.toolTip())
         settings_form.addRow(tr('License (P275):'), self.license_sdc_edit)
         settings_form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_edit)
         settings_form.addRow(tr('Other fields:'), self.other_fields_edit)
@@ -449,6 +528,8 @@ class MainWindow(FlickrMixin,
 
         # ── Base description (for all files) ──
         base_group = CollapsibleGroupBox(tr('Base description (for all files)'))
+        base_group.setToolTip(tr(
+            'For one upload session, e.g. all pictures of one event.'))
         base_layout = QVBoxLayout(base_group.content)
         self.base_text_edit = QTextEdit()
         self.base_text_edit.setPlaceholderText(
@@ -507,6 +588,8 @@ class MainWindow(FlickrMixin,
 
         # ── Selected file description ──
         file_group = CollapsibleGroupBox(tr('Selected file(s) - description'))
+        file_group.setToolTip(tr(
+            'The subject of one picture, possibly of several.'))
         file_layout = QVBoxLayout(file_group.content)
         self.file_desc_edit = FocusOutTextEdit()
         self.file_desc_edit.setPlaceholderText(EXAMPLE_FILE_DESCRIPTION)
@@ -700,12 +783,16 @@ class MainWindow(FlickrMixin,
         self.mw_user_edit = QLineEdit(
             self._login_settings.value('username', ''))
         self.mw_user_edit.setPlaceholderText(tr('e.g.') + ' Seewolf@Cammello')
-        # BotPassword: loaded from the OS keyring (migrating any old plaintext
-        # out of QSettings on first run); plaintext fallback without a backend.
-        self.mw_password_edit = QLineEdit(
-            credentials.load_mediawiki_password(
-                self._login_settings, self.mw_user_edit.text()))
+        # BotPassword: NOT loaded here (0.12.12). Reading it at window build
+        # was keychain prompt no. 1 of four AT EVERY START on macOS - before
+        # the user did anything. The field starts empty and is filled the
+        # moment the BotPassword dialog opens (_ensure_mw_password_loaded);
+        # the LoginDialog loads its own copy anyway. The _mw_password_loaded
+        # flag guards saving: an untouched empty field must never DELETE the
+        # stored secret on close.
+        self.mw_password_edit = QLineEdit()
         self.mw_password_edit.setEchoMode(QLineEdit.Password)
+        self._mw_password_loaded = False
         # OAuth sign-in: only offered in builds with a registered consumer
         # (mw_oauth.CONSUMER_KEY filled in) - see mw_oauth module docstring.
         if mw_oauth.is_configured():
@@ -721,7 +808,11 @@ class MainWindow(FlickrMixin,
             row.addStretch()
             form.addRow('OAuth:', self.oauth_status_label)
             form.addRow('', row)
-            self._refresh_oauth_status()
+            # 0.12.12: no _refresh_oauth_status() here. Reading the stored
+            # tokens was keychain prompts 2 and 3 at every start; the status
+            # is refreshed when the Settings window opens instead - the
+            # moment someone can actually see it.
+            self.oauth_status_label.setText('…')
         # Small, deliberately unobtrusive entry point UNDER OAuth (Harald):
         # opens the BotPassword sub-dialog.
         # 0.12.8: this edits the STORED bot-password credentials. Signing
@@ -738,7 +829,19 @@ class MainWindow(FlickrMixin,
         apply_form_ratio(form)
         return box
 
+    def _ensure_mw_password_loaded(self):
+        """Fill the BotPassword field from the keyring on FIRST use (0.12.12).
+        This is where the keychain prompt now happens - when the user opens
+        the credentials dialog, not at application start."""
+        if self._mw_password_loaded:
+            return
+        self.mw_password_edit.setText(
+            credentials.load_mediawiki_password(
+                self._login_settings, self.mw_user_edit.text()))
+        self._mw_password_loaded = True
+
     def _open_botpassword_dialog(self):
+        self._ensure_mw_password_loaded()
         """Sub-dialog with the BotPassword credentials (0.12.6). The field
         widgets are the persistent self.mw_user_edit/mw_password_edit, so
         everything that reads them keeps working; the dialog is just where
@@ -778,6 +881,30 @@ class MainWindow(FlickrMixin,
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
+
+    def _link_license_fields(self):
+        """Keep the licence template and the P275 item on the same licence.
+
+        Only PRESET picks propagate: choosing "CC BY 4.0" in one field sets
+        the other field's value for CC BY 4.0. Typed text is left alone -
+        someone entering an unusual template must not have their Q-number
+        rewritten under them.
+        """
+        tmpl_to_qid = {t: q for _l, t, q in LICENSE_PRESETS}
+        qid_to_tmpl = {q: t for _l, t, q in LICENSE_PRESETS}
+
+        def _pair(source, target, mapping):
+            def _handler(index):
+                value = source.itemData(index)
+                other = mapping.get(value)
+                if other and target.text() != other:
+                    target.setText(other)
+            return _handler
+
+        self.license_edit.activated.connect(
+            _pair(self.license_edit, self.license_sdc_edit, tmpl_to_qid))
+        self.license_sdc_edit.activated.connect(
+            _pair(self.license_sdc_edit, self.license_edit, qid_to_tmpl))
 
     def _refresh_oauth_status(self):
         # The status widgets only exist when a consumer is configured (see
@@ -820,10 +947,11 @@ class MainWindow(FlickrMixin,
                                                        multi=False)
         self.source_mirror = mirror_line_edit(self.source_edit)
         self.permission_mirror = mirror_line_edit(self.permission_edit)
-        self.license_mirror = mirror_line_edit(self.license_edit)
-        self.license_sdc_mirror = mirror_line_edit(self.license_sdc_edit)
+        # Dropdown in the module, dropdown in the Settings mirror.
+        self.license_mirror = mirror_preset_combo(self.license_edit)
+        self.license_sdc_mirror = mirror_preset_combo(self.license_sdc_edit)
         _style_wd_field(self.license_sdc_mirror)
-        self.copyright_sdc_mirror = mirror_line_edit(self.copyright_sdc_edit)
+        self.copyright_sdc_mirror = mirror_preset_combo(self.copyright_sdc_edit)
         _style_wd_field(self.copyright_sdc_mirror)
         self.other_fields_mirror = mirror_line_edit(self.other_fields_edit)
         self.gallery_prefix_mirror = mirror_line_edit(self.gallery_prefix_edit)
@@ -983,6 +1111,10 @@ class MainWindow(FlickrMixin,
         dlg.activateWindow()
 
     def _open_settings_dialog(self):
+        # Deferred from window build (0.12.12): the two token reads prompt
+        # the macOS keychain, so they happen when the status becomes
+        # visible - here - instead of at every start.
+        self._refresh_oauth_status()
         self._open_page_dialog('settings', self._settings_tab_widget,
                                tr('Settings'))
 
@@ -1202,8 +1334,13 @@ class MainWindow(FlickrMixin,
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setFont(QFont('Consolas' if sys.platform == 'win32'
-                                    else 'Monospace', 9))
+        # QFontDatabase, not a family name: 'Monospace' exists on Linux but
+        # not on macOS, where Qt then walks all families to find a substitute
+        # (and logs a warning). The system fixed font is right everywhere.
+        from PyQt5.QtGui import QFontDatabase
+        _mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        _mono.setPointSize(9)
+        self.log_view.setFont(_mono)
         self.log_view.document().setMaximumBlockCount(5000)
         layout.addWidget(self.log_view)
 

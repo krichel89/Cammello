@@ -1,0 +1,38 @@
+Cammello - pyexiv2-Regression im .app-Bundle (Delta auf 0.12.11, kein Bump)
+===========================================================================
+
+Was passiert ist
+----------------
+0.12.9 hat den pyexiv2-Import "lazy" gemacht, damit die native Bibliothek
+nicht mehr in den GUI-Prozess geladen wird. Nebenwirkung: App-Bundler
+(py2app, PyInstaller) bauen ihre Modulliste aus den Imports im Bytecode -
+und ein Import, der nur noch in einer Funktion steckt UND dessen Modulname
+dem Scanner entgeht, fliegt aus dem Paket. Deshalb meldet das neu gebaute
+Bundle "pyexiv2 is not installed", und IPTC/FTP/Culling sind aus.
+
+Enthalten
+---------
+  cammello/native_ops.py  - haelt pyexiv2 fuer Bundler sichtbar
+                            (TYPE_CHECKING-Import: im Bytecode vorhanden,
+                            zur Laufzeit tot)
+  cammello/iptc.py        - Anwesenheitspruefung als Leiter: erst
+                            find_spec (laedt nichts), nur wenn der nichts
+                            findet ein echter Import-Versuch als letztes
+                            Wort. Neues GATE_MODE sagt, welcher Weg
+                            entschieden hat.
+  cammello/main_window.py - Features-Logzeile nennt den GATE_MODE
+                            ("available (via find_spec)" bzw.
+                            "(via import-fallback)"); ausserdem fragt das
+                            Logfenster Qt nach der System-Festbreitenschrift
+                            statt nach "Monospace" (die Familie gibt es auf
+                            macOS nicht - daher die Font-Warnung).
+
+Was zu tun ist
+--------------
+1. Dateien einspielen und die .app NEU BAUEN.
+2. Falls der Bundler pyexiv2 danach immer noch nicht mitnimmt, einmalig
+   explizit angeben:
+     py2app:      OPTIONS = {'packages': ['pyexiv2'], ...} in setup.py
+     PyInstaller: --hidden-import pyexiv2  (bzw. hiddenimports in der .spec)
+3. Die neue Features-Zeile aus dem Log schicken - sie verraet, welcher
+   Prueffweg gegriffen hat.

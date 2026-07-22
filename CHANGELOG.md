@@ -4,6 +4,73 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.14] - 2026-07-20
+
+### Changed
+- License and copyright status are dropdowns: CC0 1.0, CC BY 4.0 and
+  CC BY-SA 4.0 for the license template and for the structured license
+  (P275), plus "copyrighted" for the copyright status (P6216). Picking a
+  license in either license dropdown sets the other one to the matching
+  value, so template and P275 item cannot disagree. All three fields stay
+  editable - unusual licenses can still be typed.
+- The copyright status offers all three relevant values with their
+  meanings: Q73566113 (available under a Creative Commons license, the
+  default), Q50423863 (copyrighted) and Q19652 (public domain).
+
+## [0.12.13] - 2026-07-20
+
+### Changed
+- The tooltips of the Wikidata fields now LEAD with their property number
+  (P180, P10408, P170, P275, P6216), so a property can be looked up
+  without knowing which field it belongs to.
+- They also explain the double concept behind Commons: author and creator
+  (P170), license template and license (P275), caption and Information
+  description are the SAME fact stored twice - once as wikitext, once as
+  structured data. Each tooltip names its counterpart and says which half
+  it is.
+
+### Added
+- Tooltips on the caption and description fields of the captions editor.
+- Tooltips on the three MediaWiki section headings, saying how far each
+  section reaches: settings that stay the same forever, one upload
+  session, one picture.
+
+## [0.12.12] - 2026-07-20
+
+### Fixed
+- No keychain access at application start. Building the window used to
+  read the BotPassword and both OAuth tokens from the system keyring -
+  on macOS up to four keychain prompts before the user did anything.
+  The BotPassword field now loads when the BotPassword dialog opens, and
+  the OAuth status is checked when the Settings window opens; signing in
+  reads the tokens as before. An untouched, never-loaded password field
+  is no longer saved on close (saving it would have deleted the stored
+  secret).
+
+## [0.12.11] - 2026-07-19
+
+### Fixed
+- Bundled apps (macOS .app) lost pyexiv2 - and with it the IPTC, FTP and
+  Culling tabs. 0.12.9 made the pyexiv2 import lazy, which also hid it
+  from the app bundler's static analysis, so rebuilt bundles no longer
+  packaged the module. A compile-time-visible import keeps it in every
+  bundle, and the presence probe now falls back to a real import when the
+  path finders are blind; the Features log line names which probe decided.
+- The log window asks Qt for the system fixed font instead of the family
+  name "Monospace", which does not exist on macOS (font-alias warning at
+  startup).
+
+### Added
+- Tooltips in the MediaWiki module that explain what BELONGS in each
+  field: expected format, a concrete example, and where the value ends up.
+  Covered are the Wikidata fields (depicts, created during, creator,
+  structured license and copyright status - including what the cryptic
+  defaults Q18199165 and Q73566113 mean), the upload settings (author,
+  source, permission, license template), the depicts override, categories
+  and the gallery suffix. The row labels answer too. Tooltips only -
+  nothing was added to the layout, nothing moved, nothing appears until
+  the pointer rests on a field.
+
 ## [0.12.10] - 2026-07-19
 
 ### Changed

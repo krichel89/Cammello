@@ -1,0 +1,34 @@
+Cammello - Scan-Diagnose (Delta auf 0.12.9, keine Versionsaenderung)
+====================================================================
+
+Enthalten:
+  cammello/culling.py      - scan_folder sammelt jetzt Zaehlwerte
+  cammello/mw_culling.py   - Log-Zeile beim Oeffnen + Ordnername in der
+                             Statusleiste unten
+
+Was zu tun ist
+--------------
+Den PROBLEM-Ordner im Culling oeffnen (den mit den Unterstrich-Namen, wo
+nur ein Teil erscheint) und danach die neue Log-Zeile schicken. Sie steht
+direkt unter "Culling: opened ..." und sieht so aus:
+
+  Culling scan: 600 name(s) listed, 400 picture file(s), 200 skipped
+  (unknown extension), 200 folded into pairs -> 200 entries;
+  extensions: .cr3=200, .jpg=200, .xmp=200
+
+Daran laesst sich eindeutig ablesen, WO die Bilder verlorengehen:
+  * "listed" kleiner als erwartet  -> das Betriebssystem meldet die
+    Dateien gar nicht (z. B. iCloud-Platzhalter, siehe unten)
+  * viele "skipped"                -> unbekannte Dateiendung
+  * viele "folded into pairs"      -> RAW+JPEG werden absichtlich zu EINEM
+    Bild zusammengefasst (so ist es gedacht)
+
+Zusaetzlich hilfreich, im Terminal auf dem Problem-Ordner:
+
+  ls -a | sed 's/.*\.//' | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn
+
+Wichtig ist das -a: ohne diesen Schalter versteckt ls alle Dateien, die mit
+einem Punkt beginnen. Genau so sehen iCloud-Platzhalter aus - aus
+"_7A1234.CR3" wird ".​_7A1234.CR3.icloud", wenn macOS die Datei aus dem
+lokalen Speicher ausgelagert hat. Fuer Cammello ist so eine Datei nicht
+vorhanden.

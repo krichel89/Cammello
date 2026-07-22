@@ -37,19 +37,39 @@ XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
 # process (native_exec/native_ops); importing the module here still loaded
 # the crash-prone native library into the GUI process, which is exactly what
 # that architecture exists to avoid - and it cost ~0.2 s at startup.
-# Trade-off, stated honestly: find_spec proves the module is installed, not
-# that its native library loads. A broken installation now surfaces at the
-# first metadata access (as a helper-process error naming the module)
-# instead of at startup. `pyexiv2` stays as a module attribute because
+#
+# 0.12.11 REGRESSION FIX (Harald's Mac .app: "pyexiv2 is not installed"
+# although the same bundle had working IPTC before): find_spec alone is not
+# a reliable presence test in every environment - frozen/bundled apps can
+# have importable modules that no path finder reports. The probe is now a
+# LADDER: find_spec first (no native library in this process, the normal
+# case), and only when that claims absence, one real import attempt as the
+# last word. On a system where pyexiv2 truly is missing that attempt is a
+# fast ImportError; in an environment where find_spec is blind it restores
+# the three tabs at the price of loading the library here - which the
+# GATE_MODE below makes visible in the Features log line, so a log can tell
+# which world it came from. `pyexiv2` stays a module attribute because
 # read_iptc/write_iptc guard on `pyexiv2 is None`; it is truthy when the
-# module exists but is NOT the imported module.
+# module exists but is NOT necessarily the imported module.
 import importlib.util as _ilu
-if _ilu.find_spec('pyexiv2') is not None:
+
+GATE_MODE = 'missing'
+try:
+    _spec_hit = _ilu.find_spec('pyexiv2') is not None
+except Exception:
+    _spec_hit = False
+if _spec_hit:
     pyexiv2 = True              # sentinel: installed; real import is in the child
     _PYEXIV2_ERROR = None
+    GATE_MODE = 'find_spec'
 else:
-    pyexiv2 = None
-    _PYEXIV2_ERROR = 'pyexiv2 is not installed'
+    try:
+        import pyexiv2          # last resort - see the comment above
+        _PYEXIV2_ERROR = None
+        GATE_MODE = 'import-fallback'
+    except Exception as _e:
+        pyexiv2 = None
+        _PYEXIV2_ERROR = str(_e)
 
 # IPTC IIM: envelope character set marker for UTF-8 (ESC % G).
 _UTF8_MARKER = '\x1b%G'

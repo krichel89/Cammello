@@ -638,6 +638,75 @@ class NoWheelComboBox(QComboBox):
         event.ignore()
 
 
+class PresetComboBox(NoWheelComboBox):
+    """An editable combo that behaves like the QLineEdit it replaces.
+
+    Built for the license and copyright-status fields (0.12.14): the values
+    are a short, well-known set, but they are Q-numbers and template names
+    that nobody recites from memory. The DROPDOWN shows readable entries
+    ("CC BY-SA 4.0 (Q18199165)"); picking one puts the bare VALUE in the
+    field, so everything downstream - settings, description export, upload -
+    keeps seeing exactly the same string as before. Typing something else
+    stays possible: unusual licenses must not become unreachable.
+
+    The QLineEdit surface below (text/setText/textChanged/placeholder) is
+    what makes this a drop-in replacement; several modules and the settings
+    mirror talk to these fields as if they were line edits.
+    """
+
+    textChanged = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.NoInsert)
+        self.activated.connect(self._apply_choice)
+        self.lineEdit().textChanged.connect(self.textChanged)
+
+    def add_choice(self, label, value):
+        """Add one dropdown entry: readable label, bare value behind it."""
+        self.addItem(f'{label} ({value})', value)
+
+    def _apply_choice(self, index):
+        value = self.itemData(index)
+        if value is not None:
+            self.setEditText(value)
+
+    # ── QLineEdit-compatible surface ────────────────────────────────────
+    def text(self):
+        return self.currentText()
+
+    def setText(self, text):
+        self.setEditText(text)
+
+    def placeholderText(self):
+        return self.lineEdit().placeholderText()
+
+    def setPlaceholderText(self, text):
+        self.lineEdit().setPlaceholderText(text)
+
+    def echoMode(self):
+        return self.lineEdit().echoMode()
+
+    def setEchoMode(self, mode):
+        self.lineEdit().setEchoMode(mode)
+
+
+def mirror_preset_combo(primary):
+    """A second PresetComboBox with the same entries, kept in sync.
+
+    mirror_line_edit would hand back a plain QLineEdit - the Settings page
+    would then show a text box where the module shows a dropdown.
+    """
+    m = PresetComboBox()
+    for i in range(primary.count()):
+        m.addItem(primary.itemText(i), primary.itemData(i))
+    m.setEditText(primary.text())
+    m.setPlaceholderText(primary.placeholderText())
+    link_line_edits(primary, m)
+    return m
+
+
 class CollapsibleGroupBox(QWidget):
     """A section with a simple collapse arrow.
 
@@ -713,6 +782,17 @@ class CollapsibleGroupBox(QWidget):
     def setTitle(self, title):
         self._title = title
         self._apply_title(self._btn.isChecked())
+
+    def setToolTip(self, text):
+        """Explain the SECTION - set on the header button as well.
+
+        Qt propagates an unhandled tooltip event to the parent, so setting
+        it on the group alone would usually work; but the header is the
+        thing a reader points at, and an explicit tooltip there also
+        survives if the button ever gets one of its own.
+        """
+        super().setToolTip(text)
+        self._btn.setToolTip(text)
 
     def isCheckable(self):
         return True
