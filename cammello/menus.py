@@ -305,6 +305,12 @@ class MenusMixin:
             QKeySequence('Ctrl+Shift+A')))
 
     def _build_help_menu(self, menu):
+        # The manual comes first: it is what someone opens the Help menu FOR.
+        # It points at the on-wiki page in the current UI language, so
+        # switching the language switches the manual with it.
+        self._act(menu, tr('Cammello &manual (on Commons)'), '_open_manual',
+                  QKeySequence.HelpContents, None, QAction.NoRole)
+        menu.addSeparator()
         # About and the Log live here and deliberately carry NO shortcut -
         # they are looked up, not used in the flow of work.
         # NoRole for the same reason as Settings above: AboutRole hides the

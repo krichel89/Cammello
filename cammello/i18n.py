@@ -77,6 +77,84 @@ def missing_keys():
 # Grouped by UI area. Every {placeholder} of a key MUST survive
 # translation (enforced by test_i18n.py).
 TRANSLATIONS = {
+    'Cammello &manual (on Commons)': {
+        'de': 'Cammello-&Handbuch (auf Commons)',
+        'es': '&Manual de Cammello (en Commons)',
+        'fr': '&Manuel de Cammello (sur Commons)',
+        'it': '&Manuale di Cammello (su Commons)',
+    },
+    '[crop] 1-6 ratio (again = rotate) · Enter apply · Esc cancel · ⇧C remove': {
+        'de': '[Zuschnitt] 1–6 Verhältnis (nochmal = drehen) · Enter übernehmen · Esc abbrechen · ⇧C entfernen',
+        'es': '[recorte] 1–6 proporción (otra vez = girar) · Intro aplicar · Esc cancelar · ⇧C quitar',
+        'fr': '[recadrage] 1–6 ratio (à nouveau = pivoter) · Entrée appliquer · Échap annuler · ⇧C retirer',
+        'it': '[ritaglio] 1–6 proporzione (di nuovo = ruota) · Invio applica · Esc annulla · ⇧C rimuovi',
+    },
+    'Crop keys:\n  1  free    2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\nPress the same number again to switch that ratio between landscape\nand portrait (2:3, 3:4, 9:16, 4:5). Drag the box or its handles to\nplace it. Enter applies, Esc cancels, Shift+C removes the crop.': {
+        'de': 'Zuschnitt-Tasten:\n  1  frei    2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\nDieselbe Zahl noch einmal drücken kippt das Verhältnis zwischen Quer-\nund Hochformat (2:3, 3:4, 9:16, 4:5). Rahmen oder Griffe ziehen, um ihn\nzu platzieren. Enter übernimmt, Esc bricht ab, Shift+C entfernt den Zuschnitt.',
+        'es': 'Teclas de recorte:\n  1  libre   2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\nPulsa el mismo número otra vez para cambiar esa proporción entre\nhorizontal y vertical (2:3, 3:4, 9:16, 4:5). Arrastra el marco o sus\ntiradores para colocarlo. Intro aplica, Esc cancela, Mayús+C lo quita.',
+        'fr': 'Touches de recadrage :\n  1  libre   2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\nAppuyez de nouveau sur le même chiffre pour basculer ce ratio entre\npaysage et portrait (2:3, 3:4, 9:16, 4:5). Faites glisser le cadre ou ses\npoignées pour le placer. Entrée applique, Échap annule, Maj+C retire.',
+        'it': 'Tasti di ritaglio:\n  1  libero  2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\nPremi di nuovo lo stesso numero per alternare la proporzione tra\norizzontale e verticale (2:3, 3:4, 9:16, 4:5). Trascina il riquadro o le\nmaniglie per posizionarlo. Invio applica, Esc annulla, Maiusc+C rimuove.',
+    },
+    'Crop: {w}×{h} px  —  Enter: apply, Esc: cancel, Shift+C: remove': {
+        'de': 'Zuschnitt: {w}×{h} px  —  Enter: übernehmen, Esc: abbrechen, Shift+C: entfernen',
+        'es': 'Recorte: {w}×{h} px  —  Intro: aplicar, Esc: cancelar, Mayús+C: quitar',
+        'fr': 'Recadrage : {w}×{h} px  —  Entrée : appliquer, Échap : annuler, Maj+C : retirer',
+        'it': 'Ritaglio: {w}×{h} px  —  Invio: applica, Esc: annulla, Maiusc+C: rimuovi',
+    },
+    'Read camera position from EXIF when adding files': {
+        'de': 'Kameraposition beim Hinzufügen aus EXIF lesen',
+        'es': 'Leer la posición de la cámara del EXIF al añadir archivos',
+        'fr': "Lire la position de l'appareil depuis l'EXIF à l'ajout",
+        'it': "Leggere la posizione della fotocamera dall'EXIF all'aggiunta",
+    },
+    'Fills the coordinates field of each newly added file from its EXIF data.\nTurn this off to publish no positions; already filled fields stay as\nthey are, and "from EXIF" in the file section keeps working either way.': {
+        'de': 'Füllt das Koordinatenfeld jeder neu hinzugefügten Datei aus deren\nEXIF-Daten. Ausschalten, um keine Positionen zu veröffentlichen; bereits\ngefüllte Felder bleiben, und „aus EXIF" im Dateiabschnitt funktioniert\nso oder so weiter.',
+        'es': 'Rellena el campo de coordenadas de cada archivo recién añadido a partir\nde sus datos EXIF. Desactívalo para no publicar posiciones; los campos ya\nrellenados se conservan, y «desde EXIF» en la sección del archivo sigue\nfuncionando igualmente.',
+        'fr': 'Remplit le champ de coordonnées de chaque fichier ajouté à partir de ses\ndonnées EXIF. Désactivez-le pour ne publier aucune position ; les champs\ndéjà remplis restent, et « depuis EXIF » dans la section du fichier\ncontinue de fonctionner.',
+        'it': 'Riempie il campo delle coordinate di ogni file appena aggiunto dai suoi\ndati EXIF. Disattivalo per non pubblicare posizioni; i campi già compilati\nrestano, e «da EXIF» nella sezione del file continua a funzionare.',
+    },
+    'Coordinates': {
+        'de': 'Koordinaten',
+        'es': 'Coordenadas',
+        'fr': 'Coordonnées',
+        'it': 'Coordinate',
+    },
+    'Coordinates:': {
+        'de': 'Koordinaten:',
+        'es': 'Coordenadas:',
+        'fr': 'Coordonnées :',
+        'it': 'Coordinate:',
+    },
+    'No GPS position in the EXIF data of the selected file(s).': {
+        'de': 'Keine GPS-Position in den EXIF-Daten der ausgewählten Datei(en).',
+        'es': 'No hay posición GPS en los datos EXIF del archivo o archivos seleccionados.',
+        'fr': 'Aucune position GPS dans les données EXIF du ou des fichiers sélectionnés.',
+        'it': 'Nessuna posizione GPS nei dati EXIF del file o dei file selezionati.',
+    },
+    '{n} coordinate(s) read from EXIF.': {
+        'de': '{n} Koordinate(n) aus EXIF gelesen.',
+        'es': '{n} coordenada(s) leída(s) del EXIF.',
+        'fr': "{n} coordonnée(s) lue(s) depuis l'EXIF.",
+        'it': "{n} coordinata/e letta/e dall'EXIF.",
+    },
+    'Where the CAMERA stood, in decimal degrees: latitude, longitude.\n\nFilled from the EXIF data of the file when it is added, if the camera\nrecorded a position - "from EXIF" reads it again, e.g. after you\ncleared the field. Leave it empty to publish no position at all.\n\nBecomes {{Location dec}} in the wikitext and the "coordinates of the\npoint of view" statement (P1259) in the structured data - the camera\nposition, not the position of what is pictured.': {
+        'de': 'Wo die KAMERA stand, in Dezimalgrad: Breite, Länge.\n\nWird beim Hinzufügen der Datei aus deren EXIF-Daten gefüllt, sofern die\nKamera eine Position aufgezeichnet hat – „aus EXIF" liest sie erneut,\nz. B. nachdem du das Feld geleert hast. Leer lassen, um gar keine\nPosition zu veröffentlichen.\n\nWird zu {{Location dec}} im Wikitext und zur Aussage „Koordinaten des\nAufnahmestandpunkts" (P1259) in den strukturierten Daten – der\nKamerastandort, nicht der Standort des Abgebildeten.',
+        'es': 'Dónde estaba la CÁMARA, en grados decimales: latitud, longitud.\n\nSe rellena al añadir el archivo a partir de sus datos EXIF, si la cámara\nregistró una posición; «desde EXIF» vuelve a leerla, p. ej. después de\nvaciar el campo. Déjalo vacío para no publicar ninguna posición.\n\nSe convierte en {{Location dec}} en el wikitexto y en la declaración\n«coordenadas del punto de vista» (P1259) en los datos estructurados: la\nposición de la cámara, no la de lo retratado.',
+        'fr': "Où se trouvait l'APPAREIL, en degrés décimaux : latitude, longitude.\n\nRempli à l'ajout du fichier depuis ses données EXIF, si l'appareil a\nenregistré une position – « depuis EXIF » la relit, p. ex. après avoir\nvidé le champ. Laissez vide pour ne publier aucune position.\n\nDevient {{Location dec}} dans le wikitexte et la déclaration\n« coordonnées du point de vue » (P1259) dans les données structurées : la\nposition de l'appareil, pas celle du sujet.",
+        'it': "Dove si trovava la FOTOCAMERA, in gradi decimali: latitudine, longitudine.\n\nViene riempito all'aggiunta del file dai suoi dati EXIF, se la fotocamera\nha registrato una posizione; «da EXIF» la rilegge, ad es. dopo aver\nsvuotato il campo. Lascialo vuoto per non pubblicare alcuna posizione.\n\nDiventa {{Location dec}} nel wikitesto e la dichiarazione «coordinate del\npunto di vista» (P1259) nei dati strutturati: la posizione della\nfotocamera, non quella del soggetto.",
+    },
+    'from EXIF': {
+        'de': 'aus EXIF',
+        'es': 'desde EXIF',
+        'fr': 'depuis EXIF',
+        'it': 'da EXIF',
+    },
+    'Read the position from the EXIF data of the selected file(s) again.': {
+        'de': 'Die Position erneut aus den EXIF-Daten der ausgewählten Datei(en) lesen.',
+        'es': 'Volver a leer la posición de los datos EXIF del archivo o archivos seleccionados.',
+        'fr': 'Relire la position depuis les données EXIF du ou des fichiers sélectionnés.',
+        'it': 'Rileggere la posizione dai dati EXIF del file o dei file selezionati.',
+    },
     'P6216 "copyright status": how the work stands in copyright terms.\n\nQ73566113 - available under a Creative Commons license: the right one\nfor own photographs published here (the default).\nQ50423863 - copyrighted, without such a release.\nQ19652 - public domain.\n\nThis has no wikitext counterpart of its own; it exists only as structured\ndata. Pick from the dropdown or enter another Q-number.': {
         'de': 'P6216 „Urheberrechtsstatus": Wie das Werk urheberrechtlich dasteht.\n\nQ73566113 – unter einer Creative-Commons-Lizenz verfügbar: das Richtige\nfür eigene, hier veröffentlichte Fotos (der Vorgabewert).\nQ50423863 – urheberrechtlich geschützt, ohne eine solche Freigabe.\nQ19652 – gemeinfrei.\n\nDazu gibt es keine eigene Wikitext-Entsprechung; das existiert nur als\nstrukturierte Daten. Aus dem Dropdown wählen oder eine andere Q-Nummer\neintragen.',
         'es': 'P6216 «estado de los derechos de autor»: cómo está la obra en términos de\nderechos de autor.\n\nQ73566113: disponible bajo una licencia Creative Commons, lo correcto para\nfotos propias publicadas aquí (el valor por defecto).\nQ50423863: con derechos de autor, sin esa liberación.\nQ19652: dominio público.\n\nNo tiene contrapartida propia en wikitexto; existe solo como datos\nestructurados. Elige del desplegable o introduce otro número Q.',

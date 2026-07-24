@@ -340,8 +340,35 @@ class MediaWikiApi:
                        for lang, val in labels.items() if val}
 
         claims_data = []
-        for prop, qid in claims:
-            qid = (qid or '').strip()
+        for prop, value in claims:
+            # 0.12.15: a claim value is either a QID string (all the item
+            # properties) or a ('coord', lat, lon) tuple for P1259. Two
+            # datatypes, one list - the caller should not have to build
+            # Wikibase JSON.
+            if isinstance(value, (tuple, list)) and value and value[0] == 'coord':
+                _tag, lat, lon = value
+                claims_data.append({
+                    'mainsnak': {
+                        'snaktype': 'value',
+                        'property': prop,
+                        'datavalue': {
+                            'type': 'globecoordinate',
+                            'value': {
+                                'latitude': float(lat),
+                                'longitude': float(lon),
+                                'altitude': None,
+                                # 1e-6 deg is ~0.1 m; the value Commons uses
+                                # for camera coordinates by default.
+                                'precision': 1e-6,
+                                'globe': 'http://www.wikidata.org/entity/Q2',
+                            }
+                        }
+                    },
+                    'type': 'statement',
+                    'rank': 'normal'
+                })
+                continue
+            qid = (value or '').strip()
             m = re.match(r'^Q(\d+)$', qid, flags=re.IGNORECASE)
             if not m:
                 self.log.warning('Invalid QID for %s skipped: %r', prop, qid)
@@ -435,7 +462,13 @@ class MediaWikiApi:
     # ── Gallery ──────────────────────────────────────────────────────────────
 
     def get_page_content(self, page_title):
-        """Get raw wikitext of a page."""
+        """Raw wikitext of a page, or None if the page DOES NOT EXIST.
+
+        A failed fetch is NOT None - it raises. The distinction matters:
+        update_gallery treats None as "create a fresh page", so silently
+        turning a transient 503 into None would let it overwrite a grown
+        gallery with just the current session's files.
+        """
         index_url = self.api_url.replace('api.php', 'index.php')
         r = self._request('GET', f'raw {page_title}', url=index_url,
                           params={'action': 'raw', 'title': page_title})
@@ -444,8 +477,9 @@ class MediaWikiApi:
         if r.status_code == 404:
             self.log.debug('Gallery page "%s" does not exist yet.', page_title)
             return None
-        self.log.warning('Gallery page "%s": HTTP %s', page_title, r.status_code)
-        return None
+        raise Exception(
+            f'Could not read page "{page_title}": HTTP {r.status_code}. '
+            f'Not editing it, to avoid overwriting existing content.')
 
     def set_page_content(self, page_title, content, comment):
         for attempt in (1, 2):
@@ -491,10 +525,18 @@ class MediaWikiApi:
 
         existing = self.get_page_content(gallery_page)
         if existing and gallery_close in existing:
+            # Normal case: slot the new lines in before the LAST closing tag,
+            # so everything else on the page - intro text, other sections,
+            # categories below the gallery - is preserved untouched.
             idx = existing.rfind(gallery_close)
             new_content = existing[:idx] + new_entries + existing[idx:]
         elif existing:
-            new_content = existing.rstrip() + '\n' + new_entries + gallery_close
+            # The page exists but has no gallery yet. Append a COMPLETE new
+            # gallery block: the opening tag has to be written too, otherwise
+            # the file lines end up as plain text followed by a stray closing
+            # tag.
+            new_content = (existing.rstrip() + '\n\n' + gallery_open + '\n'
+                           + new_entries + gallery_close)
         else:
             new_content = gallery_open + '\n' + new_entries + gallery_close
 

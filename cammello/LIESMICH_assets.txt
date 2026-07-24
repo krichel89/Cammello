@@ -1,0 +1,41 @@
+Cammello - Fehlender assets-Ordner + Build-Fix (22.07.2026)
+===========================================================
+
+Die eigentliche Ursache des Build-Fehlers war NICHT das .ico-Speichern,
+sondern eine fehlende Datei:
+
+  FileNotFoundError: 'cammello/assets/icon.png'
+
+Der Ordner cammello/assets/ hat nie im Repo existiert (auch nicht in den
+alten Zips). Der Build brach beim ersten Zugriff auf icon.png ab, und aus
+demselben Grund konnte auch das Python-Skript nie ein Icon erzeugen.
+
+Dieses Paket legt den Ordner an:
+
+  cammello/assets/icon.png     dein Logo (weisses Kamel, dunkelblaue
+                               Kachel), 512x512 RGBA - die EINZIGE
+                               Quelldatei, aus der Mac (.icns) und
+                               Windows (.ico) beim Build abgeleitet werden
+  cammello/assets/README.md    erklaert den Ordner
+  .github/workflows/build.yml  der .ico-Schritt ist zusaetzlich robust
+                               gemacht (RGBA-Konvertierung, Mindestgroesse)
+
+Einspielen ins Repo
+-------------------
+  cd /Users/h/Documents/Python/Cammello        (dein Repo)
+  unzip -o /Pfad/zu/Cammello_assets.zip
+  git add cammello/assets .github/workflows/build.yml
+  git commit -m "Add missing assets/icon.png and harden the icon build"
+  git push
+
+WICHTIG - der Build laeuft auf dem TAG v0.12.14, der auf den alten Commit
+OHNE assets zeigt. Nach dem Push den Tag verschieben, sonst baut die
+Action weiter den alten Stand:
+  git tag -f v0.12.14
+  git push -f origin v0.12.14
+
+Pruefen, dass die Datei wirklich versioniert ist:
+  git ls-files cammello/assets/          (muss icon.png + README.md zeigen)
+Falls icon.png NICHT auftaucht, blockiert eine .gitignore-Regel:
+  git check-ignore -v cammello/assets/icon.png
+  git add -f cammello/assets/icon.png

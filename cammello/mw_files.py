@@ -563,6 +563,13 @@ class MWFilesMixin:
         self.table.insertRow(row)
         filename = os.path.basename(filepath)
         date = read_exif_date(filepath, self.logger)
+        # 0.12.15: the camera position rides along with the date - both come
+        # from the same EXIF read the user never has to think about. Off by
+        # switch for anyone who does not want to publish positions; files
+        # without GPS (and RAW, which Pillow cannot read) simply get nothing.
+        coords = None
+        if self.settings.value('exif_coordinates', True, type=bool):
+            coords = read_gps(filepath, self.logger)
 
         # Thumbnail (left column)
         thumb_item = QTableWidgetItem()
@@ -584,7 +591,8 @@ class MWFilesMixin:
         # Target filename on Commons; default = source filename incl. extension.
         self.table.setItem(row, self.COL_TITLE, QTableWidgetItem(filename))
         self.table.setItem(row, self.COL_DATE, QTableWidgetItem(date))
-        self.table.setItem(row, self.COL_DESC, QTableWidgetItem(''))
+        self.table.setItem(row, self.COL_DESC, QTableWidgetItem(
+            f'coordinates={format_coordinates(*coords)}' if coords else ''))
 
         # Effective (base + file) preview, read-only.
         eff_item = QTableWidgetItem('')

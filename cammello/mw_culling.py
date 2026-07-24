@@ -31,7 +31,7 @@ from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 
 from .constants import *
 from . import culling
-from . import channels, previews
+from . import channels, previews, edits
 from .culling_view import CullImageView
 from .widgets import (UploadProgressDialog, toolbar_separator,
                       slim_toolbar)
@@ -154,6 +154,17 @@ class _LabelBarDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(color))
             painter.drawEllipse(r.x() + inset, r.y() + inset, d, d)
             painter.setBrush(Qt.NoBrush)
+        # Crop/edit badge (0.13): a small scissors glyph top-left, offset when
+        # a channel dot is already there. Marks a file that will upload as an
+        # edited copy.
+        if index.data(Qt.UserRole + 4):
+            painter.setPen(QColor('#ffd24d'))
+            f = painter.font()
+            f.setPixelSize(13)
+            f.setBold(True)
+            painter.setFont(f)
+            bx = r.x() + inset + (14 if mark else 0)
+            painter.drawText(bx, r.y() + inset + 12, '\u2702')
         if rating == -1:
             # Rejected (0.12.6): grey the thumbnail out and put a small x in
             # the top-right corner - visible at a glance in strip and grid.
@@ -262,11 +273,15 @@ class _FolderCopyWorker(QThread):
     done = pyqtSignal(str)                 # summary (QThread.finished stays
     #                                        untouched under its own name)
 
-    def __init__(self, paths, dest_dir, logger):
+    def __init__(self, paths, dest_dir, logger, edit_map=None):
         super().__init__()
         self.paths = paths
         self.dest_dir = dest_dir
         self.log = logger
+        # 0.13: {source_path: record}. A file with an edit is exported as a
+        # rendered "<stem>_edit.jpg" copy (Harald's choice); everything else
+        # is a plain copy2. Sidecars are never edited.
+        self.edit_map = edit_map or {}
         self._cancelled = False
 
     def cancel(self):
@@ -287,13 +302,25 @@ class _FolderCopyWorker(QThread):
                 break
             name = os.path.basename(path)
             self.file_started.emit(i, name)
+            record = self.edit_map.get(path)
+            if record:
+                name = edits.export_name(path)
             target = os.path.join(self.dest_dir, name)
             try:
                 if os.path.exists(target):
                     skipped += 1
-                    self.progress.emit(i, '• ' + tr('Skipped (exists)'))
+                    self.progress.emit(i, '\u2022 ' + tr('Skipped (exists)'))
                     continue
-                shutil.copy2(path, target)
+                if record:
+                    rendered = edits.render_edited(path, record, target,
+                                                   self.log)
+                    if not rendered:
+                        # Rendering failed - fall back to the untouched
+                        # original rather than exporting nothing.
+                        shutil.copy2(path, os.path.join(
+                            self.dest_dir, os.path.basename(path)))
+                else:
+                    shutil.copy2(path, target)
             except Exception as e:
                 failed += 1
                 self.log.error('✗ Copy failed for "%s": %s', name, e,
@@ -478,6 +505,12 @@ class MWCullingMixin:
 
         split = QSplitter(Qt.Vertical)
         self.cull_view = CullImageView()
+        # Crop store (0.13): loaded once, kept in memory, saved on each edit.
+        self._cull_edits = edits.load_edits(self.settings)
+        self._cull_cropping = False
+        self.cull_view.crop.changed.connect(self._cull_update_crop_readout)
+        self.cull_view.crop.committed.connect(
+            lambda *_a: None)   # commit is driven from the tab (Enter key)
         self.cull_view.zoom_requested.connect(self._cull_request_full)
         self.cull_view.fullscreen_requested.connect(
             self._cull_toggle_fullscreen)
@@ -730,6 +763,10 @@ class MWCullingMixin:
                 if mark:
                     break
         li.setData(Qt.UserRole + 3, mark)
+        # Crop/edit badge (0.13): path-based, like the channel mark.
+        li.setData(Qt.UserRole + 4,
+                   edits.has_edit(self._cull_edits, item.display_path)
+                   if hasattr(self, '_cull_edits') else False)
         tips = []
         if item.is_pair:
             tips.append(tr('[P] RAW+JPEG pair (one picture, two files)'))
@@ -897,6 +934,14 @@ class MWCullingMixin:
 
     def _cull_key(self, event):
         key = event.key()
+        # Crop mode swallows the keys it needs; everything else falls through
+        # to normal culling so rating a neighbouring image still works.
+        if getattr(self, '_cull_cropping', False):
+            if self._cull_crop_key(key, event):
+                return
+        if key == Qt.Key_C and not (event.modifiers() & Qt.ControlModifier):
+            self._cull_toggle_crop()
+            return
         if key == Qt.Key_Right:
             self._cull_step(+1)
         elif key == Qt.Key_Left:
@@ -1077,6 +1122,158 @@ class MWCullingMixin:
         self._cull_show_index(
             max(0, min(len(self._cull_visible) - 1, self._cull_index + delta)))
 
+    # -- crop mode (0.13) --------------------------------------------------
+    # Aspect presets on the number keys. Each entry is the ratio in its
+    # LANDSCAPE form (width:height >= 1) or None for free. Pressing the same
+    # number again flips the orientation to portrait and back - so one key
+    # gives both 3:2 and 2:3 without spending a second key on it.
+    ASPECT_PRESETS = {
+        1: None,          # free
+        2: 3 / 2,         # 3:2  <-> 2:3
+        3: 4 / 3,         # 4:3  <-> 3:4
+        4: 1 / 1,         # square (orientation flip is a no-op)
+        5: 16 / 9,        # 16:9 <-> 9:16
+        6: 5 / 4,         # 5:4  <-> 4:5
+    }
+    _ASPECT_KEYS = {
+        Qt.Key_1: 1, Qt.Key_2: 2, Qt.Key_3: 3,
+        Qt.Key_4: 4, Qt.Key_5: 5, Qt.Key_6: 6,
+    }
+
+    def _cull_toggle_crop(self):
+        """C: turn the crop overlay on for the current image, or commit it
+        if it is already on. Esc cancels, Shift+C removes an existing crop."""
+        if getattr(self, '_cull_cropping', False):
+            self._cull_crop_commit()
+            return
+        item = self._cull_current_item()
+        if item is None:
+            return
+        self._cull_cropping = True
+        self._cull_crop_aspect = None
+        self._cull_crop_aspect_key = None
+        self._cull_crop_portrait = False
+        existing = edits.get_edit(self._cull_edits,
+                                  item.display_path)
+        box = tuple(existing['crop']) if existing and 'crop' in existing else None
+        self.cull_view.crop.begin(box)
+        self._cull_set_crop_legend(True)
+        self._cull_update_crop_readout(box or (0.1, 0.1, 0.8, 0.8))
+
+    def _cull_crop_key(self, key, event):
+        """Keys while cropping. Returns True if the key was consumed."""
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            self._cull_crop_commit()
+            return True
+        if key == Qt.Key_Escape:
+            self._cull_crop_cancel()
+            return True
+        if key == Qt.Key_C and (event.modifiers() & Qt.ShiftModifier):
+            self._cull_crop_remove()
+            return True
+        if key in self._ASPECT_KEYS:
+            digit = self._ASPECT_KEYS[key]
+            ratio = self.ASPECT_PRESETS[digit]
+            # Pressing the SAME preset again flips landscape <-> portrait;
+            # a different preset starts landscape. Free (None) and square
+            # have nothing to flip.
+            if ratio and digit == getattr(self, '_cull_crop_aspect_key', None):
+                self._cull_crop_portrait = not getattr(
+                    self, '_cull_crop_portrait', False)
+            else:
+                self._cull_crop_portrait = False
+            self._cull_crop_aspect_key = digit
+            if ratio and self._cull_crop_portrait:
+                ratio = 1.0 / ratio
+            self._cull_crop_aspect = ratio
+            self.cull_view.crop.set_aspect(ratio)
+            self.logger.debug('Crop aspect preset %d -> %s (%s)', digit, ratio,
+                              'portrait' if self._cull_crop_portrait
+                              else 'landscape')
+            return True
+        return False
+
+    def _cull_crop_commit(self):
+        overlay = self.cull_view.crop
+        item = self._cull_current_item()
+        if item is not None and overlay.has_box():
+            box = overlay._box_tuple()
+            if edits.set_crop(self._cull_edits, item.display_path, box):
+                edits.save_edits(self.settings, self._cull_edits)
+                self._cull_refresh_edit_badge(item)
+                self.logger.info('Crop set for %s: %s',
+                                 os.path.basename(item.display_path), box)
+        self._cull_end_crop()
+
+    def _cull_crop_cancel(self):
+        self.cull_view.crop.finish_cancel()
+        self._cull_end_crop()
+
+    def _cull_crop_remove(self):
+        item = self._cull_current_item()
+        if item is not None:
+            if edits.set_crop(self._cull_edits, item.display_path, None):
+                edits.save_edits(self.settings, self._cull_edits)
+                self._cull_refresh_edit_badge(item)
+                self.logger.info('Crop removed for %s',
+                                 os.path.basename(item.display_path))
+        self._cull_end_crop()
+
+    def _cull_end_crop(self):
+        self._cull_cropping = False
+        if self.cull_view.crop.isVisible():
+            self.cull_view.crop.hide()
+        self.cull_view.crop._box = None
+        self._cull_set_crop_legend(False)
+        self._cull_update_crop_readout(None)
+
+    def _cull_set_crop_legend(self, on):
+        """While cropping, the toolbar's mode label becomes a crop-key
+        legend; leaving crop restores the normal "numbers = STARS/COLORS"
+        text. One label, two meanings, so the keys are explained exactly
+        where the eye already looks for what the numbers do."""
+        if on:
+            self.cull_mode_lbl.setText(tr('[crop] 1-6 ratio (again = rotate) '
+                                          '\u00b7 Enter apply \u00b7 Esc cancel '
+                                          '\u00b7 \u21e7C remove'))
+            self.cull_mode_lbl.setToolTip(tr(
+                'Crop keys:\n'
+                '  1  free    2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\n'
+                'Press the same number again to switch that ratio between '
+                'landscape\nand portrait (2:3, 3:4, 9:16, 4:5). Drag the box '
+                'or its handles to\nplace it. Enter applies, Esc cancels, '
+                'Shift+C removes the crop.'))
+        else:
+            self._cull_update_mode_label()
+            self.cull_mode_lbl.setToolTip(tr(
+                'Number keys 1-5 set stars or colors; M toggles the mode.'))
+
+    def _cull_update_crop_readout(self, box):
+        """Show the resulting pixel size in the top-left info overlay while
+        cropping."""
+        if not getattr(self, '_cull_cropping', False) or box is None:
+            # restore the normal info overlay
+            self._cull_update_info_overlay()
+            return
+        px = self.cull_view.crop.current_pixels()
+        if px:
+            self.cull_view.set_info_overlay(
+                tr('Crop: {w}\u00d7{h} px  \u2014  Enter: apply, Esc: cancel, '
+                   'Shift+C: remove').format(w=px[0], h=px[1]))
+            self.cull_view.show_info_overlay(True)
+
+    def _cull_refresh_edit_badge(self, item):
+        """Update the strip row's badge data and repaint it."""
+        try:
+            row = self._cull_visible.index(item)
+        except ValueError:
+            return
+        if 0 <= row < self.cull_strip.count():
+            li = self.cull_strip.item(row)
+            li.setData(Qt.UserRole + 4,
+                       edits.has_edit(self._cull_edits, item.display_path))
+            self.cull_strip.update(self.cull_strip.indexFromItem(li))
+
     def _cull_current_item(self):
         if 0 <= self._cull_index < len(self._cull_visible):
             return self._cull_visible[self._cull_index]
@@ -1228,8 +1425,11 @@ class MWCullingMixin:
             len(with_sidecars), self, verb=tr('Copying'),
             title=tr('Copy') + f' - {APP_NAME}')
         self._cull_copy_done = 0
+        edit_map = {p: edits.get_edit(self._cull_edits, p)
+                    for p in with_sidecars
+                    if edits.has_edit(self._cull_edits, p)}
         self._cull_copy_worker = _FolderCopyWorker(with_sidecars, dest,
-                                                   self.logger)
+                                                   self.logger, edit_map)
         self._cull_copy_worker.file_started.connect(
             self._cull_copy_dlg.set_current)
         self._cull_copy_worker.progress.connect(self._cull_on_copy_progress)

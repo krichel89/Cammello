@@ -1,4 +1,5 @@
-"""EXIF capture-date reading."""
+"""EXIF reading: capture date, GPS position, camera details."""
+import re
 try:
     from PIL import Image
     HAS_PIL = True
@@ -39,6 +40,93 @@ def read_exif_date(filepath, log=None):
         if log:
             log.debug('Could not read EXIF date for %s: %s', filepath, e)
         return ''
+
+
+def _dms_to_decimal(dms, ref):
+    """(deg, min, sec) + 'N'/'S'/'E'/'W' -> signed decimal degrees.
+
+    EXIF stores the three parts as rationals; float() handles Pillow's
+    IFDRational as well as plain ints and Fractions.
+    """
+    deg, minutes, seconds = (float(x) for x in dms)
+    value = deg + minutes / 60.0 + seconds / 3600.0
+    if str(ref).strip().upper() in ('S', 'W'):
+        value = -value
+    return value
+
+
+def read_gps(filepath, log=None):
+    """Camera position from EXIF as (lat, lon) in decimal degrees, or None.
+
+    The GPS block is its own IFD (0x8825) with numeric tags:
+      1 GPSLatitudeRef   2 GPSLatitude   3 GPSLongitudeRef   4 GPSLongitude
+    Returns None when the file has no GPS block, when a part is missing, or
+    when the values are unusable - the caller then simply has no coordinates,
+    which is a normal case, not an error.
+
+    Note: this reads what Pillow can open. JPEGs are covered; for camera RAW
+    files Pillow generally cannot read the EXIF, so a RAW-only shot yields
+    None here even though the camera wrote GPS.
+    """
+    if not HAS_PIL:
+        return None
+    try:
+        img = Image.open(filepath)
+        exif = img.getexif()
+        if not exif:
+            return None
+        gps = exif.get_ifd(0x8825)
+        if not gps:
+            return None
+        lat, lat_ref = gps.get(2), gps.get(1)
+        lon, lon_ref = gps.get(4), gps.get(3)
+        if not lat or not lon or not lat_ref or not lon_ref:
+            return None
+        latitude = _dms_to_decimal(lat, lat_ref)
+        longitude = _dms_to_decimal(lon, lon_ref)
+    except Exception as e:
+        if log:
+            log.debug('Could not read EXIF GPS for %s: %s', filepath, e)
+        return None
+    # A camera that never got a fix writes zeros; and out-of-range values are
+    # corrupt rather than "somewhere at sea".
+    if not (-90.0 <= latitude <= 90.0) or not (-180.0 <= longitude <= 180.0):
+        if log:
+            log.debug('EXIF GPS out of range for %s: %s, %s',
+                      filepath, latitude, longitude)
+        return None
+    if latitude == 0.0 and longitude == 0.0:
+        return None
+    return latitude, longitude
+
+
+def format_coordinates(lat, lon):
+    """The text form Cammello stores in the description: 'lat, lon'.
+
+    Six decimals is about 0.1 m - far beyond what a camera GPS resolves, but
+    it costs nothing and avoids rounding away a good fix.
+    """
+    return f'{lat:.6f}, {lon:.6f}'
+
+
+def parse_coordinates(text):
+    """'48.137154, 11.576124' -> (48.137154, 11.576124), or None.
+
+    Accepts a comma or a semicolon as separator and tolerates surrounding
+    whitespace, because this value can be typed or pasted by hand.
+    """
+    if not text:
+        return None
+    parts = [p.strip() for p in re.split(r'[;,]', str(text)) if p.strip()]
+    if len(parts) != 2:
+        return None
+    try:
+        lat, lon = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        return None
+    return lat, lon
 
 
 def _fmt_exposure(value):

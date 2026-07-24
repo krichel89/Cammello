@@ -39,6 +39,7 @@ from . import credentials
 from . import channels
 from .menus import MenusMixin
 from .wikidata import refresh_wd_fields
+from .exif import read_gps, format_coordinates
 from .i18n import (tr, UI_LANGUAGES, set_language,
                    default_language_from_locale, current_language)
 
@@ -602,6 +603,8 @@ class MainWindow(FlickrMixin,
         self.file_struct = StructuredDescriptionEditor(is_base=False)
         self.file_struct.suggest_depicts_requested.connect(
             self._suggest_depicts_categories)
+        self.file_struct.coords_exif_btn.clicked.connect(
+            self._fill_coordinates_from_exif)
         self.file_struct.changed.connect(self._commit_editor)
         self.file_struct.committed.connect(self._commit_editor)
         self.file_struct.setVisible(False)
@@ -695,6 +698,22 @@ class MainWindow(FlickrMixin,
 
         # Appearance: color scheme (system / light / dark), applied app-wide
         # via a Fusion palette and persisted.
+        # 0.12.15: publishing a camera position is a decision, not a
+        # default everyone must live with - so it is switchable, and the
+        # switch sits with the other upload settings.
+        self.exif_coords_cb = QCheckBox(
+            tr('Read camera position from EXIF when adding files'))
+        self.exif_coords_cb.setToolTip(tr(
+            'Fills the coordinates field of each newly added file from its '
+            'EXIF data.\nTurn this off to publish no positions; already '
+            'filled fields stay as\nthey are, and "from EXIF" in the file '
+            'section keeps working either way.'))
+        self.exif_coords_cb.setChecked(
+            self.settings.value('exif_coordinates', True, type=bool))
+        self.exif_coords_cb.toggled.connect(
+            lambda on: (self.settings.setValue('exif_coordinates', bool(on)),
+                        self.settings.sync()))
+
         appearance = QGroupBox(tr('Appearance'))
         af = QFormLayout(appearance)
         # NoWheel: this page scrolls; the wheel must not flip the scheme.
@@ -882,6 +901,47 @@ class MainWindow(FlickrMixin,
         dlg.raise_()
         dlg.activateWindow()
 
+    def _fill_coordinates_from_exif(self):
+        """Re-read the camera position from the selected file's EXIF.
+
+        Files get their coordinates automatically when they are added; this
+        is the way back after clearing the field, and the way to fill files
+        that were added before this version. With several rows selected it
+        fills EACH of them from its OWN file - one position for a whole
+        selection would be wrong for all but one picture.
+        """
+        rows = self._selected_rows_all()
+        if not rows:
+            return
+        # The editor may hold unsaved edits for the anchor row; flush them
+        # first, otherwise writing the description below would drop them.
+        self._commit_editor()
+        filled = skipped = 0
+        for row in rows:
+            item = self.table.item(row, self.COL_FILENAME)
+            desc_item = self.table.item(row, self.COL_DESC)
+            if not item or not desc_item:
+                continue
+            path = item.data(Qt.UserRole)
+            coords = read_gps(path, self.logger) if path else None
+            if not coords:
+                skipped += 1
+                continue
+            desc_item.setText(set_coordinates_line(
+                desc_item.text(), format_coordinates(*coords)))
+            filled += 1
+        self.logger.info('Coordinates from EXIF: %d filled, %d without GPS.',
+                         filled, skipped)
+        if filled:
+            self._load_selected_desc()
+            self.statusBar().showMessage(
+                tr('{n} coordinate(s) read from EXIF.').format(n=filled), 5000)
+        else:
+            QMessageBox.information(
+                self, tr('Coordinates'),
+                tr('No GPS position in the EXIF data of the selected '
+                   'file(s).'))
+
     def _link_license_fields(self):
         """Keep the licence template and the P275 item on the same licence.
 
@@ -967,6 +1027,7 @@ class MainWindow(FlickrMixin,
         form.addRow(tr('Other fields:'), self.other_fields_mirror)
         form.addRow(tr('Gallery prefix:'), self.gallery_prefix_mirror)
         form.addRow(tr('HTTP timeout (s):'), self.timeout_mirror)
+        form.addRow('', self.exif_coords_cb)
         apply_form_ratio(form)
         return box
 
@@ -1121,6 +1182,17 @@ class MainWindow(FlickrMixin,
     def _open_log_dialog(self):
         self._open_page_dialog('log', self._log_tab, tr('Log'),
                                size=(820, 520))
+
+    def _open_manual(self):
+        """Open the on-wiki manual in the current UI language.
+
+        The five manual pages match the five UI languages one to one, so the
+        language the user reads Cammello in is the language they get the
+        manual in - no separate choice to make.
+        """
+        url = manual_url(current_language())
+        self.logger.info('Opening the manual: %s', url)
+        QDesktopServices.openUrl(QUrl(url))
 
     def _open_about_dialog(self):
         self._open_page_dialog('about', self._about_tab_widget,

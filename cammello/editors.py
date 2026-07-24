@@ -388,6 +388,42 @@ class StructuredDescriptionEditor(QWidget):
             self.override_combo = None
 
         # Categories — plain text (not a Wikidata field).
+        if not self.is_base:
+            # 0.12.15: camera position. Per FILE, never in the base block -
+            # every picture has its own position, and one position for a
+            # whole session would be wrong for all but one of them.
+            self.coordinates = QLineEdit()
+            self.coordinates.setPlaceholderText(
+                tr('e.g.') + ' 48.137154, 11.576124')
+            self.coordinates.setToolTip(tr(
+                'Where the CAMERA stood, in decimal degrees: latitude, '
+                'longitude.\n\n'
+                'Filled from the EXIF data of the file when it is added, if '
+                'the camera\nrecorded a position - "from EXIF" reads it '
+                'again, e.g. after you\ncleared the field. Leave it empty '
+                'to publish no position at all.\n\n'
+                'Becomes {{Location dec}} in the wikitext and the '
+                '"coordinates of the\npoint of view" statement (P1259) in '
+                'the structured data - the camera\nposition, not the '
+                'position of what is pictured.'))
+            self.coords_exif_btn = QPushButton(tr('from EXIF'))
+            self.coords_exif_btn.setToolTip(tr(
+                'Read the position from the EXIF data of the selected '
+                'file(s) again.'))
+            coords_row = QHBoxLayout()
+            coords_row.setContentsMargins(0, 0, 0, 0)
+            coords_row.addWidget(self.coordinates)
+            coords_row.addWidget(self.coords_exif_btn)
+            self._coords_row_widget = QWidget()
+            self._coords_row_widget.setLayout(coords_row)
+            # The row is a container; the explanation lives on the field, so
+            # copy it up for the label loop below (and for hovering the gap
+            # between the input and the button).
+            self._coords_row_widget.setToolTip(self.coordinates.toolTip())
+        else:
+            self.coordinates = None
+            self.coords_exif_btn = None
+
         self.categories = QLineEdit()
         self.categories.setPlaceholderText(tr('e.g.') + ' Berlinale 2026; Portraits')
         self.categories.setToolTip(tr(
@@ -464,12 +500,15 @@ class StructuredDescriptionEditor(QWidget):
             cat_btn.clicked.connect(self.suggest_depicts_requested)
         form.addRow(_label_with_button(tr('Categories:'), cat_btn),
                     self.categories)
+        if not self.is_base:
+            form.addRow(tr('Coordinates:'), self._coords_row_widget)
         if self.is_base:
             form.addRow(tr('Gallery suffix:'), self.gallery_suffix)
         # The row LABELS carry the same tooltip as their field: someone who
         # wonders what "P180" means points at the label, not the input.
         for w in (self.depicts, self.override_combo, self.categories,
-                  self.created_during, self.gallery_suffix):
+                  self.created_during, self.gallery_suffix,
+                  self._coords_row_widget if not self.is_base else None):
             if w is not None:
                 lbl = form.labelForField(w)
                 if lbl is not None:
@@ -523,6 +562,8 @@ class StructuredDescriptionEditor(QWidget):
             self.depicts.setText(sd.get('depicts', ''))
             self._set_override_value(
                 (sd.get('depicts_override') or '').strip().lower())
+        if self.coordinates is not None:
+            self.coordinates.setText(sd.get('coordinates', ''))
         if self.is_base:
             self.created_during.setText(sd.get('created_during', ''))
             self.gallery_suffix.setText(sd.get('gallery_suffix', ''))
@@ -545,6 +586,10 @@ class StructuredDescriptionEditor(QWidget):
             override = self._override_value()
             if override:
                 lines.append(f'depicts_override={override}')
+        if self.coordinates is not None:
+            coords = self.coordinates.text().strip()
+            if coords:
+                lines.append(f'coordinates={coords}')
         if self.is_base:
             for key, w in (('created_during', self.created_during),
                            ('gallery_suffix', self.gallery_suffix)):

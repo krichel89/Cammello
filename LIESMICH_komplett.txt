@@ -1,51 +1,72 @@
-Cammello 0.12.14 - Komplettpaket (20.07.2026)
-=============================================
+Cammello 0.13.0 - Komplettpaket (24.07.2026)
+============================================
 
-Vollstaendiger Stand. Dieses Paket ersetzt den Ordnerinhalt komplett -
-gedacht als Reparatur, nachdem beim Auspacken eines Delta-Pakets Dateien
-verlorengegangen sind.
+Vollstaendiger Stand. Dieses Paket enthaelt ALLES seit 0.12.14 - du
+brauchst keine der Zwischenlieferungen. Wichtig, weil seit 0.12.14 ein
+NEUES MODUL dazugekommen ist (cammello/edits.py); mit den Delta-Zips
+allein wuerde die App mit ImportError starten.
 
-WICHTIG - so entpacken, sonst fehlen Dateien
---------------------------------------------
-Im FINDER ersetzt macOS beim Auspacken einen gleichnamigen Ordner
-VOLLSTAENDIG, statt die Dateien hineinzumischen. Bei einem Delta-Paket,
-das nur einzelne Dateien in cammello/ enthaelt, ist danach der Rest des
-Ordners weg - genau daher der Fehler
-
-  ModuleNotFoundError: No module named 'cammello.logging_setup'
-
-Sicher ist der Weg ueber das Terminal, der zusammenfuehrt statt zu
-ersetzen:
+So entpacken
+------------
+Am sichersten im Terminal, das fuehrt zusammen statt zu ersetzen:
 
   cd /Users/h/Documents/Python/Cammello
-  unzip -o /Pfad/zu/Cammello_0.12.14_komplett.zip
+  unzip -o /Pfad/zu/Cammello_0.13.0_komplett.zip
 
-Das -o ueberschreibt vorhandene Dateien ohne Rueckfrage und laesst alles
-andere stehen.
+Kontrolle danach:
+  ls cammello/*.py | wc -l     # 33 (32 + deine mw_oauth.py)
+  python3 Cammello.py
 
 cammello/mw_oauth.py fehlt - mit Absicht
 ----------------------------------------
 Diese Datei enthaelt DEINE OAuth-Zugangsdaten und wird nie mitgeliefert,
 damit sie beim Entpacken nicht ueberschrieben wird.
-
   * Ist deine Datei noch da: nichts tun.
-  * Fehlt sie (z. B. nach dem Finder-Unfall oben): mw_oauth_KEYS_EINTRAGEN.py
-    aus der Wurzel nach cammello/mw_oauth.py kopieren und CONSUMER_KEY und
-    CONSUMER_SECRET eintragen. Die Datei aus der Wurzel danach loeschen.
+  * Fehlt sie: mw_oauth_KEYS_EINTRAGEN.py aus der Wurzel nach
+    cammello/mw_oauth.py kopieren, CONSUMER_KEY und CONSUMER_SECRET
+    eintragen, die Datei aus der Wurzel loeschen.
 
-Neu in 0.12.14
---------------
-Lizenz und Urheberrechtsstatus sind Dropdowns:
-  Lizenzvorlage / P275   CC0 1.0, CC BY 4.0, CC BY-SA 4.0
-                         (Vorgabe {{Cc-by-sa-4.0}} / Q18199165)
-  P6216                  Q73566113 unter CC-Lizenz verfuegbar (Vorgabe),
-                         Q50423863 urheberrechtlich geschuetzt,
-                         Q19652 gemeinfrei
-Eine Lizenzwahl in einem der beiden Lizenzfelder setzt das andere passend
-mit. Alle Felder bleiben frei beschreibbar.
+Neu in 0.13.0 (alles seit 0.12.14)
+----------------------------------
+GEODATEN
+  Kameraposition aus dem EXIF beim Hinzufuegen, beim Upload in BEIDE
+  Haelften: {{Location dec|..|..}} im Wikitext und P1259 "Koordinaten des
+  Aufnahmestandpunkts" in den strukturierten Daten. Feld "Koordinaten" mit
+  Knopf "aus EXIF" im Dateiabschnitt; automatisches Lesen in den
+  Upload-Einstellungen abschaltbar. RAW liefert meist nichts (Pillow liest
+  deren EXIF nicht) - bei RAW+JPEG kommt es aus dem JPEG.
 
-Kontrolle nach dem Entpacken
-----------------------------
-  cd /Users/h/Documents/Python/Cammello
-  ls cammello/ | wc -l          # 33 Dateien (inkl. deiner mw_oauth.py)
-  python3 Cammello.py
+NICHTDESTRUKTIVER ZUSCHNITT (Culling)
+  Taste C oeffnet den Zuschnittrahmen (Drittelraster, acht Griffe,
+  durchsichtige Verdunklung aussen). Zifferntasten 1-6 waehlen ein
+  Seitenverhaeltnis, DIESELBE Taste nochmal kippt zwischen Quer- und
+  Hochformat:
+      1 frei · 2 3:2/2:3 · 3 4:3/3:4 · 4 1:1 · 5 16:9/9:16 · 6 5:4/4:5
+  Enter uebernimmt, Esc bricht ab, Shift+C entfernt. Scheren-Symbol im
+  Filmstreifen markiert bearbeitete Dateien; im Zuschnitt-Modus zeigt das
+  Werkzeugleisten-Label die Tastenlegende (Tabelle im Tooltip).
+  Die Originaldatei wird NIE veraendert - der Zuschnitt wird erst beim
+  Verlassen angewandt: der Culling-Ordnerexport schreibt fuer bearbeitete
+  Dateien eine gerenderte Kopie "<name>_edit.jpg".
+  (Die Belichtungs-UI und die Anwendung beim Commons/FTP/Flickr-Upload
+  folgen in einer spaeteren Scheibe - edits.py rendert EV bereits.)
+
+HANDBUCH IM HILFE-MENUE
+  Hilfe > "Cammello-Handbuch (auf Commons)", Taste F1, oeffnet die
+  Wiki-Seite in der eingestellten Programmsprache (/de /en /es /fr /it).
+
+GALERIE-SEITEN: drei Korrekturen
+  * Ein fehlgeschlagener Seitenabruf (503, Ratenbegrenzung) wurde wie
+    "Seite existiert nicht" behandelt und konnte eine gewachsene Galerie
+    ERSETZEN. Jetzt bricht die Galerie-Bearbeitung ab und meldet den
+    Fehler.
+  * Seite ohne Galerie bekam kein oeffnendes <gallery> - jetzt wird ein
+    vollstaendiger Block angehaengt.
+  * Der Seitenname aus Praefix + Suffix wird sauber zusammengesetzt: genau
+    ein Schraegstrich, kein "//", Leerzeichen getrimmt. Du tippst den
+    Schraegstrich nicht selbst.
+
+Neue Testdateien
+----------------
+  test_geo_01215.py  test_edits.py  test_crop_0130.py
+  test_manual_0131.py  test_gallery_0132.py

@@ -8,6 +8,7 @@ from .i18n import tr
 from .constants import *
 from .sdc import *
 from .api import MediaWikiApi
+from .exif import parse_coordinates
 
 
 class UploadWorker(QThread):
@@ -119,6 +120,16 @@ class UploadWorker(QThread):
                 cats_str = '\n'.join(cats)
 
                 parts = [info]
+                # 0.12.15: camera position. {{Location dec}} takes decimal
+                # degrees and is the wikitext half; the P1259 claim below is
+                # the structured half of the same fact.
+                coords = parse_coordinates(sd.get('coordinates', ''))
+                if coords:
+                    parts.append('{{Location dec|%.6f|%.6f}}' % coords)
+                elif sd.get('coordinates', '').strip():
+                    self.log.warning('Coordinates for "%s" are unusable and '
+                                     'were skipped: %r',
+                                     fname, sd.get('coordinates'))
                 if other_templates:
                     parts.append(other_templates)
                 if license_text:
@@ -156,7 +167,11 @@ class UploadWorker(QThread):
                         labels[lang] = val
                     elif key in PROPERTY_MAP:
                         prop = PROPERTY_MAP[key]
-                        if key == 'depicts':
+                        if key == 'coordinates':
+                            coord = parse_coordinates(val)
+                            if coord:
+                                claims.append((prop, ('coord',) + coord))
+                        elif key == 'depicts':
                             # Separator is ";"; "," is still tolerated so that
                             # older comma-separated values keep working.
                             for qid in re.split(r'[;,]', val):
@@ -179,19 +194,20 @@ class UploadWorker(QThread):
                     else:
                         self.log.warning('SDC skipped: no pageid for "%s".', fname)
 
-                # Collect gallery entry
+                # Collect gallery entry. The page title is assembled from the
+                # prefix (a setting) and the per-session suffix; the user
+                # types neither slash - gallery_page_name puts in exactly one
+                # and cleans up whatever they typed around it.
                 gallery_suffix = sd.get('gallery_suffix', '').strip()
-                if self.gallery_prefix:
-                    if gallery_suffix:
-                        gallery_page = self.gallery_prefix.rstrip('/') + '/' + gallery_suffix
-                    else:
-                        gallery_page = self.gallery_prefix
+                prefix = (self.gallery_prefix or '').strip()
+                if prefix:
+                    gallery_page = gallery_page_name(prefix, gallery_suffix) or None
                 elif gallery_suffix:
                     gallery_page = None  # no prefix set -> skip gallery
                     self.log.warning('gallery_suffix set but no gallery prefix '
                                      '-> gallery skipped for "%s".', fname)
                 else:
-                    gallery_page = self.gallery_prefix or None
+                    gallery_page = None
 
                 caption = sd.get('caption_en', '')
                 gallery_entries.setdefault(gallery_page, []).append(

@@ -70,6 +70,19 @@ jobs:
     needs: test
     if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'mac' }}
     runs-on: macos-latest
+    # Signing secrets are lifted to job-level env because a step's `if:`
+    # cannot reference the `secrets` context directly (GitHub only exposes
+    # secrets through env). The signing/notarize steps below guard on these,
+    # so the build stays green until the secrets are set and signs itself
+    # once they are.
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+      MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+      MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -144,6 +157,89 @@ jobs:
             --hidden-import paramiko \
             --collect-all keyring --hidden-import keyring.backends.macOS \
             --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
+
+      # ── Code signing + notarization ───────────────────────────────────
+      # These steps stay DORMANT until the signing secrets exist: each
+      # guards on env.MACOS_CERTIFICATE (the notarize step also on
+      # env.MACOS_NOTARY_KEY), and those env values come from the job-level
+      # env block above. A step `if:` cannot read the `secrets` context
+      # directly, which is why the secrets are lifted to env first. Result:
+      # the build stays green WITHOUT the secrets and starts signing
+      # automatically once they are set. Nothing here was testable in
+      # advance - it needs a real Apple Developer ID certificate and Apple's
+      # servers - so treat the first signed run as the real test and check
+      # the two verify lines (codesign --verify, spctl) in the logs.
+      #
+      # Required repository secrets (Settings > Secrets and variables >
+      # Actions) once the certificates are bought:
+      #   MACOS_CERTIFICATE        base64 of the Developer ID Application
+      #                            .p12  (base64 -i cert.p12 | pbcopy)
+      #   MACOS_CERTIFICATE_PWD    the .p12 export password
+      #   MACOS_CERTIFICATE_NAME   the identity string, e.g.
+      #                            "Developer ID Application: Harald Krichel (TEAMID)"
+      #   MACOS_KEYCHAIN_PWD       any throwaway password for the temp keychain
+      #   MACOS_NOTARY_KEY         base64 of the App Store Connect API key .p8
+      #   MACOS_NOTARY_KEY_ID      the API key ID
+      #   MACOS_NOTARY_ISSUER_ID   the API key issuer UUID
+      - name: Codesign app bundle
+        if: ${{ env.MACOS_CERTIFICATE != '' }}
+        run: |
+          set -euo pipefail
+          # A minimal Hardened Runtime entitlements file. Hardened Runtime is
+          # required for notarization; PyInstaller apps need the two JIT/
+          # unsigned-memory exceptions or Python's own dynamic code loading
+          # is killed at launch.
+          cat > entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+           "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key><true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          # Import the certificate into a fresh, unlocked keychain so codesign
+          # never shows an interactive prompt on the runner.
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$MACOS_KEYCHAIN_PWD" build.keychain
+          # Sign every nested binary first, then the bundle, with a secure
+          # timestamp and the Hardened Runtime.
+          codesign --force --deep --timestamp --options runtime \
+            --entitlements entitlements.plist \
+            --sign "$MACOS_CERTIFICATE_NAME" dist/Cammello.app
+          codesign --verify --deep --strict --verbose=2 dist/Cammello.app
+          rm -f certificate.p12
+
+      - name: Notarize app bundle
+        if: ${{ env.MACOS_CERTIFICATE != '' && env.MACOS_NOTARY_KEY != '' }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_NOTARY_KEY" | base64 --decode > notary_key.p8
+          # Notarization needs a zip of the .app; notarytool waits for the
+          # verdict with --wait.
+          ditto -c -k --keepParent dist/Cammello.app notarize.zip
+          xcrun notarytool submit notarize.zip \
+            --key notary_key.p8 \
+            --key-id "$MACOS_NOTARY_KEY_ID" \
+            --issuer "$MACOS_NOTARY_ISSUER_ID" \
+            --wait
+          # Staple the ticket into the bundle so it validates offline, then
+          # confirm Gatekeeper accepts it.
+          xcrun stapler staple dist/Cammello.app
+          spctl -a -vvv --type execute dist/Cammello.app
+          rm -f notary_key.p8
+
+      - name: Package Mac app
+        run: |
           cd dist
           zip -r Cammello_Mac.zip Cammello.app
 
@@ -179,8 +275,15 @@ jobs:
         run: |
           from PIL import Image
           im = Image.open("cammello/assets/icon.png")
-          im.save("cammello/assets/icon.ico",
-                  sizes=[(16, 16), (32, 32), (48, 48), (128, 128), (256, 256)])
+          # The .ico writer is picky across Pillow versions: it wants an
+          # RGBA image and refuses sizes larger than the source. Normalise
+          # to RGBA, and if the source is smaller than 256 px upscale it to
+          # a 256 square first so every requested size can be produced.
+          im = im.convert("RGBA")
+          if min(im.size) < 256:
+              im = im.resize((256, 256), Image.LANCZOS)
+          sizes = [(16, 16), (32, 32), (48, 48), (128, 128), (256, 256)]
+          im.save("cammello/assets/icon.ico", format="ICO", sizes=sizes)
 
       - name: Build App
         run: |

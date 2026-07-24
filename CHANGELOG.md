@@ -4,6 +4,53 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-07-24
+
+### Added
+- Geodata. The camera position is read from a file's EXIF when it is added
+  and published in both halves: {{Location dec}} in the wikitext and the
+  "coordinates of the point of view" statement (P1259) in the structured
+  data. The per-file section shows the position in a "Coordinates" field
+  that can be edited, cleared or re-read with "from EXIF"; automatic
+  reading can be switched off in the upload settings.
+- Non-destructive cropping in the culling view. Press C on an image to draw
+  a crop with a rule-of-thirds grid and eight handles; number keys 1-6 pick
+  an aspect ratio, and pressing the same key again flips it between
+  landscape and portrait (3:2/2:3, 4:3/3:4, 16:9/9:16, 5:4/4:5; 1 is free,
+  4 is square). Enter applies, Esc cancels, Shift+C removes. The resulting
+  pixel size is shown while cropping, a scissors badge marks cropped files
+  in the filmstrip, and the toolbar's mode label becomes a key legend for
+  as long as crop mode is on.
+- Crops are stored per file and never touch the original. They are applied
+  when a file LEAVES Cammello: the culling folder export writes a rendered
+  "<name>_edit.jpg" copy for edited files and a plain copy for the rest.
+- New module edits.py: the per-image edit store (crop and, from a later
+  slice, exposure) with a JPEG renderer that crops and adjusts exposure in
+  linear light while preserving EXIF.
+- The manual is linked from the Help menu (F1). It opens the on-wiki page
+  in the current UI language - one page per language, the same five as the
+  interface itself. An unknown language falls back to the English page.
+
+### Fixed
+- A gallery page is never overwritten because of a server hiccup. Reading
+  the page now distinguishes "does not exist" (HTTP 404) from "could not be
+  read" (anything else); a failed read aborts the gallery edit instead of
+  treating the page as new and replacing a grown gallery with the current
+  session's files.
+- When the target page exists but has no gallery yet, a COMPLETE gallery
+  block is appended. Previously only the file lines and a closing tag were
+  written, leaving the filenames as plain text after a stray </gallery>.
+- The gallery page title is assembled cleanly from prefix and suffix. You
+  never type the separator: exactly one slash is inserted, and a leading
+  slash on the suffix, a trailing one on the prefix, doubled slashes,
+  surrounding whitespace and spaces around an inner slash are all absorbed,
+  so no "//" can reach Commons as part of a page title.
+- Cropping no longer crashes when resizing the box by a handle on stricter
+  PyQt5 builds: the image rectangle is a QRectF, so it never mixes with the
+  integer QRect that a polygon bounding box returns.
+- The area outside the crop box dims transparently instead of rendering as
+  solid black.
+
 ## [0.12.14] - 2026-07-20
 
 ### Changed

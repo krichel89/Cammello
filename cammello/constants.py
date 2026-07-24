@@ -6,7 +6,51 @@ import threading
 from PyQt5.QtCore import QRegExp
 
 
-__version__ = '0.12.14'
+__version__ = '0.13.0'
+
+# On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
+# per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
+# language maps straight onto a page. Unknown codes fall back to English.
+MANUAL_BASE_URL = 'https://commons.wikimedia.org/wiki/Commons:Cammello/documentation'
+
+# Mirrors i18n.UI_LANGUAGES; kept as a literal here so constants.py stays
+# free of imports from i18n (which would be circular).
+MANUAL_LANGUAGES = ('en', 'de', 'es', 'fr', 'it')
+
+
+def manual_url(lang):
+    """URL of the manual page for a UI language code.
+
+    Only the five languages that actually have a page are used; anything
+    else falls back to English rather than linking to a red link.
+    """
+    code = lang if lang in MANUAL_LANGUAGES else 'en'
+    return f'{MANUAL_BASE_URL}/{code}'
+
+
+def gallery_page_name(prefix, suffix):
+    """Join a gallery prefix and suffix into ONE clean wiki page title.
+
+    The user types the two halves separately and should never have to think
+    about the separator, so this puts in exactly one slash between them and
+    tolerates whatever they typed around it:
+
+        'User:Seewolf'  + 'Berlinale 2026'   -> User:Seewolf/Berlinale 2026
+        'User:Seewolf/' + '/Berlinale 2026'  -> User:Seewolf/Berlinale 2026
+        ' User:Seewolf' + 'Berlinale // 26'  -> User:Seewolf/Berlinale/26
+
+    Every slash-separated segment is trimmed and empty ones are dropped, so
+    doubled slashes, stray leading or trailing ones and spaces around a
+    slash can never reach Commons as part of the title. Returns '' when
+    nothing usable is left.
+    """
+    segments = []
+    for part in (prefix, suffix):
+        for segment in (part or '').split('/'):
+            segment = segment.strip()
+            if segment:
+                segments.append(segment)
+    return '/'.join(segments)
 
 # pyexiv2 is documented as NOT thread-safe ("Not thread safe, because pyexiv2
 # uses some global variables in C++", pyexiv2 README). A lock (this used to be
@@ -32,6 +76,10 @@ TRACKING_CATEGORY_WIKITEXT = f'[[Category:{TRACKING_CATEGORY}]]'
 SD_KEYS = [
     'creator', 'copyright', 'license', 'depicts', 'created_during',
     'gallery_suffix', 'depicts_override',
+    # 0.12.15: camera position as "lat, lon" in decimal degrees. Unlike the
+    # keys above this is not a QID - it becomes {{Location dec}} in the
+    # wikitext and a globe-coordinate claim (P1259) in the structured data.
+    'coordinates',
 ]
 
 # Licence presets for the dropdowns (0.12.14). Each row pairs the WIKITEXT
@@ -67,6 +115,10 @@ PROPERTY_MAP = {
     'license': 'P275',
     'depicts': 'P180',
     'created_during': 'P10408',
+    # P1259 "coordinates of the point of view" = where the CAMERA stood,
+    # which is what EXIF GPS records. (The depicted object's position would
+    # be P625 - a different statement, not derivable from EXIF.)
+    'coordinates': 'P1259',
 }
 
 # Standard width (px) for single-value Wikidata QID fields in the structured

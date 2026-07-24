@@ -136,6 +136,25 @@ _LINT_KEYS_RE = (r'(?:creator|copyright|license|depicts|depicts_override|'
                  r'created_during|gallery_suffix|caption_[a-z]{2,3})')
 
 
+def set_coordinates_line(text, value):
+    """Set (or replace) the coordinates= line in a per-file description.
+
+    Written as a helper rather than by rebuilding the description through the
+    editor: filling coordinates for a MULTI-row selection must not disturb
+    anything else those rows carry - captions, depicts, free wikitext. An
+    empty value removes the line.
+    """
+    text = text or ''
+    stripped = re.sub(r'(?:^|\n)coordinates=[^\n]*', '', text,
+                      flags=re.IGNORECASE)
+    value = (value or '').strip()
+    if not value:
+        return stripped.strip()
+    if not stripped.strip():
+        return f'coordinates={value}'
+    return f'coordinates={value}\n' + stripped.strip()
+
+
 def find_description_issues(text):
     """Scan description_all for likely typos and return human-readable warnings.
 
