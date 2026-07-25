@@ -89,6 +89,170 @@ TRANSLATIONS = {
         'fr': 'Nouveau nom (sans extension) :',
         'it': 'Nuovo nome (senza estensione):',
     },
+    # 0.14.2: resuming an interrupted upload batch.
+    'Interrupted upload': {
+        'de': 'Unterbrochener Upload',
+        'es': 'Subida interrumpida',
+        'fr': 'Téléversement interrompu',
+        'it': 'Caricamento interrotto',
+    },
+    '&Resume interrupted upload\u2026': {
+        'de': 'Unterbrochenen Upload &fortsetzen\u2026',
+        'es': '&Reanudar la subida interrumpida\u2026',
+        'fr': '&Reprendre le téléversement interrompu\u2026',
+        'it': '&Riprendi il caricamento interrotto\u2026',
+    },
+    'Continue a batch that was cancelled or interrupted by a crash.': {
+        'de': 'Einen abgebrochenen oder durch einen Absturz unterbrochenen '
+              'Stapel fortsetzen.',
+        'es': 'Continuar un lote cancelado o interrumpido por un fallo.',
+        'fr': 'Poursuivre un lot annulé ou interrompu par un plantage.',
+        'it': 'Continuare un lotto annullato o interrotto da un arresto '
+              'anomalo.',
+    },
+    'An upload from {when} was interrupted.': {
+        'de': 'Ein Upload vom {when} wurde unterbrochen.',
+        'es': 'Una subida del {when} quedó interrumpida.',
+        'fr': 'Un téléversement du {when} a été interrompu.',
+        'it': 'Un caricamento del {when} è stato interrotto.',
+    },
+    '{done} of {total} file(s) were uploaded; {open} still to go.': {
+        'de': '{done} von {total} Datei(en) sind hochgeladen; {open} fehlen '
+              'noch.',
+        'es': 'Se subieron {done} de {total} archivo(s); faltan {open}.',
+        'fr': '{done} fichier(s) sur {total} ont été téléversés ; il en '
+              'reste {open}.',
+        'it': 'Caricati {done} di {total} file; ne restano {open}.',
+    },
+    '{n} file(s) failed and will not be retried.': {
+        'de': '{n} Datei(en) sind fehlgeschlagen und werden nicht erneut '
+              'versucht.',
+        'es': '{n} archivo(s) fallaron y no se reintentarán.',
+        'fr': '{n} fichier(s) ont échoué et ne seront pas réessayés.',
+        'it': '{n} file non sono riusciti e non verranno ritentati.',
+    },
+    'Resume it now?': {
+        'de': 'Jetzt fortsetzen?',
+        'es': '¿Reanudarla ahora?',
+        'fr': 'Le reprendre maintenant ?',
+        'it': 'Riprenderlo ora?',
+    },
+    'Resume': {
+        'de': 'Fortsetzen',
+        'es': 'Reanudar',
+        'fr': 'Reprendre',
+        'it': 'Riprendi',
+    },
+    'Later': {
+        'de': 'Später',
+        'es': 'Más tarde',
+        'fr': 'Plus tard',
+        'it': 'Più tardi',
+    },
+    'Discard': {
+        'de': 'Verwerfen',
+        'es': 'Descartar',
+        'fr': 'Abandonner',
+        'it': 'Scarta',
+    },
+    'The interrupted upload is kept - resume it from the Upload menu.': {
+        'de': 'Der unterbrochene Upload bleibt erhalten \u2014 fortsetzen '
+              'lässt er sich über das Upload-Menü.',
+        'es': 'La subida interrumpida se conserva: puedes reanudarla desde '
+              'el menú Subir.',
+        'fr': 'Le téléversement interrompu est conservé \u2014 reprenez-le '
+              'depuis le menu Téléversement.',
+        'it': 'Il caricamento interrotto viene conservato: riprendilo dal '
+              'menu Caricamento.',
+    },
+    'There is no interrupted upload to resume.': {
+        'de': 'Es gibt keinen unterbrochenen Upload zum Fortsetzen.',
+        'es': 'No hay ninguna subida interrumpida que reanudar.',
+        'fr': 'Il n\u2019y a aucun téléversement interrompu à reprendre.',
+        'it': 'Non c\u2019è alcun caricamento interrotto da riprendere.',
+    },
+    'Every file of that batch is already on Commons.': {
+        'de': 'Alle Dateien dieses Stapels sind bereits auf Commons.',
+        'es': 'Todos los archivos de ese lote ya están en Commons.',
+        'fr': 'Tous les fichiers de ce lot sont déjà sur Commons.',
+        'it': 'Tutti i file di quel lotto sono già su Commons.',
+    },
+    'That upload was started against a different wiki ({url}). Resume it '
+    'here anyway?': {
+        'de': 'Dieser Upload wurde gegen ein anderes Wiki gestartet '
+              '({url}). Trotzdem hier fortsetzen?',
+        'es': 'Esa subida se inició contra otro wiki ({url}). ¿Reanudarla '
+              'aquí de todos modos?',
+        'fr': 'Ce téléversement a été lancé sur un autre wiki ({url}). Le '
+              'reprendre ici malgré tout ?',
+        'it': 'Quel caricamento è stato avviato su un altro wiki ({url}). '
+              'Riprenderlo comunque qui?',
+    },
+    '{n} file(s) are no longer where they were. They will be skipped:': {
+        'de': '{n} Datei(en) liegen nicht mehr an ihrem alten Ort. Sie '
+              'werden übersprungen:',
+        'es': '{n} archivo(s) ya no están donde estaban. Se omitirán:',
+        'fr': '{n} fichier(s) ne sont plus à leur emplacement. Ils seront '
+              'ignorés :',
+        'it': '{n} file non sono più dove si trovavano. Verranno saltati:',
+    },
+    'Continue?': {
+        'de': 'Fortfahren?',
+        'es': '¿Continuar?',
+        'fr': 'Continuer ?',
+        'it': 'Continuare?',
+    },
+    # 0.14.2: the edit panel's drag handle and its crop legend. The four
+    # one-word keys are legend cells, deliberately lower case and short -
+    # they sit in a narrow panel next to a key symbol.
+    'Drag to move this panel': {
+        'de': 'Zum Verschieben ziehen',
+        'es': 'Arrastra para mover este panel',
+        'fr': 'Faites glisser pour déplacer ce panneau',
+        'it': 'Trascina per spostare questo pannello',
+    },
+    'Crop keys': {
+        'de': 'Zuschnitt-Tasten',
+        'es': 'Teclas de recorte',
+        'fr': 'Touches de recadrage',
+        'it': 'Tasti di ritaglio',
+    },
+    'Same number again = rotate': {
+        'de': 'Gleiche Ziffer nochmal = drehen',
+        'es': 'Mismo número otra vez = girar',
+        'fr': 'Même chiffre à nouveau = pivoter',
+        'it': 'Stesso numero di nuovo = ruota',
+    },
+    'free': {
+        'de': 'frei',
+        'es': 'libre',
+        'fr': 'libre',
+        'it': 'libero',
+    },
+    'apply': {
+        'de': 'anwenden',
+        'es': 'aplicar',
+        'fr': 'appliquer',
+        'it': 'applica',
+    },
+    'cancel': {
+        'de': 'abbrechen',
+        'es': 'cancelar',
+        'fr': 'annuler',
+        'it': 'annulla',
+    },
+    'remove': {
+        'de': 'entfernen',
+        'es': 'quitar',
+        'fr': 'supprimer',
+        'it': 'rimuovi',
+    },
+    'Starting\u2026': {
+        'de': 'Startet\u2026',
+        'es': 'Iniciando\u2026',
+        'fr': 'Démarrage\u2026',
+        'it': 'Avvio\u2026',
+    },
     'That name is reserved on Windows or ends with a dot or space.': {
         'de': 'Dieser Name ist unter Windows reserviert oder endet mit '
               'Punkt oder Leerzeichen.',

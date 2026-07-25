@@ -7,6 +7,8 @@ from PyQt5.QtWidgets import (QGraphicsView, QGraphicsScene,
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QBrush
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QRect, QPoint
 
+from . import previews
+
 
 class CropOverlay(QLabel):
     """A transparent child widget over the whole view that lets the user
@@ -345,7 +347,14 @@ class CullImageView(QGraphicsView):
         # normalized coordinates. Hidden until the tab turns crop mode on.
         self.crop = CropOverlay(self)
         # 0.14: the untouched pixmap plus the crop currently DISPLAYED.
+        # 0.14.2: _source_image is the image AS DECODED; _full_pixmap is
+        # that image with white balance and exposure applied. Keeping the
+        # source means repeated tone changes never re-read the file, and
+        # the pipette always samples untouched pixels.
+        self._source_image = None
         self._full_pixmap = QPixmap()
+        self._tone_wb = None
+        self._tone_ev = 0.0
         self._crop_display = None
         self._pipette = False
 
@@ -354,7 +363,28 @@ class CullImageView(QGraphicsView):
     def set_image(self, qimage, keep_view=False):
         """Show a QImage. keep_view=True swaps the pixels without resetting
         zoom/pan (used when the 'full' level arrives while zoomed in)."""
-        self._full_pixmap = QPixmap.fromImage(qimage)
+        self._source_image = qimage
+        self._rebuild_pixmap(keep_view)
+
+    def set_tone(self, wb, ev):
+        """Show this image with white balance `wb` and exposure `ev` applied
+        (0.14.2) - the live preview of what the export will contain. Cheap
+        to call repeatedly: nothing is re-decoded, only the tone pass runs
+        again over the kept source image."""
+        wb = tuple(wb) if wb else None
+        if wb == self._tone_wb and ev == self._tone_ev:
+            return
+        self._tone_wb, self._tone_ev = wb, ev
+        if self._source_image is not None:
+            self._rebuild_pixmap(keep_view=True)
+
+    def tone(self):
+        return self._tone_wb, self._tone_ev
+
+    def _rebuild_pixmap(self, keep_view):
+        img = previews.apply_tone(self._source_image,
+                                  self._tone_wb, self._tone_ev)
+        self._full_pixmap = QPixmap.fromImage(img)
         self._apply_crop_display(keep_view)
 
     def set_crop_display(self, box):
@@ -393,6 +423,7 @@ class CullImageView(QGraphicsView):
             self.fit()
 
     def clear_image(self):
+        self._source_image = None
         self._full_pixmap = QPixmap()
         self._item.setPixmap(QPixmap())
         self._fit = True
@@ -508,14 +539,32 @@ class CullImageView(QGraphicsView):
         return self._pipette
 
     def _sample_at(self, view_pos):
-        """-> (r, g, b) under a viewport position, or None if off-image."""
+        """-> (r, g, b) under a viewport position, or None if off-image.
+
+        Sampled from the UNTOUCHED source image, not from what is on
+        screen (0.14.2): with the tone preview active the displayed pixels
+        already carry a white balance, and measuring those would apply the
+        correction a second time. Picking a spot always means "make THIS
+        spot neutral" relative to the original.
+        """
         pm = self._item.pixmap()
         if pm.isNull():
             return None
         pt = self._item.mapFromScene(self.mapToScene(view_pos)).toPoint()
         if not pm.rect().contains(pt):
             return None
-        colour = pm.toImage().pixelColor(pt)
+        src = self._source_image
+        if src is None or src.isNull():
+            colour = pm.toImage().pixelColor(pt)
+            return colour.red(), colour.green(), colour.blue()
+        x, y = pt.x(), pt.y()
+        if self._crop_display:      # the item shows a cut-out of the source
+            cx, cy, _cw, _ch = self._crop_display
+            x += int(round(cx * src.width()))
+            y += int(round(cy * src.height()))
+        if not src.rect().contains(x, y):
+            return None
+        colour = src.pixelColor(x, y)
         return colour.red(), colour.green(), colour.blue()
 
     def mousePressEvent(self, event):

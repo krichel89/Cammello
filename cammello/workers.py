@@ -9,6 +9,7 @@ from .constants import *
 from .sdc import *
 from .api import MediaWikiApi
 from .exif import parse_coordinates
+from . import upload_journal as journal_mod
 
 
 class UploadWorker(QThread):
@@ -17,10 +18,15 @@ class UploadWorker(QThread):
     error = pyqtSignal(int, str)      # row, error message
     file_started = pyqtSignal(int, str)   # index, target filename
 
-    def __init__(self, api, rows, gallery_prefix, ignore_warnings):
+    def __init__(self, api, rows, gallery_prefix, ignore_warnings,
+                 journal=None):
         super().__init__()
         self.api = api
         self.log = api.log
+        # 0.14.2: crash-safe batch journal. Written through after every
+        # file, so an interrupted run can be picked up where it stopped.
+        # None means "do not journal" (used by tests).
+        self.journal = journal
         # Each row's description_all is already the merged text (upload settings
         # + base + per-file), built by MWEditorMixin._effective_text.
         self.rows = rows
@@ -32,6 +38,35 @@ class UploadWorker(QThread):
         # halfway, so no half-uploaded file is left on Commons.
         self._cancelled = False
 
+    def _journal_mark(self, row, status, **kw):
+        """Write one status change through to disk. A journal failure must
+        never break a running upload - it is a safety net, not a
+        dependency."""
+        if self.journal is None:
+            return
+        try:
+            self.journal.mark(row, status, **kw)
+        except Exception as e:
+            self.log.warning('Journal could not be written (%s); the upload '
+                             'continues, but a crash would not be '
+                             'resumable.', e)
+
+    def _journal_finish(self):
+        """Drop the journal when nothing is left to resume; keep it when a
+        cancel left files untouched, so they can be picked up later."""
+        if self.journal is None:
+            return
+        try:
+            if self.journal.is_resumable():
+                done, failed, openc, total = self.journal.counts()
+                self.log.info('Journal kept: %d of %d file(s) still to '
+                              'upload - the run can be resumed.',
+                              openc, total)
+            else:
+                self.journal.discard()
+        except Exception as e:
+            self.log.warning('Journal cleanup failed: %s', e)
+
     def cancel(self):
         """Request a stop. The current file is finished, then the run ends."""
         self._cancelled = True
@@ -39,6 +74,15 @@ class UploadWorker(QThread):
 
     def run(self):
         gallery_entries = {}   # gallery_page -> list of (filename, caption)
+        if self.journal is not None:
+            # A resumed run inherits the gallery entries of the files that
+            # went up before the interruption: galleries are written once,
+            # at the end, so those were never recorded on-wiki.
+            gallery_entries.update(self.journal.collected_gallery())
+            if gallery_entries:
+                self.log.info('Resuming: %d gallery entry(ies) carried over '
+                              'from the interrupted run.',
+                              sum(len(v) for v in gallery_entries.values()))
         success_count = 0
         sdc_failures = 0
         cancelled_at = None
@@ -138,7 +182,11 @@ class UploadWorker(QThread):
                     parts.append(cats_str)
                 wikitext = '\n'.join(parts)
 
-                # Upload
+                # Upload. The journal is marked BEFORE the request goes
+                # out: if the process dies while the file is in flight, the
+                # resume knows to ask Commons whether it arrived instead of
+                # blindly uploading it a second time.
+                self._journal_mark(row, journal_mod.IN_FLIGHT, target=filename)
                 self.api.upload(
                     filename, row['filepath'], wikitext,
                     f'Uploaded with {APP_NAME}', self.ignore_warnings
@@ -147,6 +195,7 @@ class UploadWorker(QThread):
                 # The file never made it to Commons.
                 self.log.error('✗ Error for "%s": %s', fname, e, exc_info=True)
                 msg = str(e) or f'{type(e).__name__} (no message)'
+                self._journal_mark(row, journal_mod.FAILED, error=msg)
                 self.error.emit(i, msg)
                 self.progress.emit(i, '✗ ' + tr('Error'))
                 continue
@@ -213,10 +262,16 @@ class UploadWorker(QThread):
                 gallery_entries.setdefault(gallery_page, []).append(
                     (filename, caption)
                 )
+                self._journal_mark(row, journal_mod.DONE,
+                                   gallery=(gallery_page, filename, caption))
 
             except Exception as e:
                 sdc_ok = False
                 sdc_failures += 1
+                # The file IS on Commons; only the post-processing failed.
+                # Marking it done keeps a resume from uploading it again.
+                self._journal_mark(row, journal_mod.DONE, target=filename,
+                                   error=str(e))
                 self.log.error('Uploaded "%s", but post-processing (structured '
                                'data / gallery) failed: %s', fname, e,
                                exc_info=True)
@@ -240,15 +295,25 @@ class UploadWorker(QThread):
 
         # Update galleries. Files that did go up are still added to the
         # gallery, even after a cancel - they exist on Commons now.
+        gallery_ok = True
         for gallery_page, entries in gallery_entries.items():
             if not gallery_page:
                 continue
             try:
                 self.api.update_gallery(gallery_page, entries)
             except Exception as e:
+                gallery_ok = False
                 self.log.error('✗ Gallery error (%s): %s',
                                gallery_page, e, exc_info=True)
                 self.error.emit(-1, f'Gallery error ({gallery_page}): {e}')
+        if self.journal is not None and gallery_ok:
+            # Written once: a later resume must not add them a second time.
+            try:
+                self.journal.set_gallery_written()
+            except Exception as e:      # a journal problem is never fatal
+                self.log.warning('Journal: could not record the gallery '
+                                 'state: %s', e)
+        self._journal_finish()
 
         total = len(self.rows)
         # Files that are on Commons but whose structured data could not be

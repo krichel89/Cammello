@@ -37,6 +37,7 @@ from . import iptc as iptc_mod
 from . import mw_oauth
 from . import credentials
 from . import channels
+from . import splash as splash_mod
 from .menus import MenusMixin
 from .wikidata import refresh_wd_fields
 from .exif import read_gps, format_coordinates
@@ -1100,7 +1101,9 @@ class MainWindow(FlickrMixin,
         page.setObjectName('aboutPage')   # dark background via ABOUT_STYLE
         outer = QVBoxLayout(page)
         outer.addStretch()
-        icon_file = asset_path('icon.png')
+        icon_file = asset_path('icon_rounded.png')
+        if not os.path.exists(icon_file):
+            icon_file = asset_path('icon.png')
         if os.path.exists(icon_file):
             logo = QLabel()
             logo.setPixmap(QPixmap(icon_file).scaled(
@@ -1119,6 +1122,27 @@ class MainWindow(FlickrMixin,
         f.setPointSize(f.pointSize() + 2)
         tagline.setFont(f)
         outer.addWidget(tagline)
+
+        # The WikiPortraits wordmark (0.14.2). Its lettering is near-black,
+        # so it gets a light plate here - the About page is dark. Skipped
+        # silently when the asset is missing.
+        wp_file = asset_path('wikiportraits.png')
+        if os.path.exists(wp_file):
+            wp_pm = QPixmap(wp_file)
+            if not wp_pm.isNull():
+                wp = QLabel()
+                wp.setPixmap(wp_pm.scaledToWidth(
+                    300, Qt.SmoothTransformation))
+                wp.setAlignment(Qt.AlignCenter)
+                wp.setStyleSheet('background: #f4f6f9; border-radius: 8px;'
+                                 'padding: 10px 16px;')
+                wp_row = QHBoxLayout()
+                wp_row.addStretch()
+                wp_row.addWidget(wp)
+                wp_row.addStretch()
+                outer.addSpacing(10)
+                outer.addLayout(wp_row)
+                outer.addSpacing(4)
 
         deps = [f'Python {sys.version.split()[0]}', f'PyQt5 (Qt {QT_VERSION_STR})',
                 'requests']
@@ -1481,7 +1505,20 @@ def main():
     if os.path.exists(_icon_file):
         app.setWindowIcon(QIcon(_icon_file))
 
+    # 0.14.2: a drawn start screen instead of the black window the build
+    # used to open with. Created before logging so it appears immediately;
+    # it never blocks the start (show_splash returns None on any error).
+    splash = splash_mod.show_splash()
+
     logger, emitter, gui_handler, log_path = setup_logging()
+    # Logged AFTER logging exists (the splash goes up before it, to appear
+    # as early as possible): a start screen that silently fails to show is
+    # otherwise impossible to diagnose from a distance (0.14.3).
+    if splash is None:
+        logger.warning('Start screen not shown: %s',
+                       splash_mod.LAST_ERROR or 'unknown reason')
+    else:
+        logger.info('Start screen shown.')
 
     # Write unhandled exceptions to the log as well.
     def excepthook(exc_type, exc_value, exc_tb):
@@ -1490,8 +1527,21 @@ def main():
         sys.__excepthook__(exc_type, exc_value, exc_tb)
     sys.excepthook = excepthook
 
+    if splash is not None:
+        splash.note(tr('Starting\u2026'))
     window = MainWindow(logger, emitter, gui_handler, log_path)
     window.show()
+    if splash is not None:
+        # Keep it up for a moment even on a fast start - see
+        # Splash.finish_after_minimum.
+        held = splash.finish_after_minimum(window)
+        if held:
+            logger.debug('Start screen held for another %d ms.', held)
+    # 0.14.2: after the window is up (and the splash gone), offer to resume
+    # a batch that an earlier run left unfinished. Deferred with a timer so
+    # it never delays the window appearing, and it only reads a file - no
+    # network, no keyring.
+    QTimer.singleShot(400, window.offer_resume_on_start)
     sys.exit(app.exec())
 
 

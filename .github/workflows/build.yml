@@ -152,14 +152,41 @@ jobs:
           # would otherwise make `mkdir` fail with "File exists").
           rm -rf icon.iconset icon_padded.png
           python3 - <<'PY'
-          from PIL import Image
+          from PIL import Image, ImageDraw
+
+          # macOS does NOT round app icons itself - the artwork has to carry
+          # the shape. Our source is a full-bleed square, so it was showing
+          # up with hard corners next to every other dock icon (0.14.2).
+          #
+          # Apple's grid: the rounded body covers 824 of 1024 px, and its
+          # outline is a SUPERELLIPSE (|x|^n + |y|^n = 1, n ~ 5), not a
+          # rounded rectangle - a plain corner radius reads subtly wrong
+          # beside system icons. The mask is drawn oversampled and scaled
+          # down, which is what antialiases the curve.
+          def squircle(size, n=5.0, ss=8):
+              big = size * ss
+              m = Image.new("L", (big, big), 0)
+              d = ImageDraw.Draw(m)
+              a = big / 2.0
+              for y in range(big):
+                  dy = abs((y + 0.5 - a) / a) ** n
+                  if dy >= 1.0:
+                      continue
+                  dx = (1.0 - dy) ** (1.0 / n)
+                  d.line([(a - dx * a, y), (a + dx * a, y)], fill=255)
+              return m.resize((size, size), Image.LANCZOS)
+
           im = Image.open("cammello/assets/icon.png").convert("RGBA")
-          size = 1024
+          size, content = 1024, 824
+          art = im.resize((content, content), Image.LANCZOS)
+          art.putalpha(squircle(content))
           canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-          art = im.resize((int(size * 0.82), int(size * 0.82)), Image.LANCZOS)
-          off = (size - art.width) // 2
+          off = (size - content) // 2
           canvas.paste(art, (off, off), art)
           canvas.save("icon_padded.png")
+          # Keep the runtime asset in step, so the splash and the About page
+          # show the same shape as the dock.
+          canvas.save("cammello/assets/icon_rounded.png")
           PY
           mkdir -p icon.iconset
           for size in 16 32 64 128 256 512; do

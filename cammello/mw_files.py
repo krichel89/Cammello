@@ -168,6 +168,11 @@ class MWFilesMixin:
         self.test_btn.setEnabled(True)
         self._set_login_state('in', username)
         self.status_bar.showMessage(tr('Logged in as {username}').format(username=username))
+        # 0.14.2: a resume that had to log in first continues by itself now,
+        # instead of making the user find the menu entry again.
+        if getattr(self, '_resume_after_login', False):
+            self._resume_after_login = False
+            self.resume_upload()
 
     def _on_login_failure(self, error_msg):
         self.login_btn.setEnabled(True)

@@ -300,6 +300,14 @@ class MenusMixin:
         self._scope('mediawiki', self._act(
             menu, tr('&Upload to Commons'), 'start_upload',
             QKeySequence('Ctrl+U')))
+        # 0.14.2: pick an interrupted batch back up. Always present, not
+        # hidden when there is nothing to resume - an entry that appears
+        # only sometimes is one nobody remembers exists; it says so plainly
+        # when the journal is empty.
+        self._scope('mediawiki', self._act(
+            menu, tr('&Resume interrupted upload…'), 'resume_upload',
+            tip=tr('Continue a batch that was cancelled or interrupted by '
+                   'a crash.')))
         self._scope('culling', self._act(
             menu, tr('Add culling selection to &tabs'), '_cull_apply',
             QKeySequence('Ctrl+Shift+A')))

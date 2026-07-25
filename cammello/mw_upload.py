@@ -22,6 +22,7 @@ from .i18n import tr
 from .sdc import (extract_structured_data, DEPICTS_OVERRIDES,
                   canonical_override)
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
+from . import upload_journal
 from .logging_setup import *
 from . import channels
 from .sdc import *
@@ -240,11 +241,6 @@ class MWUploadMixin:
                 'template': 'Information',
             })
 
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setMaximum(len(rows))
-        self.progress_bar.setValue(0)
-        self.upload_btn.setEnabled(False)
-
         # Uploading to Commons IS the channel decision (0.12.4): mark these
         # files as the CC/Commons channel so they are greyed out and skipped
         # in the FTP/Flickr lists from now on. Done at the start, not on
@@ -252,20 +248,60 @@ class MWUploadMixin:
         self._mark_uploaded_channel([r['filepath'] for r in rows],
                                     channels.MARK_COMMONS)
 
+        # 0.14.2: open a crash-safe journal for this batch. It carries the
+        # complete rows, so a resume after a crash does not depend on the
+        # table still holding them.
+        journal = None
+        try:
+            journal = upload_journal.Journal.start(
+                rows,
+                gallery_prefix=self.gallery_prefix_edit.text(),
+                ignore_warnings=self.ignore_warnings_cb.isChecked(),
+                api_url=getattr(self.api, 'api_url', ''),
+                username=getattr(self.api, 'username', '') or '')
+            self.logger.info('Upload journal opened for %d file(s): %s',
+                             len(rows), upload_journal.journal_path())
+        except Exception as e:
+            # Never block an upload because the journal could not be
+            # created - the batch simply is not resumable then.
+            self.logger.warning('Upload journal could not be created (%s); '
+                                'the upload runs without crash recovery.', e)
+
+        self._launch_upload_worker(rows, journal)
+
+    def _launch_upload_worker(self, rows, journal, resumed=False):
+        """Start the worker for `rows`. Shared by a fresh upload and a
+        resumed one (0.14.2) - the worker never touches the table, it works
+        purely off the row dicts, which is what makes a resume possible."""
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setMaximum(len(rows))
+        self.progress_bar.setValue(0)
+        self.upload_btn.setEnabled(False)
+
+        # Map worker index -> table row via the file path. On a resume the
+        # rows may not be in the table at all; -1 then means "no row to
+        # update", which on_progress already tolerates.
+        self.upload_row_map = self._rows_to_table_rows(rows) if resumed \
+            else getattr(self, 'upload_row_map', list(range(len(rows))))
+
         # Progress window with a Cancel button. Modeless on purpose: the table
         # stays readable (per-row status keeps updating behind it) while the
         # run is going on.
         self._progress_dlg = UploadProgressDialog(len(rows), self)
         self._done_count = 0
 
+        gallery_prefix = (journal.data.get('gallery_prefix', '') if
+                          (resumed and journal is not None)
+                          else self.gallery_prefix_edit.text())
+        ignore_warnings = (journal.data.get('ignore_warnings', False) if
+                           (resumed and journal is not None)
+                           else self.ignore_warnings_cb.isChecked())
+
         # No base_text argument any more: each row already carries the fully
         # merged description_all (settings SDC + base + per-file). The worker
         # used to take a base_text it never read.
-        self.worker = UploadWorker(
-            self.api, rows,
-            self.gallery_prefix_edit.text(),
-            self.ignore_warnings_cb.isChecked()
-        )
+        self.worker = UploadWorker(self.api, rows, gallery_prefix,
+                                   ignore_warnings, journal=journal)
         self.worker.progress.connect(self.on_progress)
         self.worker.error.connect(self.on_error)
         self.worker.finished.connect(self.on_finished)
@@ -275,6 +311,172 @@ class MWUploadMixin:
         self._progress_dlg.cancel_requested.connect(self.worker.cancel)
         self._progress_dlg.show()
         self.worker.start()
+
+    # ── Resuming an interrupted batch (0.14.2) ───────────────────────────
+    def has_resumable_upload(self):
+        """True if an interrupted batch is waiting. Cheap and offline: it
+        reads one small file, no network and no keyring."""
+        try:
+            return upload_journal.load_resumable() is not None
+        except Exception:
+            return False
+
+    def offer_resume_on_start(self):
+        """Called once after the window is up. Asks - never resumes on its
+        own: uploading is not something to start behind the user's back."""
+        try:
+            j = upload_journal.load_resumable()
+        except Exception:
+            return
+        if j is None:
+            return
+        done, failed, openc, total = j.counts()
+        self.logger.info('An interrupted upload was found: %d/%d done, %d '
+                         'still open (started %s).',
+                         done, total, openc, j.data.get('started', '?'))
+        box = QMessageBox(self)
+        box.setWindowTitle(tr('Interrupted upload'))
+        box.setIcon(QMessageBox.Question)
+        box.setText(tr('An upload from {when} was interrupted.').format(
+            when=j.data.get('started', '?')))
+        detail = tr('{done} of {total} file(s) were uploaded; '
+                    '{open} still to go.').format(done=done, total=total,
+                                                  open=openc)
+        if failed:
+            detail += '\n' + tr('{n} file(s) failed and will not be '
+                                'retried.').format(n=failed)
+        box.setInformativeText(detail + '\n\n'
+                               + tr('Resume it now?'))
+        resume_btn = box.addButton(tr('Resume'), QMessageBox.AcceptRole)
+        later_btn = box.addButton(tr('Later'), QMessageBox.RejectRole)
+        box.addButton(tr('Discard'), QMessageBox.DestructiveRole)
+        box.setDefaultButton(later_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is resume_btn:
+            self.resume_upload()
+        elif clicked is later_btn:
+            self.statusBar().showMessage(
+                tr('The interrupted upload is kept - resume it from the '
+                   'Upload menu.'), 8000)
+        else:
+            j.discard()
+            self.logger.info('The interrupted upload was discarded by the '
+                             'user.')
+
+    def resume_upload(self):
+        """Continue an interrupted batch where it stopped."""
+        try:
+            j = upload_journal.load_resumable()
+        except Exception as e:
+            self.logger.error('The upload journal could not be read: %s', e)
+            j = None
+        if j is None:
+            QMessageBox.information(
+                self, tr('Interrupted upload'),
+                tr('There is no interrupted upload to resume.'))
+            return
+        if not self.api:
+            self.logger.info('Resume requested while not logged in: opening '
+                             'the login.')
+            self._resume_after_login = True
+            self.do_login()
+            return
+
+        # The journal may come from a different wiki or account - uploading
+        # someone else's batch into the wrong place would be hard to undo.
+        was_url = j.data.get('api_url', '')
+        if was_url and was_url != getattr(self.api, 'api_url', ''):
+            if QMessageBox.warning(
+                    self, tr('Interrupted upload'),
+                    tr('That upload was started against a different wiki '
+                       '({url}). Resume it here anyway?').format(url=was_url),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No) != QMessageBox.Yes:
+                return
+
+        self._settle_in_flight(j)
+        rows = j.pending_rows()
+        if not rows:
+            self.logger.info('Nothing left to resume; the journal was '
+                             'cleared.')
+            j.discard()
+            QMessageBox.information(
+                self, tr('Interrupted upload'),
+                tr('Every file of that batch is already on Commons.'))
+            return
+
+        missing = [r for r in rows if not os.path.exists(r.get('filepath', ''))]
+        if missing:
+            names = '\n'.join(os.path.basename(r.get('filepath', '?'))
+                               for r in missing[:15])
+            if len(missing) > 15:
+                names += '\n' + tr('… (+{n} more)').format(
+                    n=len(missing) - 15)
+            self.logger.warning('%d file(s) of the interrupted batch are no '
+                                'longer at their old path.', len(missing))
+            if QMessageBox.warning(
+                    self, tr('Interrupted upload'),
+                    tr('{n} file(s) are no longer where they were. They will '
+                       'be skipped:').format(n=len(missing))
+                    + '\n\n' + names + '\n\n' + tr('Continue?'),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes) != QMessageBox.Yes:
+                return
+            skipped = {id(r) for r in missing}
+            for r in missing:
+                j.mark(r, upload_journal.FAILED,
+                       error='file not found at resume', save=False)
+            j.save()
+            rows = [r for r in rows if id(r) not in skipped]
+            if not rows:
+                return
+
+        self.api.timeout = self._get_timeout()
+        self.logger.info('=== Resuming the interrupted upload: %d file(s) '
+                         '===', len(rows))
+        self._launch_upload_worker(rows, j, resumed=True)
+
+    def _settle_in_flight(self, j):
+        """Resolve entries that were in flight when the process died.
+
+        The upload request went out, but no answer was recorded - the file
+        may be on Commons already. Asking beats guessing: re-uploading
+        blindly would either fail with an "exists" warning or, with
+        "ignore warnings" on, silently overwrite the file with itself.
+        At most one entry can be in this state, so this is one request.
+        """
+        for e in j.in_flight_entries():
+            target = e.get('target') or e['row'].get('target_name', '')
+            if not target:
+                e['status'] = upload_journal.PENDING
+                continue
+            try:
+                page_id = self.api.get_page_id(target)
+            except Exception as exc:
+                self.logger.warning('Could not check whether "%s" arrived on '
+                                    'Commons (%s); it will be uploaded '
+                                    'again.', target, exc)
+                e['status'] = upload_journal.PENDING
+                continue
+            if page_id:
+                self.logger.info('"%s" was already on Commons - counted as '
+                                 'uploaded, not sent again.', target)
+                e['status'] = upload_journal.DONE
+            else:
+                self.logger.info('"%s" never arrived on Commons - it will be '
+                                 'uploaded again.', target)
+                e['status'] = upload_journal.PENDING
+        j.save()
+
+    def _rows_to_table_rows(self, rows):
+        """Best-effort mapping row dict -> table row index (-1 if absent)."""
+        by_path = {}
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, self.COL_FILENAME)
+            if item is not None:
+                by_path[item.data(Qt.UserRole)] = r
+        return [by_path.get(row.get('filepath'), -1) for row in rows]
 
     def _table_row(self, worker_index):
         """Translate a worker index into a table row (see upload_row_map)."""

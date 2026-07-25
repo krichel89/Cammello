@@ -4,6 +4,58 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.3] - 2026-07-25
+
+### Fixed
+- The start screen did not appear on macOS: it drew rounded corners on a
+  transparent pixmap and asked for WA_TranslucentBackground to keep them,
+  and it re-set the window flags after construction. The card is now opaque
+  and rectangular, and the flags are left as QSplashScreen sets them.
+- The start screen was closed as soon as the main window was up - a few
+  hundred milliseconds on a fast machine. It now stays for at least 1.5
+  seconds, and the log records whether it was shown.
+
+### Added
+- `make_icns.py`: builds the rounded macOS icon set locally. The same
+  rounding lives in the CI workflow, so an .app built anywhere else never
+  got it.
+
+## [0.14.2] - 2026-07-25
+
+### Added
+- Live preview of white balance and exposure in the culling view, using the
+  SAME lookup tables as the export, so the screen and the uploaded copy
+  agree. numpy fast path with a pure-Python fallback; debounced on key
+  repeat, immediate on an image change.
+- The floating edit panel can be dragged anywhere in the view (grab any
+  non-button area). Its position is kept as a fraction of the view, so it
+  survives resizing and fullscreen, and is always clamped inside. A
+  double-click on the background resets it to the top-right corner.
+- The crop key legend is shown in the edit panel while cropping.
+- A drawn start screen (NEW MODULE `cammello/splash.py`) carrying the app
+  icon and the WikiPortraits wordmark, replacing the black window the
+  application used to open with. The wordmark also appears in the About
+  dialog. Both sit on a light band because the lettering is near-black.
+
+- An interrupted upload batch can be resumed (NEW MODULE
+  `cammello/upload_journal.py`). A crash-safe journal in ~/Cammello records
+  the state after every file, written atomically, and carries the complete
+  rows so a resume does not need the table. A file that was in flight when
+  the process died is checked against Commons instead of being uploaded
+  blindly a second time; gallery entries collected before the interruption
+  are carried over and written once. Offered at start-up and via
+  Upload → Resume interrupted upload.
+
+### Fixed
+- The white-balance pipette sampled the DISPLAYED image; with the new
+  preview active, a second measurement would have been taken on already
+  corrected pixels and applied the correction twice. It now reads the
+  untouched source image, mapping through an active crop.
+- macOS app icon corners: macOS does not round icons itself, so the build
+  now masks the artwork with a superellipse (n≈5) on Apple's 824/1024
+  grid. The same shape ships as `icon_rounded.png` for the splash and the
+  About page.
+
 ## [0.14.1] - 2026-07-25
 
 ### Fixed

@@ -17,6 +17,7 @@ rawpy is OPTIONAL: without it, RAW-only items cannot be previewed (JPEGs and
 pairs still work); previews.raw_available() tells the UI.
 """
 import os
+import sys
 import threading
 import ctypes
 from collections import OrderedDict
@@ -50,6 +51,15 @@ if _tiff is not None:
 from PyQt5.QtCore import (QObject, QRunnable, QThreadPool, pyqtSignal, Qt,
                           QSize, QBuffer, QIODevice, QByteArray)
 from PyQt5.QtGui import QImage, QImageReader, QTransform
+
+from . import edits
+
+# numpy is not a declared dependency; it arrives with rawpy. Used only to
+# speed up the live tone preview, with a pure-Python fallback below.
+try:
+    import numpy as _np
+except ImportError:     # pragma: no cover - depends on the installation
+    _np = None
 
 
 try:
@@ -269,6 +279,60 @@ def _apply_orientation(qimage, orientation):
         qimage = qimage.transformed(QTransform().rotate(rot),
                                     Qt.SmoothTransformation)
     return qimage
+
+
+def apply_tone(qimage, wb=None, ev=0.0):
+    """Return `qimage` with white balance and exposure applied (0.14.2).
+
+    This is the ON-SCREEN half of what edits.render_edited() does on
+    export: the same LUTs from edits.py, so what the culling view shows is
+    what the uploaded copy will look like.
+
+    Two paths, both writing INTO a private copy of the image buffer so no
+    intermediate copies of several megabytes are made:
+      * numpy, when available (it ships with rawpy) - table lookup per
+        channel, the fast path;
+      * bytes.translate() on channel slices otherwise - all in C too, but
+        it copies each slice; noticeably slower on large previews, which
+        is why the caller debounces.
+
+    Returns the input unchanged when there is nothing to do or the buffer
+    has an unexpected layout; a preview is never worth a crash.
+    """
+    if qimage is None or qimage.isNull() or (not wb and not ev):
+        return qimage
+    try:
+        img = qimage.convertToFormat(QImage.Format_RGB32)
+        if img is qimage or img.constBits() == qimage.constBits():
+            img = img.copy()             # never write into the caller's image
+        w = img.width()
+        if img.bytesPerLine() != w * 4:  # padded rows: not our layout
+            return qimage
+        r_gain, g_gain, b_gain = wb if wb else (1.0, 1.0, 1.0)
+        r_lut = edits._combined_lut(r_gain, ev)
+        g_lut = edits._combined_lut(g_gain, ev)
+        b_lut = edits._combined_lut(b_gain, ev)
+        # Format_RGB32 is 0xffRRGGBB as a 32-bit int, so the byte order in
+        # memory follows the machine: BGRA on little-endian.
+        if sys.byteorder == 'little':
+            per_offset = {0: b_lut, 1: g_lut, 2: r_lut}
+        else:
+            per_offset = {1: r_lut, 2: g_lut, 3: b_lut}
+        ptr = img.bits()
+        ptr.setsize(img.byteCount())
+        if _np is not None:
+            arr = _np.frombuffer(ptr, dtype=_np.uint8)
+            for off, lut in per_offset.items():
+                table = _np.frombuffer(bytes(lut), dtype=_np.uint8)
+                arr[off::4] = table[arr[off::4]]
+        else:
+            buf = bytearray(ptr)
+            for off, lut in per_offset.items():
+                buf[off::4] = bytes(buf[off::4]).translate(bytes(lut))
+            ptr[:] = bytes(buf)
+        return img
+    except Exception:
+        return qimage
 
 
 def _extract_thumb_raw(path):

@@ -516,6 +516,13 @@ class MWCullingMixin:
         self._cull_edits_timer.setSingleShot(True)
         self._cull_edits_timer.setInterval(400)
         self._cull_edits_timer.timeout.connect(self._cull_flush_edits)
+        # 0.14.2: same idea for the on-screen tone preview - holding +/-
+        # would otherwise queue one full-image pass per keypress.
+        self._cull_tone_timer = QTimer(self)
+        self._cull_tone_timer.setSingleShot(True)
+        self._cull_tone_timer.setInterval(90)
+        self._cull_tone_timer.timeout.connect(self._cull_flush_tone)
+        self._cull_tone_pending = None
         self._cull_cropping = False
         self.cull_edit_panel = EditPanel(self.cull_view)
         self.cull_view.edit_panel = self.cull_edit_panel
@@ -830,6 +837,10 @@ class MWCullingMixin:
         # comes back the moment crop mode is entered, so the box can be
         # dragged further.
         self.cull_view.set_crop_display(self._cull_crop_for(path))
+        # 0.14.2: white balance and exposure are set BEFORE the pixels
+        # arrive, so the corrected version is what appears - no flash of
+        # the uncorrected image on every image change.
+        self._cull_apply_tone(immediate=True)
         img = self._cull_loader.cache.get('screen', path)
         if img is not None:
             self.cull_view.set_image(img)
@@ -1346,6 +1357,7 @@ class MWCullingMixin:
         self._cull_set_pipette(False)
         self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
+        self._cull_apply_tone(immediate=True)   # a single click
 
     def _cull_step_ev(self, direction):
         """Move the exposure by one sixth of a stop."""
@@ -1363,6 +1375,7 @@ class MWCullingMixin:
         self._cull_save_edits_soon()
         self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
+        self._cull_apply_tone()          # debounced: +/- repeats
 
     def _cull_reset_edits(self):
         """Drop every edit on the current image."""
@@ -1376,6 +1389,32 @@ class MWCullingMixin:
         self.cull_view.set_crop_display(None)
         self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
+        self._cull_apply_tone(immediate=True)
+
+    def _cull_apply_tone(self, immediate=False):
+        """Push the current image's white balance and exposure into the view
+        (0.14.2). The tone pass runs over a multi-megapixel image, so key
+        repeat on +/- is debounced; an image change applies it immediately
+        because there is nothing to coalesce."""
+        if not hasattr(self, 'cull_view'):
+            return
+        item = self._cull_current_item()
+        rec = (edits.get_edit(self._cull_edits, item.display_path)
+               if item is not None else None) or {}
+        wb = rec.get('wb')
+        ev = rec.get('ev', 0.0)
+        if immediate:
+            self._cull_tone_timer.stop()
+            self.cull_view.set_tone(wb, ev)
+        else:
+            self._cull_tone_pending = (wb, ev)
+            self._cull_tone_timer.start()
+
+    def _cull_flush_tone(self):
+        pending = getattr(self, '_cull_tone_pending', None)
+        if pending is not None:
+            self.cull_view.set_tone(*pending)
+            self._cull_tone_pending = None
 
     def _cull_update_edit_panel(self):
         """Show the current image's edits in the floating panel."""
@@ -1495,6 +1534,10 @@ class MWCullingMixin:
         legend; leaving crop restores the normal "numbers = STARS/COLORS"
         text. One label, two meanings, so the keys are explained exactly
         where the eye already looks for what the numbers do."""
+        # 0.14.2: the floating panel carries the same legend, right where
+        # the eye is while cropping.
+        if hasattr(self, 'cull_edit_panel'):
+            self.cull_edit_panel.set_cropping(on)
         if on:
             self.cull_mode_lbl.setText(tr(
                 '[crop] 1 free \u00b7 2 3:2 \u00b7 3 4:3 \u00b7 4 1:1 \u00b7 '
