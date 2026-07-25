@@ -1,72 +1,71 @@
-Cammello 0.13.0 - Komplettpaket (24.07.2026)
+Cammello 0.14.0 - Komplettpaket (24.07.2026)
 ============================================
 
-Vollstaendiger Stand. Dieses Paket enthaelt ALLES seit 0.12.14 - du
-brauchst keine der Zwischenlieferungen. Wichtig, weil seit 0.12.14 ein
-NEUES MODUL dazugekommen ist (cammello/edits.py); mit den Delta-Zips
-allein wuerde die App mit ImportError starten.
+Vollstaendiger Stand. Dieses Paket enthaelt ALLES - du brauchst keine der
+Zwischenlieferungen.
 
 So entpacken
 ------------
-Am sichersten im Terminal, das fuehrt zusammen statt zu ersetzen:
+Im Terminal, das fuehrt zusammen statt zu ersetzen:
 
   cd /Users/h/Documents/Python/Cammello
-  unzip -o /Pfad/zu/Cammello_0.13.0_komplett.zip
+  unzip -o /Pfad/zu/Cammello_0.14.0_komplett.zip
 
 Kontrolle danach:
-  ls cammello/*.py | wc -l     # 33 (32 + deine mw_oauth.py)
+  ls cammello/*.py | wc -l     # 35 (34 + deine mw_oauth.py)
   python3 Cammello.py
 
 cammello/mw_oauth.py fehlt - mit Absicht
 ----------------------------------------
-Diese Datei enthaelt DEINE OAuth-Zugangsdaten und wird nie mitgeliefert,
-damit sie beim Entpacken nicht ueberschrieben wird.
+Diese Datei enthaelt DEINE OAuth-Zugangsdaten und wird nie mitgeliefert.
   * Ist deine Datei noch da: nichts tun.
   * Fehlt sie: mw_oauth_KEYS_EINTRAGEN.py aus der Wurzel nach
     cammello/mw_oauth.py kopieren, CONSUMER_KEY und CONSUMER_SECRET
     eintragen, die Datei aus der Wurzel loeschen.
 
-Neu in 0.13.0 (alles seit 0.12.14)
-----------------------------------
-GEODATEN
-  Kameraposition aus dem EXIF beim Hinzufuegen, beim Upload in BEIDE
-  Haelften: {{Location dec|..|..}} im Wikitext und P1259 "Koordinaten des
-  Aufnahmestandpunkts" in den strukturierten Daten. Feld "Koordinaten" mit
-  Knopf "aus EXIF" im Dateiabschnitt; automatisches Lesen in den
-  Upload-Einstellungen abschaltbar. RAW liefert meist nichts (Pillow liest
-  deren EXIF nicht) - bei RAW+JPEG kommt es aus dem JPEG.
+Neu in 0.14.0
+-------------
+BEARBEITUNGSFENSTER oben rechts in der Sichtung: Zuschnitt, Weissabgleich
+und Belichtung an einem Ort, mit sichtbarem Stand (Haekchen bei Zuschnitt
+und Weissabgleich, Belichtung als "EV +4/6"). Es ist ein Kind der Ansicht,
+geht also in den Vollbildmodus mit und verschwindet nie hinter dem
+Hauptfenster.
 
-NICHTDESTRUKTIVER ZUSCHNITT (Culling)
-  Taste C oeffnet den Zuschnittrahmen (Drittelraster, acht Griffe,
-  durchsichtige Verdunklung aussen). Zifferntasten 1-6 waehlen ein
-  Seitenverhaeltnis, DIESELBE Taste nochmal kippt zwischen Quer- und
-  Hochformat:
-      1 frei · 2 3:2/2:3 · 3 4:3/3:4 · 4 1:1 · 5 16:9/9:16 · 6 5:4/4:5
-  Enter uebernimmt, Esc bricht ab, Shift+C entfernt. Scheren-Symbol im
-  Filmstreifen markiert bearbeitete Dateien; im Zuschnitt-Modus zeigt das
-  Werkzeugleisten-Label die Tastenlegende (Tabelle im Tooltip).
-  Die Originaldatei wird NIE veraendert - der Zuschnitt wird erst beim
-  Verlassen angewandt: der Culling-Ordnerexport schreibt fuer bearbeitete
-  Dateien eine gerenderte Kopie "<name>_edit.jpg".
-  (Die Belichtungs-UI und die Anwendung beim Commons/FTP/Flickr-Upload
-  folgen in einer spaeteren Scheibe - edits.py rendert EV bereits.)
+WEISSABGLEICH mit "W": Taste druecken, dann auf eine Stelle klicken, die
+neutralgrau oder weiss sein soll. Die Verstaerkungen werden im LINEAREN
+Licht berechnet, der Farbstich verschwindet also wirklich statt nur
+schwaecher zu werden. Zu dunkle Stellen werden abgelehnt, statt Rauschen
+zu verstaerken.
 
-HANDBUCH IM HILFE-MENUE
-  Hilfe > "Cammello-Handbuch (auf Commons)", Taste F1, oeffnet die
-  Wiki-Seite in der eingestellten Programmsprache (/de /en /es /fr /it).
+BELICHTUNG in 1/6-Blendenstufen mit + und -. Ctrl/Cmd mit + und - bleiben
+wie bisher der Zoom.
 
-GALERIE-SEITEN: drei Korrekturen
-  * Ein fehlgeschlagener Seitenabruf (503, Ratenbegrenzung) wurde wie
-    "Seite existiert nicht" behandelt und konnte eine gewachsene Galerie
-    ERSETZEN. Jetzt bricht die Galerie-Bearbeitung ab und meldet den
-    Fehler.
-  * Seite ohne Galerie bekam kein oeffnendes <gallery> - jetzt wird ein
-    vollstaendiger Block angehaengt.
-  * Der Seitenname aus Praefix + Suffix wird sauber zusammengesetzt: genau
-    ein Schraegstrich, kein "//", Leerzeichen getrimmt. Du tippst den
-    Schraegstrich nicht selbst.
+ZUSCHNITT WIRD JETZT ANGEZEIGT. Enter zeigt das Bild beschnitten; erneutes
+C holt den vollen Rahmen zurueck, damit der Kasten wieder nach aussen
+gezogen werden kann; Esc stellt den gespeicherten Zuschnitt wieder her.
+Die Legende nennt die Verhaeltnisse ausgeschrieben:
+  1 frei · 2 3:2 · 3 4:3 · 4 1:1 · 5 16:9 · 6 5:4  (gleiche Taste = drehen)
 
-Neue Testdateien
-----------------
-  test_geo_01215.py  test_edits.py  test_crop_0130.py
-  test_manual_0131.py  test_gallery_0132.py
+UMBENENNEN MIT F2, auf der Festplatte. Ein RAW+JPEG-Paar und ein
+vorhandener .xmp-Sidecar werden GEMEINSAM umbenannt; Zuschnitt,
+Weissabgleich, Belichtung und Kanal-Markierungen wandern mit (sie haengen
+am Pfad). Ein schon vergebener Name wird abgelehnt, und schlaegt das
+Umbenennen mittendrin fehl, werden die bereits bewegten Dateien
+zurueckbenannt.
+Hinweis: Das F2 in der MediaWiki-Tabelle betrifft weiterhin den
+Commons-ZIELNAMEN, nicht die Datei auf der Platte - das sind zwei
+verschiedene Dinge.
+
+NUR NOCH EINE SCHLUESSELBUND-ABFRAGE statt vier: Beide Haelften der
+OAuth-Freigabe liegen jetzt in EINEM Schluesselbund-Eintrag, und einmal
+Gelesenes wird fuer die Laufzeit behalten. Alte Installationen werden beim
+ersten Lesen automatisch umgezogen. Die LETZTE Abfrage verschwindet erst
+mit der Developer-ID-Signatur - der Build ist dafuer vorbereitet.
+
+DIALOGE MERKEN SICH DEN ORDNER, in dem du zuletzt warst; ist noch keiner
+gemerkt, starten sie im Bilder-Ordner des Systems.
+
+Neue Testdatei
+--------------
+  test_edit_0140.py   (31 Pruefungen: Weissabgleich-Mathematik, Panel,
+                       Schluesselbund-Zaehlung, Ordner-Gedaechtnis, F2)

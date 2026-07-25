@@ -77,6 +77,102 @@ def missing_keys():
 # Grouped by UI area. Every {placeholder} of a key MUST survive
 # translation (enforced by test_i18n.py).
 TRANSLATIONS = {
+    'Rename file': {
+        'de': 'Datei umbenennen',
+        'es': 'Renombrar archivo',
+        'fr': 'Renommer le fichier',
+        'it': 'Rinomina file',
+    },
+    'New name (without extension):': {
+        'de': 'Neuer Name (ohne Endung):',
+        'es': 'Nombre nuevo (sin extensión):',
+        'fr': 'Nouveau nom (sans extension) :',
+        'it': 'Nuovo nome (senza estensione):',
+    },
+    'That name contains characters a file name cannot hold.': {
+        'de': 'Dieser Name enthält Zeichen, die ein Dateiname nicht tragen kann.',
+        'es': 'Ese nombre contiene caracteres que un nombre de archivo no admite.',
+        'fr': "Ce nom contient des caractères qu'un nom de fichier ne peut pas porter.",
+        'it': 'Quel nome contiene caratteri che un nome di file non può avere.',
+    },
+    'Click a neutral grey or white spot — W ends it': {
+        'de': 'Auf eine neutralgraue oder weiße Stelle klicken — W beendet',
+        'es': 'Haz clic en un punto gris neutro o blanco: W termina',
+        'fr': 'Cliquez sur un gris neutre ou un blanc — W termine',
+        'it': 'Clicca su un punto grigio neutro o bianco — W termina',
+    },
+    'That spot is too dark to balance on.': {
+        'de': 'Diese Stelle ist zu dunkel für einen Weißabgleich.',
+        'es': 'Ese punto es demasiado oscuro para equilibrar.',
+        'fr': 'Cet endroit est trop sombre pour la balance des blancs.',
+        'it': 'Quel punto è troppo scuro per il bilanciamento.',
+    },
+    '[crop] 1 free · 2 3:2 · 3 4:3 · 4 1:1 · 5 16:9 · 6 5:4  (same key again = rotate)  ·  Enter apply · Esc cancel · ⇧C remove': {
+        'de': '[Zuschnitt] 1 frei · 2 3:2 · 3 4:3 · 4 1:1 · 5 16:9 · 6 5:4  (gleiche Taste nochmal = drehen)  ·  Enter übernehmen · Esc abbrechen · ⇧C entfernen',
+        'es': '[recorte] 1 libre · 2 3:2 · 3 4:3 · 4 1:1 · 5 16:9 · 6 5:4  (misma tecla otra vez = girar)  ·  Intro aplicar · Esc cancelar · ⇧C quitar',
+        'fr': '[recadrage] 1 libre · 2 3:2 · 3 4:3 · 4 1:1 · 5 16:9 · 6 5:4  (même touche = pivoter)  ·  Entrée appliquer · Échap annuler · ⇧C retirer',
+        'it': '[ritaglio] 1 libero · 2 3:2 · 3 4:3 · 4 1:1 · 5 16:9 · 6 5:4  (stesso tasto = ruota)  ·  Invio applica · Esc annulla · ⇧C rimuovi',
+    },
+    'A file called "{name}" already exists.': {
+        'de': 'Eine Datei namens „{name}" gibt es schon.',
+        'es': 'Ya existe un archivo llamado «{name}».',
+        'fr': 'Un fichier nommé « {name} » existe déjà.',
+        'it': 'Esiste già un file chiamato «{name}».',
+    },
+    'Renaming failed: {error}': {
+        'de': 'Umbenennen fehlgeschlagen: {error}',
+        'es': 'Error al renombrar: {error}',
+        'fr': 'Échec du renommage : {error}',
+        'it': 'Rinomina fallita: {error}',
+    },
+    'Edit': {
+        'de': 'Bearbeiten',
+        'es': 'Editar',
+        'fr': 'Retouche',
+        'it': 'Modifica',
+    },
+    'Crop (C)': {
+        'de': 'Zuschnitt (C)',
+        'es': 'Recorte (C)',
+        'fr': 'Recadrage (C)',
+        'it': 'Ritaglio (C)',
+    },
+    'Draw a crop on this image. Enter applies it, Esc cancels.': {
+        'de': 'Einen Zuschnitt auf diesem Bild aufziehen. Enter übernimmt, Esc bricht ab.',
+        'es': 'Dibuja un recorte en esta imagen. Intro aplica, Esc cancela.',
+        'fr': 'Tracez un recadrage sur cette image. Entrée applique, Échap annule.',
+        'it': 'Traccia un ritaglio su questa immagine. Invio applica, Esc annulla.',
+    },
+    'White balance (W)': {
+        'de': 'Weißabgleich (W)',
+        'es': 'Balance de blancos (W)',
+        'fr': 'Balance des blancs (W)',
+        'it': 'Bilanciamento del bianco (W)',
+    },
+    'Pick a spot that should be neutral grey or white.\nClick the picture with the pipette; press W again to stop.': {
+        'de': 'Eine Stelle wählen, die neutralgrau oder weiß sein soll.\nMit der Pipette ins Bild klicken; W beendet den Modus.',
+        'es': 'Elige un punto que deba ser gris neutro o blanco.\nHaz clic en la imagen con el cuentagotas; pulsa W para terminar.',
+        'fr': "Choisissez un endroit qui devrait être gris neutre ou blanc.\nCliquez dans l'image avec la pipette ; W met fin au mode.",
+        'it': "Scegli un punto che dovrebbe essere grigio neutro o bianco.\nClicca sull'immagine con il contagocce; premi W per terminare.",
+    },
+    'Reset all': {
+        'de': 'Alles zurücksetzen',
+        'es': 'Restablecer todo',
+        'fr': 'Tout réinitialiser',
+        'it': 'Reimposta tutto',
+    },
+    'Remove crop, white balance and exposure from this image.': {
+        'de': 'Zuschnitt, Weißabgleich und Belichtung von diesem Bild entfernen.',
+        'es': 'Quitar recorte, balance de blancos y exposición de esta imagen.',
+        'fr': 'Retirer recadrage, balance des blancs et exposition de cette image.',
+        'it': 'Rimuovi ritaglio, bilanciamento del bianco ed esposizione da questa immagine.',
+    },
+    'Exposure in sixths of a stop': {
+        'de': 'Belichtung in Sechstel-Blendenstufen',
+        'es': 'Exposición en sextos de paso',
+        'fr': 'Exposition par sixièmes de diaphragme',
+        'it': 'Esposizione in sesti di stop',
+    },
     'Cammello &manual (on Commons)': {
         'de': 'Cammello-&Handbuch (auf Commons)',
         'es': '&Manual de Cammello (en Commons)',

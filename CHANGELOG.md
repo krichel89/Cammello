@@ -4,6 +4,39 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-07-24
+
+### Added
+- A floating edit panel in the top-right corner of the culling view, holding
+  the ad-hoc edits in one place: crop, white balance and exposure, with the
+  current state visible at a glance. It is a child of the view, so it
+  travels into fullscreen and never lands behind the window.
+- White balance with the pipette (W). Click a spot that should be neutral
+  grey or white; the gains are computed in linear light, so the cast is
+  removed rather than reduced. Green is the reference, a spot too dark to
+  judge is refused.
+- Exposure in sixths of a stop with + and -, shown as "EV +4/6". Ctrl/Cmd
+  with + and - remain the zoom shortcuts.
+- F2 renames the picture ON DISK. A RAW+JPEG pair and any .xmp sidecar are
+  renamed together, and the path-keyed records (crop, white balance,
+  exposure, channel marks) move with them. An existing name is refused, and
+  a failure puts every already-renamed file back.
+- File and folder dialogs start where you last were; with nothing
+  remembered yet, in the system's Pictures folder.
+
+### Changed
+- The crop legend spells the ratios out: "1 free · 2 3:2 · 3 4:3 · 4 1:1 ·
+  5 16:9 · 6 5:4 (same key again = rotate)".
+- The culling view now SHOWS the applied crop. Pressing C brings the full
+  frame back so the box can be pulled outwards again, Esc restores the
+  stored crop.
+
+### Fixed
+- Unlocking the stored OAuth authorization costs one keyring prompt instead
+  of four: both halves live in a single keyring entry, and secrets read once
+  are kept for the life of the process. Installations with the two older
+  entries are migrated on first use.
+
 ## [0.13.0] - 2026-07-24
 
 ### Added

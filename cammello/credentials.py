@@ -58,7 +58,12 @@ def mediawiki_slot(username):
 
 
 def mw_oauth_slot(kind):
-    """OAuth access credential, kind in ('token', 'secret')."""
+    """OAuth access credential, kind in ('token', 'secret', 'tokens').
+
+    'tokens' is the combined slot introduced in 0.14: token and secret live
+    in ONE keyring entry, so unlocking costs one prompt instead of two. The
+    two single slots are still read once, to migrate old installations.
+    """
     return f'mw-oauth:{kind}'
 
 
@@ -119,12 +124,25 @@ def backend_name():
 # All three swallow backend exceptions (locked keychains, D-Bus hiccups,
 # permission prompts denied by the user) and report via return value + log.
 
+# Session cache (0.14). Every keyring read can raise a system prompt, and
+# an unsigned macOS bundle is asked again for every single read. Values
+# fetched once are therefore kept for the life of the process - they cannot
+# change behind our back, since this process is the only writer.
+_cache = {}
+
+
+def clear_cache():
+    """Forget cached secrets (used after a logout)."""
+    _cache.clear()
+
+
 def store(slot, secret):
     """Put `secret` into the keyring under `slot`.  -> bool success."""
     if not backend_available():
         return False
     try:
         keyring.set_password(SERVICE, slot, secret)
+        _cache[slot] = secret
         return True
     except Exception as exc:
         log.warning('keyring store failed for %s: %s', slot, exc)
@@ -132,18 +150,28 @@ def store(slot, secret):
 
 
 def load(slot):
-    """-> secret string, or None (not stored, no backend, or backend error)."""
+    """-> secret string, or None (not stored, no backend, or backend error).
+
+    Cached for the life of the process: on macOS an unsigned bundle is
+    prompted for EVERY read, so reading the same slot twice meant two
+    password dialogs.
+    """
+    if slot in _cache:
+        return _cache[slot]
     if not backend_available():
         return None
     try:
-        return keyring.get_password(SERVICE, slot)
+        value = keyring.get_password(SERVICE, slot)
     except Exception as exc:
         log.warning('keyring load failed for %s: %s', slot, exc)
         return None
+    _cache[slot] = value
+    return value
 
 
 def delete(slot):
     """Remove `slot` from the keyring.  Missing entries count as success."""
+    _cache.pop(slot, None)
     if not backend_available():
         return False
     try:

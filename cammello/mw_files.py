@@ -201,9 +201,11 @@ class MWFilesMixin:
     def add_files(self):
         pattern = ' '.join('*' + ext for ext in IMAGE_EXTS)
         files, _ = QFileDialog.getOpenFileNames(
-            self, tr('Select image files'), '',
+            self, tr('Select image files'), remembered_dir(self.settings),
             tr('Images') + f' ({pattern})'
         )
+        if files:
+            remember_dir(self.settings, files[0])
         added, dups, failed = self._add_paths(files)
         if added:
             self.logger.debug('%d file(s) added to the table.', added)

@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QComboBox, QCheckBox, QFileDialog, QMessageBox, QSplitter,
     QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
-    QToolButton)
+    QToolButton, QInputDialog)
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QPen, QPainter
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 
@@ -32,6 +32,7 @@ from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 from .constants import *
 from . import culling
 from . import channels, previews, edits
+from .edit_panel import EditPanel
 from .culling_view import CullImageView
 from .widgets import (UploadProgressDialog, toolbar_separator,
                       slim_toolbar)
@@ -508,6 +509,13 @@ class MWCullingMixin:
         # Crop store (0.13): loaded once, kept in memory, saved on each edit.
         self._cull_edits = edits.load_edits(self.settings)
         self._cull_cropping = False
+        self.cull_edit_panel = EditPanel(self.cull_view)
+        self.cull_view.edit_panel = self.cull_edit_panel
+        self.cull_edit_panel.crop_requested.connect(self._cull_toggle_crop)
+        self.cull_edit_panel.pipette_toggled.connect(self._cull_set_pipette)
+        self.cull_edit_panel.ev_step_requested.connect(self._cull_step_ev)
+        self.cull_edit_panel.reset_requested.connect(self._cull_reset_edits)
+        self.cull_view.pixel_picked.connect(self._cull_wb_from_pixel)
         self.cull_view.crop.changed.connect(self._cull_update_crop_readout)
         self.cull_view.crop.committed.connect(
             lambda *_a: None)   # commit is driven from the tab (Enter key)
@@ -604,9 +612,11 @@ class MWCullingMixin:
 
     def _cull_open_folder(self, folder=None):
         if not folder:
-            folder = QFileDialog.getExistingDirectory(self, 'Open folder')
+            folder = QFileDialog.getExistingDirectory(
+                self, tr('Open folder'), remembered_dir(self.settings))
             if not folder:
                 return
+            remember_dir(self.settings, folder)
         if self._cull_reader is not None:
             self._cull_reader.stop()
             self._cull_reader.wait(2000)
@@ -802,6 +812,10 @@ class MWCullingMixin:
             self.cull_strip.scrollToItem(self.cull_strip.item(idx))
         item = self._cull_visible[idx]
         path = item.display_path
+        # 0.14: show the picture the way the crop leaves it. The full frame
+        # comes back the moment crop mode is entered, so the box can be
+        # dragged further.
+        self.cull_view.set_crop_display(self._cull_crop_for(path))
         img = self._cull_loader.cache.get('screen', path)
         if img is not None:
             self.cull_view.set_image(img)
@@ -814,6 +828,7 @@ class MWCullingMixin:
             idx, self._cull_direction)
         self._cull_set_status()
         self._cull_update_info_overlay()
+        self._cull_update_edit_panel()
 
     def _cull_on_loaded(self, key, level):
         if not (0 <= self._cull_index < len(self._cull_visible)):
@@ -941,6 +956,22 @@ class MWCullingMixin:
                 return
         if key == Qt.Key_C and not (event.modifiers() & Qt.ControlModifier):
             self._cull_toggle_crop()
+            return
+        if key == Qt.Key_F2:
+            self._cull_rename_current()
+            return
+        if key == Qt.Key_W and not (event.modifiers() & Qt.ControlModifier):
+            self._cull_set_pipette(not self.cull_view.pipette_active())
+            return
+        # Plain +/- change the exposure; WITH Ctrl/Cmd they stay the zoom
+        # shortcuts, which they were long before this panel existed.
+        _zoom_mods = Qt.ControlModifier | Qt.MetaModifier
+        if key in (Qt.Key_Plus, Qt.Key_Equal) \
+                and not (event.modifiers() & _zoom_mods):
+            self._cull_step_ev(1)
+            return
+        if key == Qt.Key_Minus and not (event.modifiers() & _zoom_mods):
+            self._cull_step_ev(-1)
             return
         if key == Qt.Key_Right:
             self._cull_step(+1)
@@ -1140,6 +1171,190 @@ class MWCullingMixin:
         Qt.Key_4: 4, Qt.Key_5: 5, Qt.Key_6: 6,
     }
 
+    def _cull_rename_current(self):
+        """F2: rename the current image ON DISK (0.14).
+
+        Lightroom-style in the sense that matters here: you name the picture,
+        not its parts - a RAW+JPEG pair and any .xmp sidecar are renamed
+        together, so the item stays one item. Ratings, channel marks and
+        edits are keyed by path, so they are moved across too; otherwise a
+        renamed picture would lose its stars and its crop.
+        """
+        item = self._cull_current_item()
+        if item is None:
+            return
+        old_display = item.display_path
+        folder = os.path.dirname(old_display)
+        stem = os.path.splitext(os.path.basename(old_display))[0]
+        new_stem, ok = QInputDialog.getText(
+            self, tr('Rename file'), tr('New name (without extension):'),
+            text=stem)
+        if not ok:
+            return
+        new_stem = (new_stem or '').strip()
+        if not new_stem or new_stem == stem:
+            return
+        if any(ch in new_stem for ch in '/\\:*?"<>|'):
+            QMessageBox.warning(self, tr('Rename file'),
+                                tr('That name contains characters a file '
+                                   'name cannot hold.'))
+            return
+
+        # Every file that belongs to this picture, with its extension.
+        parts = [p for p in (item.raw_path, item.jpg_path) if p]
+        sidecar = item.sidecar_path if item.raw_path else None
+        if sidecar and os.path.exists(sidecar):
+            parts.append(sidecar)
+        planned = []
+        for old in parts:
+            new = os.path.join(folder,
+                               new_stem + os.path.splitext(old)[1])
+            if os.path.exists(new):
+                QMessageBox.warning(
+                    self, tr('Rename file'),
+                    tr('A file called "{name}" already exists.').format(
+                        name=os.path.basename(new)))
+                return
+            planned.append((old, new))
+
+        done = []
+        try:
+            for old, new in planned:
+                os.rename(old, new)
+                done.append((old, new))
+        except OSError as exc:
+            # Put back whatever already moved, so a half-renamed picture
+            # cannot survive the error.
+            for old, new in reversed(done):
+                try:
+                    os.rename(new, old)
+                except OSError:
+                    pass
+            self.logger.error('Rename failed for %s: %s', old_display, exc)
+            QMessageBox.warning(self, tr('Rename file'),
+                                tr('Renaming failed: {error}').format(
+                                    error=str(exc)))
+            return
+
+        moved = dict(done)
+        if item.raw_path:
+            item.raw_path = moved.get(item.raw_path, item.raw_path)
+        if item.jpg_path:
+            item.jpg_path = moved.get(item.jpg_path, item.jpg_path)
+        self._cull_migrate_paths(old_display, item.display_path)
+        self.logger.info('Renamed %s -> %s (%d file(s))', stem, new_stem,
+                         len(done))
+        self._cull_rebuild_after_rename(old_display, item)
+
+    def _cull_migrate_paths(self, old_path, new_path):
+        """Move the path-keyed records (edits, channel marks) to the new
+        name. Ratings live in the file's own XMP and travel with it."""
+        record = edits.get_edit(self._cull_edits, old_path)
+        if record:
+            self._cull_edits[edits.norm(new_path)] = record
+            edits.clear_edit(self._cull_edits, old_path)
+            edits.save_edits(self.settings, self._cull_edits)
+        marks = channels.load_marks(self.settings)
+        mark = marks.get(channels.norm(old_path))
+        if mark:
+            marks[channels.norm(new_path)] = mark
+            marks.pop(channels.norm(old_path), None)
+            channels.save_marks(self.settings, marks)
+
+    def _cull_rebuild_after_rename(self, old_path, item):
+        """Refresh the strip row and the view for the renamed item."""
+        self._cull_row_by_path.pop(old_path, None)
+        row = self._cull_row_by_item.get(id(item))
+        if row is None:
+            return
+        self._cull_row_by_path[item.display_path] = row
+        if 0 <= row < self.cull_strip.count():
+            self._cull_decorate_row(row)
+        # The preview cache is keyed by path, so the renamed file has to be
+        # loaded again under its new name.
+        self._cull_show_index(self._cull_index)
+
+    def _cull_set_pipette(self, on):
+        """Turn the white-balance pipette on or off (key W or the panel)."""
+        self.cull_view.set_pipette(on)
+        self.cull_edit_panel.set_pipette_checked(on)
+        if on:
+            self.cull_view.set_info_overlay(
+                tr('Click a neutral grey or white spot \u2014 W ends it'))
+            self.cull_view.show_info_overlay(True)
+        else:
+            self._cull_update_info_overlay()
+
+    def _cull_wb_from_pixel(self, r, g, b):
+        """A pipette click arrived: turn the sampled pixel neutral."""
+        item = self._cull_current_item()
+        if item is None:
+            return
+        gains = edits.wb_from_neutral(r, g, b)
+        if not gains:
+            self.logger.info('White balance: the sampled spot is too dark or '
+                             'already neutral (%d, %d, %d).', r, g, b)
+            self.statusBar().showMessage(
+                tr('That spot is too dark to balance on.'), 4000)
+            return
+        edits.set_wb(self._cull_edits, item.display_path, gains)
+        edits.save_edits(self.settings, self._cull_edits)
+        self.logger.info('White balance for %s from (%d, %d, %d) -> %s',
+                         os.path.basename(item.display_path), r, g, b,
+                         tuple(round(v, 3) for v in gains))
+        self._cull_set_pipette(False)
+        self._cull_refresh_edit_badge(item)
+        self._cull_update_edit_panel()
+
+    def _cull_step_ev(self, direction):
+        """Move the exposure by one sixth of a stop."""
+        item = self._cull_current_item()
+        if item is None:
+            return
+        path = item.display_path
+        current = edits.get_ev(self._cull_edits, path)
+        new = round((current + direction * edits.EV_STEP) / edits.EV_STEP) \
+            * edits.EV_STEP
+        new = max(edits.EV_MIN, min(edits.EV_MAX, new))
+        if abs(new - current) < 1e-9:
+            return
+        edits.set_ev(self._cull_edits, path, new)
+        edits.save_edits(self.settings, self._cull_edits)
+        self._cull_refresh_edit_badge(item)
+        self._cull_update_edit_panel()
+
+    def _cull_reset_edits(self):
+        """Drop every edit on the current image."""
+        item = self._cull_current_item()
+        if item is None:
+            return
+        if edits.clear_edit(self._cull_edits, item.display_path):
+            edits.save_edits(self.settings, self._cull_edits)
+            self.logger.info('All edits removed for %s',
+                             os.path.basename(item.display_path))
+        self.cull_view.set_crop_display(None)
+        self._cull_refresh_edit_badge(item)
+        self._cull_update_edit_panel()
+
+    def _cull_update_edit_panel(self):
+        """Show the current image's edits in the floating panel."""
+        if not hasattr(self, 'cull_edit_panel'):
+            return
+        item = self._cull_current_item()
+        if item is None:
+            self.cull_edit_panel.hide()
+            return
+        self.cull_edit_panel.show_state(
+            edits.get_edit(self._cull_edits, item.display_path),
+            cropping=getattr(self, '_cull_cropping', False))
+        self.cull_edit_panel.show()
+        self.cull_edit_panel.place()
+
+    def _cull_crop_for(self, path):
+        """The stored crop box for a path, or None."""
+        rec = edits.get_edit(self._cull_edits, path)
+        return tuple(rec['crop']) if rec and 'crop' in rec else None
+
     def _cull_toggle_crop(self):
         """C: turn the crop overlay on for the current image, or commit it
         if it is already on. Esc cancels, Shift+C removes an existing crop."""
@@ -1153,9 +1368,10 @@ class MWCullingMixin:
         self._cull_crop_aspect = None
         self._cull_crop_aspect_key = None
         self._cull_crop_portrait = False
-        existing = edits.get_edit(self._cull_edits,
-                                  item.display_path)
-        box = tuple(existing['crop']) if existing and 'crop' in existing else None
+        box = self._cull_crop_for(item.display_path)
+        # Put the whole frame back while cropping - otherwise the box could
+        # only ever shrink, never be pulled outwards again.
+        self.cull_view.set_crop_display(None)
         self.cull_view.crop.begin(box)
         self._cull_set_crop_legend(True)
         self._cull_update_crop_readout(box or (0.1, 0.1, 0.8, 0.8))
@@ -1203,10 +1419,15 @@ class MWCullingMixin:
                 self._cull_refresh_edit_badge(item)
                 self.logger.info('Crop set for %s: %s',
                                  os.path.basename(item.display_path), box)
+            self.cull_view.set_crop_display(box)
         self._cull_end_crop()
 
     def _cull_crop_cancel(self):
         self.cull_view.crop.finish_cancel()
+        item = self._cull_current_item()
+        if item is not None:
+            self.cull_view.set_crop_display(
+                self._cull_crop_for(item.display_path))
         self._cull_end_crop()
 
     def _cull_crop_remove(self):
@@ -1217,6 +1438,7 @@ class MWCullingMixin:
                 self._cull_refresh_edit_badge(item)
                 self.logger.info('Crop removed for %s',
                                  os.path.basename(item.display_path))
+            self.cull_view.set_crop_display(None)
         self._cull_end_crop()
 
     def _cull_end_crop(self):
@@ -1233,9 +1455,10 @@ class MWCullingMixin:
         text. One label, two meanings, so the keys are explained exactly
         where the eye already looks for what the numbers do."""
         if on:
-            self.cull_mode_lbl.setText(tr('[crop] 1-6 ratio (again = rotate) '
-                                          '\u00b7 Enter apply \u00b7 Esc cancel '
-                                          '\u00b7 \u21e7C remove'))
+            self.cull_mode_lbl.setText(tr(
+                '[crop] 1 free \u00b7 2 3:2 \u00b7 3 4:3 \u00b7 4 1:1 \u00b7 '
+                '5 16:9 \u00b7 6 5:4  (same key again = rotate)  \u00b7  '
+                'Enter apply \u00b7 Esc cancel \u00b7 \u21e7C remove'))
             self.cull_mode_lbl.setToolTip(tr(
                 'Crop keys:\n'
                 '  1  free    2  3:2    3  4:3    4  1:1    5  16:9    6  5:4\n'

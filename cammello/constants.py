@@ -3,10 +3,10 @@ import os
 import sys
 import re
 import threading
-from PyQt5.QtCore import QRegExp
+from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.13.0'
+__version__ = '0.14.0'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -26,6 +26,37 @@ def manual_url(lang):
     """
     code = lang if lang in MANUAL_LANGUAGES else 'en'
     return f'{MANUAL_BASE_URL}/{code}'
+
+
+LAST_DIR_KEY = 'last_open_dir'
+
+
+def remembered_dir(settings):
+    """Where a file/folder dialog should start (0.14).
+
+    The folder last opened, if it still exists - otherwise the system's
+    Pictures folder, which is where photographs live. Falls back to the home
+    directory on systems that report no Pictures location.
+    """
+    last = settings.value(LAST_DIR_KEY, '', type=str) if settings else ''
+    if last and os.path.isdir(last):
+        return last
+    # The system names a Pictures location even where no such folder was
+    # ever created, so it has to be checked like any other path.
+    pics = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
+    if pics and os.path.isdir(pics):
+        return pics
+    return os.path.expanduser('~')
+
+
+def remember_dir(settings, path):
+    """Store the folder a dialog ended up in. `path` may be a file."""
+    if not settings or not path:
+        return
+    folder = path if os.path.isdir(path) else os.path.dirname(path)
+    if folder and os.path.isdir(folder):
+        settings.setValue(LAST_DIR_KEY, folder)
+        settings.sync()
 
 
 def gallery_page_name(prefix, suffix):

@@ -39,6 +39,15 @@ _SETTINGS_KEY = 'edits'
 
 EV_MIN = -3.0
 EV_MAX = 3.0
+# Harald works in sixths of a stop (0.14) - finer than the third-stop steps
+# a camera dial offers, which is the point of correcting on screen.
+EV_STEP = 1.0 / 6.0
+
+# White balance is stored as per-channel gains with green pinned to 1.0, so
+# the value is independent of how it was picked and can be applied to any
+# rendering of the same file.
+WB_MIN = 0.2
+WB_MAX = 5.0
 
 # Suffix for rendered copies in a folder export (Harald, 0.13: the export
 # gets the edited copy, not the original).
@@ -60,6 +69,50 @@ def _clamp_ev(value):
     except (TypeError, ValueError):
         return 0.0
     return max(EV_MIN, min(EV_MAX, ev))
+
+
+def _valid_wb(wb):
+    """Three positive gains in a sane range, green normalized to 1.0.
+    Anything else -> None, so a hand-edited or future value cannot break the
+    renderer. Neutral gains are not an edit."""
+    if wb is None:
+        return None
+    try:
+        r, g, b = (float(v) for v in wb)
+    except (TypeError, ValueError):
+        return None
+    if g <= 0:
+        return None
+    r, b = r / g, b / g
+    if not (WB_MIN <= r <= WB_MAX) or not (WB_MIN <= b <= WB_MAX):
+        return None
+    if abs(r - 1.0) < 1e-4 and abs(b - 1.0) < 1e-4:
+        return None
+    return (r, 1.0, b)
+
+
+def _srgb_to_linear(value):
+    """One 0-255 channel value as linear light (0..1)."""
+    c = value / 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def wb_from_neutral(r, g, b):
+    """Gains that turn the sampled pixel (0-255 each) into a neutral grey.
+
+    Computed in LINEAR light, because that is where the gains are applied -
+    deriving them from the encoded values would leave a visible part of the
+    cast behind. Green is the reference (it carries most of the luminance
+    and is the least noisy), so green stays at 1.0 and only red and blue
+    move. Returns None for a pixel too dark to judge, where the gains would
+    only amplify sensor noise.
+    """
+    if min(r, g, b) < 8 or g <= 0:
+        return None
+    r_lin, g_lin, b_lin = (_srgb_to_linear(v) for v in (r, g, b))
+    if r_lin <= 0 or b_lin <= 0:
+        return None
+    return _valid_wb((g_lin / r_lin, 1.0, g_lin / b_lin))
 
 
 def _valid_crop(crop):
@@ -89,13 +142,16 @@ def _normalize_record(rec):
         return None
     crop = _valid_crop(rec.get('crop'))
     ev = _clamp_ev(rec.get('ev', 0.0))
-    if crop is None and ev == 0.0:
+    wb = _valid_wb(rec.get('wb'))
+    if crop is None and ev == 0.0 and wb is None:
         return None
     out = {}
     if crop is not None:
         out['crop'] = list(crop)
     if ev != 0.0:
         out['ev'] = ev
+    if wb is not None:
+        out['wb'] = list(wb)
     return out
 
 
@@ -140,6 +196,22 @@ def set_ev(edits, path, ev):
     return _update(edits, path, ev=('set', _clamp_ev(ev)))
 
 
+def set_wb(edits, path, wb):
+    """Set (or, with wb=None, clear) the white balance gains. -> True on
+    change."""
+    return _update(edits, path, wb=('set', _valid_wb(wb)))
+
+
+def get_ev(edits, path):
+    rec = get_edit(edits, path)
+    return rec.get('ev', 0.0) if rec else 0.0
+
+
+def get_wb(edits, path):
+    rec = get_edit(edits, path)
+    return tuple(rec['wb']) if rec and 'wb' in rec else None
+
+
 def clear_edit(edits, path):
     """Remove all edits for a path. Returns True if there was one."""
     key = norm(path)
@@ -149,7 +221,7 @@ def clear_edit(edits, path):
     return False
 
 
-def _update(edits, path, crop=None, ev=None):
+def _update(edits, path, crop=None, ev=None, wb=None):
     key = norm(path)
     rec = dict(edits.get(key) or {})
     if crop is not None:
@@ -158,6 +230,12 @@ def _update(edits, path, crop=None, ev=None):
             rec.pop('crop', None)
         else:
             rec['crop'] = list(value)
+    if wb is not None:
+        _tag, value = wb
+        if value is None:
+            rec.pop('wb', None)
+        else:
+            rec['wb'] = list(value)
     if ev is not None:
         _tag, value = ev
         if value == 0.0:
@@ -222,6 +300,40 @@ def _apply_ev_image(img, ev):
     return img.convert('RGB').point(lut * 3)
 
 
+def _wb_lut(gain):
+    """A 256-entry table for one channel gain, applied in LINEAR light for
+    the same reason as the exposure LUT: scaling the encoded values would
+    shift the tone curve, not just the colour."""
+    table = []
+    for i in range(256):
+        c = i / 255.0
+        lin = c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        lin *= gain
+        lin = 0.0 if lin < 0 else (1.0 if lin > 1 else lin)
+        enc = (lin * 12.92 if lin <= 0.0031308
+               else 1.055 * (lin ** (1 / 2.4)) - 0.055)
+        table.append(max(0, min(255, round(enc * 255))))
+    return table
+
+
+def _apply_wb_image(img, wb):
+    """Apply per-channel gains. Greyscale has no colour to balance, so it is
+    returned untouched."""
+    if not wb:
+        return img
+    r_gain, g_gain, b_gain = wb
+    if img.mode == 'L':
+        return img
+    if img.mode not in ('RGB', 'RGBA'):
+        img = img.convert('RGB')
+    luts = [_wb_lut(g) for g in (r_gain, g_gain, b_gain)]
+    if img.mode == 'RGBA':
+        r, g, b, a = img.split()
+        r, g, b = (ch.point(l) for ch, l in zip((r, g, b), luts))
+        return Image.merge('RGBA', (r, g, b, a))
+    return img.point(luts[0] + luts[1] + luts[2])
+
+
 def _apply_crop_image(img, crop):
     """Crop a PIL image with a normalized (x, y, w, h) box."""
     if crop is None:
@@ -263,6 +375,7 @@ def render_edited(path, record, out_path, log=None):
         return None
     crop = tuple(rec['crop']) if 'crop' in rec else None
     ev = rec.get('ev', 0.0)
+    wb = tuple(rec['wb']) if 'wb' in rec else None
 
     try:
         if _is_raw(path):
@@ -278,6 +391,7 @@ def render_edited(path, record, out_path, log=None):
             img = Image.open(path)
             exif = img.info.get('exif')
             img = _apply_crop_image(img, crop)
+            img = _apply_wb_image(img, wb)
             img = _apply_ev_image(img, ev)
             if img.mode not in ('RGB', 'L'):
                 img = img.convert('RGB')
@@ -289,6 +403,7 @@ def render_edited(path, record, out_path, log=None):
 
         # RAW path continues here (crop happens after the raw render).
         img = _apply_crop_image(img, crop)
+        img = _apply_wb_image(img, wb)
         if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
         img.save(out_path, 'JPEG', quality=95)

@@ -304,6 +304,7 @@ class CullImageView(QGraphicsView):
     zoom_requested = pyqtSignal()      # emitted on click/Z; mixin loads 'full'
     zoom_changed = pyqtSignal(float)   # current scale factor (1.0 = 100%)
     fullscreen_requested = pyqtSignal()  # double-click toggles fullscreen
+    pixel_picked = pyqtSignal(int, int, int)   # r, g, b under the pipette
 
     MIN_ZOOM, MAX_ZOOM = 0.05, 4.0
 
@@ -343,19 +344,56 @@ class CullImageView(QGraphicsView):
         # Crop overlay (0.13): a transparent child that edits a crop box in
         # normalized coordinates. Hidden until the tab turns crop mode on.
         self.crop = CropOverlay(self)
+        # 0.14: the untouched pixmap plus the crop currently DISPLAYED.
+        self._full_pixmap = QPixmap()
+        self._crop_display = None
+        self._pipette = False
 
     # -- content ---------------------------------------------------------------
 
     def set_image(self, qimage, keep_view=False):
         """Show a QImage. keep_view=True swaps the pixels without resetting
         zoom/pan (used when the 'full' level arrives while zoomed in)."""
-        pm = QPixmap.fromImage(qimage)
+        self._full_pixmap = QPixmap.fromImage(qimage)
+        self._apply_crop_display(keep_view)
+
+    def set_crop_display(self, box):
+        """Show the image cropped to `box` (normalized x, y, w, h) or, with
+        box=None, in full (0.14).
+
+        The full pixmap is kept, so entering crop mode can put the whole
+        frame back and the box stays draggable beyond its current edges.
+        """
+        if box == self._crop_display:
+            return
+        self._crop_display = tuple(box) if box else None
+        if not self._full_pixmap.isNull():
+            self._apply_crop_display(False)
+
+    def crop_display(self):
+        return self._crop_display
+
+    def _apply_crop_display(self, keep_view):
+        pm = self._full_pixmap
+        if pm.isNull():
+            self._item.setPixmap(QPixmap())
+            return
+        if self._crop_display:
+            x, y, w, h = self._crop_display
+            rect = QRect(int(round(x * pm.width())),
+                         int(round(y * pm.height())),
+                         max(1, int(round(w * pm.width()))),
+                         max(1, int(round(h * pm.height()))))
+            rect = rect.intersected(pm.rect())
+            if rect.width() > 0 and rect.height() > 0:
+                pm = pm.copy(rect)
         self._item.setPixmap(pm)
         self._scene.setSceneRect(QRectF(pm.rect()))
         if not keep_view:
             self.fit()
 
     def clear_image(self):
+        self._full_pixmap = QPixmap()
         self._item.setPixmap(QPixmap())
         self._fit = True
 
@@ -454,8 +492,39 @@ class CullImageView(QGraphicsView):
         if self.crop.isVisible():
             self.crop.setGeometry(self.rect())
             self.crop.update()
+        # The edit panel is a child of the view, so it has to be re-placed
+        # whenever the view changes size (window resize, fullscreen).
+        panel = getattr(self, 'edit_panel', None)
+        if panel is not None and panel.isVisible():
+            panel.place()
+
+    def set_pipette(self, on):
+        """White-balance pipette mode (0.14): the next left click samples a
+        pixel instead of zooming."""
+        self._pipette = bool(on)
+        self.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
+
+    def pipette_active(self):
+        return self._pipette
+
+    def _sample_at(self, view_pos):
+        """-> (r, g, b) under a viewport position, or None if off-image."""
+        pm = self._item.pixmap()
+        if pm.isNull():
+            return None
+        pt = self._item.mapFromScene(self.mapToScene(view_pos)).toPoint()
+        if not pm.rect().contains(pt):
+            return None
+        colour = pm.toImage().pixelColor(pt)
+        return colour.red(), colour.green(), colour.blue()
 
     def mousePressEvent(self, event):
+        if self._pipette and event.button() == Qt.LeftButton:
+            sample = self._sample_at(event.pos())
+            if sample:
+                self.pixel_picked.emit(*sample)
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and self._fit \
                 and not self._item.pixmap().isNull():
             # Click while fitted: zoom to 100% at the click position. The

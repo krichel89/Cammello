@@ -1,4 +1,5 @@
 """Small custom widgets (grip, collapsible group, drop table, delegates, login)."""
+import json
 import logging
 import os
 import urllib.parse
@@ -226,11 +227,35 @@ def verifier_from_input(text):
 # fall back to QSettings 'Login' - same trust level as the old plaintext
 # BotPassword, so the app keeps working everywhere.
 
+def store_oauth_tokens(token, secret):
+    """Write both halves as ONE keyring entry. -> bool success."""
+    blob = json.dumps({'token': token, 'secret': secret})
+    return credentials.store(credentials.mw_oauth_slot('tokens'), blob)
+
+
 def stored_oauth_tokens():
-    """-> (access_token, access_secret), ('', '') if not authorized."""
+    """-> (access_token, access_secret), ('', '') if not authorized.
+
+    0.14: both halves live in ONE keyring entry, so this costs a single
+    prompt instead of two. Installations from before that still have the two
+    separate slots; they are read once and migrated.
+    """
+    blob = credentials.load(credentials.mw_oauth_slot('tokens'))
+    if blob:
+        try:
+            data = json.loads(blob)
+            if data.get('token') and data.get('secret'):
+                return data['token'], data['secret']
+        except ValueError:
+            pass                    # corrupt entry: fall through and rebuild
     tok = credentials.load(credentials.mw_oauth_slot('token'))
     sec = credentials.load(credentials.mw_oauth_slot('secret'))
     if tok and sec:
+        # Migrate to the combined entry, then drop the old slots so the next
+        # start only ever touches one.
+        if store_oauth_tokens(tok, sec):
+            credentials.delete(credentials.mw_oauth_slot('token'))
+            credentials.delete(credentials.mw_oauth_slot('secret'))
         return tok, sec
     s = QSettings(APP_NAME, 'Login')
     return (s.value('oauth_token', '') or '',
@@ -242,8 +267,10 @@ def clear_stored_oauth():
 
     The server-side grant stays until the user revokes it on
     Special:OAuthManageMyGrants - worth mentioning in the docs."""
+    credentials.delete(credentials.mw_oauth_slot('tokens'))
     credentials.delete(credentials.mw_oauth_slot('token'))
     credentials.delete(credentials.mw_oauth_slot('secret'))
+    credentials.clear_cache()
     s = QSettings(APP_NAME, 'Login')
     for key in ('oauth_token', 'oauth_secret', 'oauth_username'):
         s.remove(key)
@@ -513,9 +540,7 @@ class OAuthLoginDialog(QDialog):
         self._log.info('OAuth: authorization completed for user "%s".',
                        username)
         self._stop_watcher()
-        stored = (credentials.store(credentials.mw_oauth_slot('token'), token)
-                  and credentials.store(credentials.mw_oauth_slot('secret'),
-                                        secret))
+        stored = store_oauth_tokens(token, secret)
         if stored:
             self.settings.remove('oauth_token')
             self.settings.remove('oauth_secret')
