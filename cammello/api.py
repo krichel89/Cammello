@@ -43,6 +43,23 @@ class MediaWikiApi:
         return out
 
     @staticmethod
+    def _explain_badfilename(requested, stored):
+        """A human-readable message for the upload API's 'badfilename'
+        warning: name the offending character(s) instead of echoing the
+        server's bare corrected name."""
+        illegal = {':': 'colon', '/': 'slash', '\\': 'backslash'}
+        found = sorted({c for c in str(requested) if c in illegal})
+        stored = str(stored).replace('_', ' ')
+        if found:
+            chars = ', '.join(f'{c!r} ({illegal[c]})' for c in found)
+            return (f'badfilename: MediaWiki forbids {chars} in file names '
+                    f'and would store "{stored}" instead of "{requested}". '
+                    f'Please rename the file (e.g. ":" \u2192 " \u2013").')
+        return (f'badfilename: MediaWiki would normalize the name to '
+                f'"{stored}" (requested: "{requested}"). Please adjust the '
+                f'target filename.')
+
+    @staticmethod
     def _trunc(text, n=2000):
         if text is None:
             return ''
@@ -309,6 +326,15 @@ class MediaWikiApi:
                 if 'exists' in warnings and ignore_warnings:
                     self.log.info('File exists – overwriting "%s".', filename)
                     return True
+                if 'badfilename' in warnings:
+                    # Translate the server's terse warning into what actually
+                    # happened: which character(s) MediaWiki refused and what
+                    # name it would store instead ($wgIllegalFileChars: each
+                    # ':', '/' or '\' becomes '-'). normalize_commons_filename
+                    # catches these before the request; this branch remains
+                    # for names that MediaWiki normalizes for OTHER reasons.
+                    raise Exception(self._explain_badfilename(
+                        filename, warnings['badfilename']))
                 detail = ', '.join(f'{k}={v}' for k, v in warnings.items())
                 raise Exception(f'Warnings: {detail}')
 

@@ -89,6 +89,16 @@ TRANSLATIONS = {
         'fr': 'Nouveau nom (sans extension) :',
         'it': 'Nuovo nome (senza estensione):',
     },
+    'That name is reserved on Windows or ends with a dot or space.': {
+        'de': 'Dieser Name ist unter Windows reserviert oder endet mit '
+              'Punkt oder Leerzeichen.',
+        'es': 'Ese nombre está reservado en Windows o termina en punto '
+              'o espacio.',
+        'fr': 'Ce nom est réservé sous Windows ou se termine par un point '
+              'ou une espace.',
+        'it': 'Quel nome è riservato in Windows o termina con un punto '
+              'o uno spazio.',
+    },
     'That name contains characters a file name cannot hold.': {
         'de': 'Dieser Name enthält Zeichen, die ein Dateiname nicht tragen kann.',
         'es': 'Ese nombre contiene caracteres que un nombre de archivo no admite.',

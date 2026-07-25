@@ -23,7 +23,7 @@ import json
 import os
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -334,6 +334,69 @@ def _apply_wb_image(img, wb):
     return img.point(luts[0] + luts[1] + luts[2])
 
 
+def _combined_lut(gain, ev):
+    """One 256-entry table for channel gain AND exposure together: decode
+    sRGB once, scale by gain*2**ev in linear light, re-encode once. Doing WB
+    and EV as ONE pass avoids the second 8-bit quantization that two chained
+    LUTs would add (0.14.1)."""
+    factor = gain * (2.0 ** ev)
+    table = []
+    for i in range(256):
+        c = i / 255.0
+        lin = c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        lin *= factor
+        lin = 0.0 if lin < 0 else (1.0 if lin > 1 else lin)
+        enc = (lin * 12.92 if lin <= 0.0031308
+               else 1.055 * (lin ** (1 / 2.4)) - 0.055)
+        table.append(max(0, min(255, round(enc * 255))))
+    return table
+
+
+def _apply_wb_ev_image(img, wb, ev):
+    """Apply white balance and exposure in a single LUT pass. Either may be
+    absent (wb=None / ev=0.0); with both absent the image is returned as is.
+    Greyscale gets exposure only - it has no colour to balance."""
+    if not wb and ev == 0.0:
+        return img
+    if img.mode == 'L' or (img.mode not in ('RGB', 'RGBA') and not wb):
+        return _apply_ev_image(img, ev)
+    if not wb:
+        return _apply_ev_image(img, ev)
+    r_gain, g_gain, b_gain = wb
+    if img.mode not in ('RGB', 'RGBA'):
+        img = img.convert('RGB')
+    luts = [_combined_lut(g, ev) for g in (r_gain, g_gain, b_gain)]
+    if img.mode == 'RGBA':
+        r, g, b, a = img.split()
+        r, g, b = (ch.point(l) for ch, l in zip((r, g, b), luts))
+        return Image.merge('RGBA', (r, g, b, a))
+    return img.point(luts[0] + luts[1] + luts[2])
+
+
+_ORIENTATION_TAG = 274                  # EXIF 0x0112
+
+
+def _exif_upright(exif_bytes):
+    """EXIF bytes with the orientation tag reset to 1 (upright).
+
+    Rendered copies get their pixels rotated upright (exif_transpose /
+    rawpy flip), so a surviving orientation flag would make viewers rotate
+    the already-rotated result a second time. Returns the input unchanged
+    when it cannot be parsed - a stale flag is still better than dropping
+    the camera metadata."""
+    if not exif_bytes:
+        return exif_bytes
+    try:
+        exif = Image.Exif()
+        exif.load(exif_bytes)
+        if exif.get(_ORIENTATION_TAG, 1) != 1:
+            exif[_ORIENTATION_TAG] = 1
+            return exif.tobytes()
+        return exif_bytes
+    except Exception:
+        return exif_bytes
+
+
 def _apply_crop_image(img, crop):
     """Crop a PIL image with a normalized (x, y, w, h) box."""
     if crop is None:
@@ -379,23 +442,28 @@ def render_edited(path, record, out_path, log=None):
 
     try:
         if _is_raw(path):
-            img = _render_raw(path, ev, log)
-            # EV already applied in the raw domain when possible; _render_raw
-            # tells us via the returned flag.
-            img, ev_done = img
+            # rawpy applies the camera flip during postprocess, so the pixels
+            # already match what the culling view showed; the crop box (drawn
+            # on that view) applies directly. The embedded-preview fallback
+            # goes through the same upright step as the JPEG branch.
+            img, ev_done, exif = _render_raw(path, ev, log)
             if img is None:
                 return None
-            if not ev_done and ev != 0.0:
-                img = _apply_ev_image(img, ev)
         else:
             img = Image.open(path)
+            # The culling view shows the image UPRIGHT (previews.py applies
+            # the EXIF orientation), and the crop box is normalized against
+            # that upright frame. Rotate here too, or a portrait shot gets
+            # the box applied to the unrotated axes - the wrong region
+            # (0.14.1; reproduced with an orientation-6 test image).
+            img = ImageOps.exif_transpose(img)
             exif = img.info.get('exif')
             img = _apply_crop_image(img, crop)
-            img = _apply_wb_image(img, wb)
-            img = _apply_ev_image(img, ev)
+            img = _apply_wb_ev_image(img, wb, ev)
             if img.mode not in ('RGB', 'L'):
                 img = img.convert('RGB')
             save_kwargs = {'quality': 95}
+            exif = _exif_upright(exif)
             if exif:
                 save_kwargs['exif'] = exif
             img.save(out_path, 'JPEG', **save_kwargs)
@@ -403,10 +471,14 @@ def render_edited(path, record, out_path, log=None):
 
         # RAW path continues here (crop happens after the raw render).
         img = _apply_crop_image(img, crop)
-        img = _apply_wb_image(img, wb)
+        img = _apply_wb_ev_image(img, wb, 0.0 if ev_done else ev)
         if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
-        img.save(out_path, 'JPEG', quality=95)
+        save_kwargs = {'quality': 95}
+        exif = _exif_upright(exif)
+        if exif:
+            save_kwargs['exif'] = exif
+        img.save(out_path, 'JPEG', **save_kwargs)
         return out_path
     except Exception as e:
         if log:
@@ -415,11 +487,19 @@ def render_edited(path, record, out_path, log=None):
 
 
 def _render_raw(path, ev, log=None):
-    """-> (PIL image, ev_applied_bool). Uses rawpy when present; falls back
-    to the embedded preview via Pillow if rawpy is missing."""
+    """-> (PIL image, ev_applied_bool, exif_bytes_or_None). Uses rawpy when
+    present; falls back to the embedded preview via Pillow if rawpy is
+    missing.
+
+    The rawpy render carries no metadata of its own, which used to mean the
+    exported edit lost the camera EXIF entirely (date, camera, GPS). The
+    embedded preview JPEG usually holds the full camera EXIF, so it is read
+    from there (0.14.1); orientation is reset by the caller because the
+    rendered pixels are already upright."""
     if HAS_RAWPY:
         try:
             with rawpy.imread(path) as raw:
+                exif = _raw_embedded_exif(raw, log)
                 kwargs = dict(use_camera_wb=True, no_auto_bright=True,
                               output_bps=8)
                 ev_done = False
@@ -430,15 +510,33 @@ def _render_raw(path, ev, log=None):
                         kwargs['exp_correc'] = True
                         ev_done = True
                 rgb = raw.postprocess(**kwargs)
-            return Image.fromarray(rgb), ev_done
+            return Image.fromarray(rgb), ev_done, exif
         except Exception as e:
             if log:
                 log.debug('rawpy render failed for %s: %s', path, e)
-    # Fallback: the embedded preview (no EV in the raw domain).
+    # Fallback: the embedded preview (no EV in the raw domain). Rotate it
+    # upright so the crop box matches the culling view, like the JPEG branch.
     try:
-        return Image.open(path), False
+        img = ImageOps.exif_transpose(Image.open(path))
+        return img, False, img.info.get('exif')
     except Exception:
-        return None, False
+        return None, False, None
+
+
+def _raw_embedded_exif(raw, log=None):
+    """EXIF bytes from an open rawpy file's embedded JPEG preview, or None.
+    Bitmap thumbnails carry no EXIF; every failure is non-fatal - the render
+    then simply ships without metadata, as before."""
+    try:
+        thumb = raw.extract_thumb()
+        if thumb.format == rawpy.ThumbFormat.JPEG:
+            import io
+            with Image.open(io.BytesIO(thumb.data)) as t:
+                return t.info.get('exif')
+    except Exception as e:
+        if log:
+            log.debug('No EXIF from embedded preview: %s', e)
+    return None
 
 
 def effective_upload_path(path, edits, tmp_dir, log=None):

@@ -156,6 +156,26 @@ def _patch_xmp_text(text, rating, label):
     return text
 
 
+# Names Windows reserves regardless of extension. The app also targets
+# Windows, so a Mac-side rename to one of these would produce a file the
+# other platform cannot even open (0.14.1).
+_WINDOWS_RESERVED = {'con', 'prn', 'aux', 'nul',
+                     *(f'com{i}' for i in range(1, 10)),
+                     *(f'lpt{i}' for i in range(1, 10))}
+
+
+def rename_stem_problem(stem):
+    """None if `stem` is a safe cross-platform file stem, else a short
+    English reason code: 'reserved' (Windows device name) or 'trailing'
+    (ends with a dot or space - Windows strips those silently). The GUI
+    maps the code to a translated message."""
+    if stem.lower() in _WINDOWS_RESERVED:
+        return 'reserved'
+    if stem != stem.rstrip('. '):
+        return 'trailing'
+    return None
+
+
 def _write_xmp_sidecar(path, rating, label):
     """Write Rating and Label into a .xmp sidecar in pure Python.
 

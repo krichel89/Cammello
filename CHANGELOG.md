@@ -4,6 +4,36 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] - 2026-07-25
+
+### Fixed
+- Crop applied to EXIF-rotated JPEGs cut the wrong region: the culling view
+  shows images upright, the export applied the normalized crop box to the
+  unrotated pixels. The export now rotates upright first and resets the
+  orientation tag in the passed-through EXIF.
+- Rendered edits of RAW files lost the entire camera EXIF (date, camera,
+  GPS); it is now taken from the RAW's embedded preview JPEG.
+- F2 rename refused pure case changes on case-insensitive file systems
+  (macOS default) and accepted Windows-reserved names (CON, NUL, …) or
+  names ending in a dot/space; both fixed.
+- Opening a culling folder no longer raises AttributeError when the culling
+  module is disabled (missing pyexiv2).
+
+### Added
+- Target filenames are validated BEFORE upload: ':', '/' and '\' are
+  forbidden in MediaWiki FILE names ($wgIllegalFileChars) and were silently
+  replaced with '-', failing every file with a terse `badfilename` warning.
+  The per-row error now names the offending character(s). A server-side
+  `badfilename` warning, should one still occur, is explained the same way.
+
+### Changed
+- Exposure and white balance render in ONE combined LUT pass (one sRGB
+  quantization instead of two).
+- Persisting edits is debounced (400 ms) instead of a full settings flush
+  per sixth-stop keypress; folder change, rename and shutdown still flush
+  immediately.
+- FTPS is the default protocol for fresh FTP configurations.
+
 ## [0.14.0] - 2026-07-24
 
 ### Added

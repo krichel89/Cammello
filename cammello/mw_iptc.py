@@ -875,7 +875,10 @@ class MWIptcMixin:
 
     def _ftp_load_settings(self):
         s = self.settings
-        proto = s.value('ftp_protocol', 'ftp')
+        # 0.14.1: encrypted transport as the default for FRESH setups (a
+        # stored choice always wins). Plain FTP sends the password and the
+        # images in cleartext and stays available for servers that need it.
+        proto = s.value('ftp_protocol', 'ftps')
         idx = self.ftp_protocol_combo.findText(proto)
         if idx >= 0:
             self.ftp_protocol_combo.setCurrentIndex(idx)

@@ -206,6 +206,25 @@ def extract_name_from_caption(caption):
 
 FORBIDDEN_TITLE_CHARS = set('#<>[]|{}')
 
+# Characters MediaWiki forbids in FILE names specifically ($wgIllegalFileChars,
+# default ':', '/', '\'). They are legal in ordinary page titles - which is why
+# they are easy to miss - but an upload silently REPLACES each of them with
+# '-' and answers with a 'badfilename' warning. Catching them here, before any
+# request, turns 129 cryptic per-file errors into one clear message per row
+# (real case: a Wikimania batch named "<session title>: <n>.JPG", 2026-07).
+ILLEGAL_FILENAME_CHARS = set(':/\\')
+
+_CHAR_NAMES = {':': 'colon', '/': 'slash', '\\': 'backslash'}
+
+
+def _describe_chars(chars):
+    """"':' (colon), '/' (slash)" - repr plus a human name where we have one."""
+    out = []
+    for c in sorted(chars):
+        name = _CHAR_NAMES.get(c)
+        out.append(f'{c!r} ({name})' if name else repr(c))
+    return ', '.join(out)
+
 
 def normalize_commons_filename(target, source_path):
     """Build the target filename for the upload to Commons.
@@ -239,6 +258,18 @@ def normalize_commons_filename(target, source_path):
             raise ValueError('Source file has no extension; please specify an '
                              'extension in the target filename.')
         name = name + src_ext
+
+    bad_file = sorted({c for c in name if c in ILLEGAL_FILENAME_CHARS})
+    if bad_file:
+        # Named individually: the whole point is that the user learns WHICH
+        # character broke the name (they are legal in local file names on
+        # Linux, so the batch looks fine on disk).
+        raise ValueError(
+            'Illegal character(s) in target filename: '
+            + _describe_chars(bad_file)
+            + '. MediaWiki forbids these in file names and would silently '
+            'replace each with "-". Please rename (e.g. ":" \u2192 " \u2013").'
+        )
 
     bad = sorted({c for c in name if c in FORBIDDEN_TITLE_CHARS or ord(c) < 32})
     if bad:

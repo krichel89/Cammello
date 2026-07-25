@@ -64,6 +64,9 @@ def main():
     check('crop mode ends after commit', win._cull_cropping is False)
     check('the strip row gets the edit badge',
           win.cull_strip.item(0).data(Qt.UserRole + 4) is True)
+    # 0.14.1: persisting is debounced; a real shutdown flushes via
+    # _cull_shutdown. Emulate the flush the way the app does on exit.
+    win._cull_flush_edits()
     check('the stored edit survives a reload',
           edits.load_edits(win.settings).get(
               edits.norm(item.display_path)) == {'crop': [0.2, 0.2, 0.5, 0.5]})

@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
     QToolButton, QInputDialog)
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QPen, QPainter
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 
 from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 
@@ -508,6 +508,14 @@ class MWCullingMixin:
         self.cull_view = CullImageView()
         # Crop store (0.13): loaded once, kept in memory, saved on each edit.
         self._cull_edits = edits.load_edits(self.settings)
+        # 0.14.1: persisting is debounced. save_edits() forces a settings
+        # sync (full JSON dump + disk flush); doing that on EVERY sixth-stop
+        # keypress meant a dozen flushes for one +2 EV correction. A short
+        # timer batches them; folder change and shutdown flush explicitly.
+        self._cull_edits_timer = QTimer(self)
+        self._cull_edits_timer.setSingleShot(True)
+        self._cull_edits_timer.setInterval(400)
+        self._cull_edits_timer.timeout.connect(self._cull_flush_edits)
         self._cull_cropping = False
         self.cull_edit_panel = EditPanel(self.cull_view)
         self.cull_view.edit_panel = self.cull_edit_panel
@@ -611,6 +619,11 @@ class MWCullingMixin:
     # ── Folder handling ───────────────────────────────────────────────────────
 
     def _cull_open_folder(self, folder=None):
+        # Defensive: with pyexiv2 missing the culling tab (and its state)
+        # was never built - degrade to a no-op instead of an AttributeError
+        # (0.14.1; seen when the folder action is reached programmatically).
+        if not hasattr(self, '_cull_reader'):
+            return
         if not folder:
             folder = QFileDialog.getExistingDirectory(
                 self, tr('Open folder'), remembered_dir(self.settings))
@@ -621,6 +634,7 @@ class MWCullingMixin:
             self._cull_reader.stop()
             self._cull_reader.wait(2000)
         self._cull_wb.flush(10)
+        self._cull_flush_edits()
         self._cull_loader.new_generation()
 
         report = {}
@@ -1199,6 +1213,17 @@ class MWCullingMixin:
                                 tr('That name contains characters a file '
                                    'name cannot hold.'))
             return
+        if culling.rename_stem_problem(new_stem):
+            QMessageBox.warning(
+                self, tr('Rename file'),
+                tr('That name is reserved on Windows or ends with a dot '
+                   'or space.'))
+            return
+        # A pure case change ("img" -> "IMG") is a legitimate rename. On a
+        # case-insensitive file system (macOS default) the target "exists" -
+        # it IS the source - so the collision check below must not fire for
+        # it; os.rename handles the case change fine (0.14.1).
+        case_only = new_stem.lower() == stem.lower()
 
         # Every file that belongs to this picture, with its extension.
         parts = [p for p in (item.raw_path, item.jpg_path) if p]
@@ -1209,7 +1234,13 @@ class MWCullingMixin:
         for old in parts:
             new = os.path.join(folder,
                                new_stem + os.path.splitext(old)[1])
-            if os.path.exists(new):
+            collides = os.path.exists(new)
+            if collides and case_only:
+                try:                    # same inode = the source itself
+                    collides = not os.path.samefile(old, new)
+                except OSError:
+                    pass
+            if collides:
                 QMessageBox.warning(
                     self, tr('Rename file'),
                     tr('A file called "{name}" already exists.').format(
@@ -1246,6 +1277,16 @@ class MWCullingMixin:
                          len(done))
         self._cull_rebuild_after_rename(old_display, item)
 
+    def _cull_save_edits_soon(self):
+        """Persist the edit store soon (debounced, 0.14.1). The in-memory
+        dict is always current; only the QSettings write is deferred."""
+        self._cull_edits_timer.start()
+
+    def _cull_flush_edits(self):
+        """Persist the edit store now; cancels a pending debounce."""
+        self._cull_edits_timer.stop()
+        edits.save_edits(self.settings, self._cull_edits)
+
     def _cull_migrate_paths(self, old_path, new_path):
         """Move the path-keyed records (edits, channel marks) to the new
         name. Ratings live in the file's own XMP and travel with it."""
@@ -1253,7 +1294,7 @@ class MWCullingMixin:
         if record:
             self._cull_edits[edits.norm(new_path)] = record
             edits.clear_edit(self._cull_edits, old_path)
-            edits.save_edits(self.settings, self._cull_edits)
+            self._cull_flush_edits()    # a rename must persist immediately
         marks = channels.load_marks(self.settings)
         mark = marks.get(channels.norm(old_path))
         if mark:
@@ -1298,7 +1339,7 @@ class MWCullingMixin:
                 tr('That spot is too dark to balance on.'), 4000)
             return
         edits.set_wb(self._cull_edits, item.display_path, gains)
-        edits.save_edits(self.settings, self._cull_edits)
+        self._cull_save_edits_soon()
         self.logger.info('White balance for %s from (%d, %d, %d) -> %s',
                          os.path.basename(item.display_path), r, g, b,
                          tuple(round(v, 3) for v in gains))
@@ -1319,7 +1360,7 @@ class MWCullingMixin:
         if abs(new - current) < 1e-9:
             return
         edits.set_ev(self._cull_edits, path, new)
-        edits.save_edits(self.settings, self._cull_edits)
+        self._cull_save_edits_soon()
         self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
 
@@ -1329,7 +1370,7 @@ class MWCullingMixin:
         if item is None:
             return
         if edits.clear_edit(self._cull_edits, item.display_path):
-            edits.save_edits(self.settings, self._cull_edits)
+            self._cull_save_edits_soon()
             self.logger.info('All edits removed for %s',
                              os.path.basename(item.display_path))
         self.cull_view.set_crop_display(None)
@@ -1415,7 +1456,7 @@ class MWCullingMixin:
         if item is not None and overlay.has_box():
             box = overlay._box_tuple()
             if edits.set_crop(self._cull_edits, item.display_path, box):
-                edits.save_edits(self.settings, self._cull_edits)
+                self._cull_save_edits_soon()
                 self._cull_refresh_edit_badge(item)
                 self.logger.info('Crop set for %s: %s',
                                  os.path.basename(item.display_path), box)
@@ -1434,7 +1475,7 @@ class MWCullingMixin:
         item = self._cull_current_item()
         if item is not None:
             if edits.set_crop(self._cull_edits, item.display_path, None):
-                edits.save_edits(self.settings, self._cull_edits)
+                self._cull_save_edits_soon()
                 self._cull_refresh_edit_badge(item)
                 self.logger.info('Crop removed for %s',
                                  os.path.basename(item.display_path))
@@ -1675,6 +1716,7 @@ class MWCullingMixin:
     # ── Shutdown ──────────────────────────────────────────────────────────────
 
     def _cull_shutdown(self):
+        self._cull_flush_edits()
         if self._cull_reader is not None:
             self._cull_reader.stop()
             self._cull_reader.wait(2000)

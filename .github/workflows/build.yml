@@ -69,7 +69,24 @@ jobs:
   build-mac:
     needs: test
     if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'mac' }}
-    runs-on: macos-latest
+    # 0.14.1-Tooling: ein Matrix-Job pro Architektur. macos-latest ist seit
+    # den 14er-Images Apple Silicon (arm64); Intel-Macs koennen das Bundle
+    # nicht starten. GitHubs alter Intel-Runner macos-13 wurde im Dezember
+    # 2025 stillgelegt; der Ersatz ist das Standard-Label macos-15-intel
+    # (kostenlos fuer oeffentliche Repos, angekuendigt bis August 2027 als
+    # letztes x86_64-Image). Universal2 ist keine Option: pyexiv2 und rawpy
+    # liefern nur getrennte Arch-Wheels.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+            zipname: Cammello_Mac.zip
+          - runner: macos-15-intel
+            arch: x86_64
+            zipname: Cammello_Mac_Intel.zip
+    runs-on: ${{ matrix.runner }}
     # Signing secrets are lifted to job-level env because a step's `if:`
     # cannot reference the `secrets` context directly (GitHub only exposes
     # secrets through env). The signing/notarize steps below guard on these,
@@ -113,7 +130,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install -r requirements.txt
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            # rawpy liefert seit 0.26 keine macOS-x86_64-Wheels mehr; 0.25.1
+            # ist die letzte Version mit Intel-Wheel (cp311 vorhanden). Das
+            # requirements-Pin rawpy>=0.27 ist auf Intel unerfuellbar, also
+            # rawpy herausfiltern und die Intel-Version explizit setzen.
+            # Folge: der Intel-Build traegt ein aelteres LibRaw (relevant
+            # nur fuer sehr neue Kameramodelle); arm64 bleibt aktuell.
+            grep -v '^rawpy' requirements.txt > requirements_intel.txt
+            pip install -r requirements_intel.txt 'rawpy==0.25.1'
+          else
+            pip install -r requirements.txt
+          fi
 
       - name: Build .icns from icon.png
         run: |
@@ -241,12 +269,12 @@ jobs:
       - name: Package Mac app
         run: |
           cd dist
-          zip -r Cammello_Mac.zip Cammello.app
+          zip -r "${{ matrix.zipname }}" Cammello.app
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/Cammello_Mac.zip
+          files: dist/${{ matrix.zipname }}
           tag_name: ${{ github.event.release.tag_name || inputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
