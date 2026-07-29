@@ -1,6 +1,8 @@
 """Background QThread workers: upload, login, connection test."""
 import os
 import re
+import shutil
+import tempfile
 import traceback
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -8,7 +10,10 @@ from .i18n import tr
 from .constants import *
 from .sdc import *
 from .api import MediaWikiApi
-from .exif import parse_coordinates
+from .exif import (parse_coordinates, read_capture_settings,
+                   read_camera_ids)
+from . import camera_map
+from . import edits as edits_mod
 from . import upload_journal as journal_mod
 
 
@@ -19,10 +24,23 @@ class UploadWorker(QThread):
     file_started = pyqtSignal(int, str)   # index, target filename
 
     def __init__(self, api, rows, gallery_prefix, ignore_warnings,
-                 journal=None):
+                 journal=None, capture_sdc=False, edits_store=None):
         super().__init__()
         self.api = api
         self.log = api.log
+        # 0.15.0 (Harald): copy the EXIF capture settings (exposure time,
+        # f-number, ISO, focal length) into the structured data,
+        # transparently at upload. Off by default at the worker level - the
+        # GUI passes the setting.
+        self.capture_sdc = bool(capture_sdc)
+        # 0.15.0: the long-standing gap - crop, exposure and white balance
+        # were applied in the culling export but NOT on upload, so the
+        # original went to Commons. The edited copy is rendered here, in
+        # the upload loop, where the progress bar already is. `filepath`
+        # stays the SOURCE for metadata reads (EXIF, camera, date); only
+        # the bytes that are sent change.
+        self.edits_store = edits_store or {}
+        self._edit_tmp = None
         # 0.14.2: crash-safe batch journal. Written through after every
         # file, so an interrupted run can be picked up where it stopped.
         # None means "do not journal" (used by tests).
@@ -71,6 +89,33 @@ class UploadWorker(QThread):
         """Request a stop. The current file is finished, then the run ends."""
         self._cancelled = True
         self.log.info('Cancel requested: stopping after the current file.')
+
+    def _path_to_send(self, filepath, fname):
+        """The bytes that actually go to Commons (0.15.0).
+
+        Unedited files return their own path at zero cost. An edited file
+        is rendered once into a temp directory; if the render fails, the
+        ORIGINAL is uploaded rather than nothing - an upload must not
+        silently vanish because a crop could not be applied.
+        """
+        if not self.edits_store or not edits_mod.has_edit(self.edits_store,
+                                                          filepath):
+            return filepath
+        if self._edit_tmp is None:
+            self._edit_tmp = tempfile.mkdtemp(prefix='cammello_upload_')
+        send = edits_mod.effective_upload_path(
+            filepath, self.edits_store, self._edit_tmp, self.log)
+        if send == filepath:
+            self.log.warning('Edited copy of "%s" could not be rendered - '
+                             'uploading the original.', fname)
+        else:
+            self.log.info('Uploading the edited copy of "%s".', fname)
+        return send
+
+    def _cleanup_edit_tmp(self):
+        if self._edit_tmp:
+            shutil.rmtree(self._edit_tmp, ignore_errors=True)
+            self._edit_tmp = None
 
     def run(self):
         gallery_entries = {}   # gallery_page -> list of (filename, caption)
@@ -174,6 +219,15 @@ class UploadWorker(QThread):
                     self.log.warning('Coordinates for "%s" are unusable and '
                                      'were skipped: %r',
                                      fname, sd.get('coordinates'))
+                # 0.15.0: position of the depicted object - a DIFFERENT
+                # template from the camera position above, on purpose.
+                obj = parse_coordinates(sd.get('object_coordinates', ''))
+                if obj:
+                    parts.append('{{Object location dec|%.6f|%.6f}}' % obj)
+                elif sd.get('object_coordinates', '').strip():
+                    self.log.warning('Object coordinates for "%s" are '
+                                     'unusable and were skipped: %r',
+                                     fname, sd.get('object_coordinates'))
                 if other_templates:
                     parts.append(other_templates)
                 if license_text:
@@ -187,8 +241,9 @@ class UploadWorker(QThread):
                 # resume knows to ask Commons whether it arrived instead of
                 # blindly uploading it a second time.
                 self._journal_mark(row, journal_mod.IN_FLIGHT, target=filename)
+                send_path = self._path_to_send(row['filepath'], fname)
                 self.api.upload(
-                    filename, row['filepath'], wikitext,
+                    filename, send_path, wikitext,
                     f'Uploaded with {APP_NAME}', self.ignore_warnings
                 )
             except Exception as e:
@@ -214,9 +269,20 @@ class UploadWorker(QThread):
                     if key.startswith('caption_'):
                         lang = key[8:]
                         labels[lang] = val
+                    elif key.startswith('alt_'):
+                        # 0.15.2: alt text -> P11265, a MONOLINGUAL value,
+                        # so the language rides along with the text. There
+                        # is no wikitext counterpart on Commons: {{Alt}} is
+                        # the language template for Southern Altai (ISO
+                        # code "alt"), NOT an alt-text template - using it
+                        # would tag the text as Altai.
+                        if val.strip():
+                            claims.append((ALT_TEXT_PROPERTY,
+                                           ('monolingual', val.strip(),
+                                            key[4:])))
                     elif key in PROPERTY_MAP:
                         prop = PROPERTY_MAP[key]
-                        if key == 'coordinates':
+                        if key in ('coordinates', 'object_coordinates'):
                             coord = parse_coordinates(val)
                             if coord:
                                 claims.append((prop, ('coord',) + coord))
@@ -229,6 +295,58 @@ class UploadWorker(QThread):
                                     claims.append((prop, qid))
                         else:
                             claims.append((prop, val))
+
+                if self.capture_sdc:
+                    # 0.15.0: the EXIF capture settings as quantity claims.
+                    # Read from the file at upload time - transparent, no
+                    # field to fill. Property and unit QIDs were verified on
+                    # wikidata.org (see exif.read_capture_settings).
+                    cap = read_capture_settings(row['filepath'], self.log)
+                    for key, prop, unit in (
+                            ('exposure_time', 'P6757', 'Q11574'),
+                            ('f_number', 'P6790', None),
+                            ('iso', 'P6789', None),
+                            ('focal_length', 'P2151', 'Q174789')):
+                        if key in cap:
+                            claims.append(
+                                (prop, ('quantity', cap[key], unit)))
+                    # Camera (P4082) and lens (P11385) - ONLY when the EXIF
+                    # string maps to exactly one Wikidata item. The camera
+                    # table is generated from Wikidata's own P2009/P2010
+                    # statements (make_camera_map.py); ambiguous strings
+                    # are not in it, so a hit IS the uniqueness rule.
+                    ids = read_camera_ids(row['filepath'], self.log)
+                    qid = camera_map.camera_qid(ids.get('make'),
+                                                ids.get('model'))
+                    if qid:
+                        claims.append(('P4082', qid))
+                    elif ids.get('model'):
+                        self.log.info('Camera "%s" not in the map (or '
+                                      'ambiguous) - no P4082 for "%s".',
+                                      ids['model'], fname)
+                    lq = camera_map.lens_qid(ids.get('lens_model'))
+                    if lq:
+                        claims.append(('P11385', lq))
+                    # Inception (P571, day precision) from the capture
+                    # date, and the media type (P1163) from the extension.
+                    date_part = (row.get('date') or '')[:10]
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_part):
+                        claims.append(('P571', ('time', date_part)))
+                    ext = os.path.splitext(row['filepath'])[1].lower()
+                    mime = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                            '.png': 'image/png', '.tif': 'image/tiff',
+                            '.tiff': 'image/tiff', '.webp': 'image/webp'
+                            }.get(ext)
+                    if mime:
+                        claims.append(('P1163', ('string', mime)))
+                    # Source of file (P7482) - ONLY the unambiguous case:
+                    # the source field says "own work". A Flickr import or
+                    # a scan needs a judgement this cannot make, and gets
+                    # no statement rather than a guessed one.
+                    src = (row.get('source') or '').strip()
+                    bare = src.strip('{} ').strip().lower()
+                    if bare in OWN_WORK_TEMPLATES:
+                        claims.append((SOURCE_PROPERTY, SOURCE_OWN_WORK))
 
                 if labels or claims:
                     self.api.clear_token()
@@ -243,20 +361,13 @@ class UploadWorker(QThread):
                     else:
                         self.log.warning('SDC skipped: no pageid for "%s".', fname)
 
-                # Collect gallery entry. The page title is assembled from the
-                # prefix (a setting) and the per-session suffix; the user
-                # types neither slash - gallery_page_name puts in exactly one
-                # and cleans up whatever they typed around it.
-                gallery_suffix = sd.get('gallery_suffix', '').strip()
-                prefix = (self.gallery_prefix or '').strip()
-                if prefix:
-                    gallery_page = gallery_page_name(prefix, gallery_suffix) or None
-                elif gallery_suffix:
-                    gallery_page = None  # no prefix set -> skip gallery
-                    self.log.warning('gallery_suffix set but no gallery prefix '
-                                     '-> gallery skipped for "%s".', fname)
-                else:
-                    gallery_page = None
+                # Collect gallery entry.
+                # 0.15.2 (Harald): ONE field. What stands in the base
+                # description IS the gallery page name - no prefix setting,
+                # no composition. A value left over from the old
+                # prefix+suffix days is migrated when the description is
+                # loaded, so nothing has to be retyped.
+                gallery_page = sd.get('gallery_suffix', '').strip() or None
 
                 caption = sd.get('caption_en', '')
                 gallery_entries.setdefault(gallery_page, []).append(
@@ -318,6 +429,9 @@ class UploadWorker(QThread):
         total = len(self.rows)
         # Files that are on Commons but whose structured data could not be
         # written must not be hidden behind a plain "Done".
+        # 0.15.0: the rendered copies are throwaway - remove them however
+        # the run ended (finished, cancelled, or after an error).
+        self._cleanup_edit_tmp()
         sdc_note = (f' {sdc_failures} of them without structured data '
                     f'(see the Log tab).' if sdc_failures else '')
         if cancelled_at is not None:

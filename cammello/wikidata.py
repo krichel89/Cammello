@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QCompleter
 from PyQt5.QtGui import QRegExpValidator
 from .constants import *
 from .constants import _WD_SINGLE_RE, _WD_LIST_RE
+from .i18n import tr
 
 
 _WD_FIELDS = weakref.WeakSet()
@@ -123,6 +124,70 @@ def _cirrus_search_entities(query, lang, timeout):
         desc = (descs.get(lang) or descs.get('en') or {}).get('value', '')
         out.append((qid, label, desc))
     return out
+
+
+class _FnWorker(QThread):
+    """Runs one function off the GUI thread and hands back (result, exc)."""
+    done = pyqtSignal(object, object)
+
+    def __init__(self, fn, args, kwargs, parent=None):
+        super().__init__(parent)
+        self._fn, self._args, self._kwargs = fn, args, kwargs
+
+    def run(self):
+        try:
+            self.done.emit(self._fn(*self._args, **self._kwargs), None)
+        except Exception as exc:              # network errors land here
+            self.done.emit(None, exc)
+
+
+def fetch_in_background(parent, label, fn, *args, **kwargs):
+    """Run a network call WITHOUT freezing the GUI (0.15.0 security review).
+
+    The three Wikidata lookups used to run synchronously in the GUI thread:
+    on a slow network the whole window froze for up to the request timeout.
+    This keeps the CALLER's simple call-and-return shape (the call sites
+    need a return value, a full async rewrite would ripple through their
+    dialog logic) but parks the waiting in a local event loop, so the
+    window keeps painting and a progress dialog with Cancel appears after
+    400 ms.
+
+    Returns (result, exc, cancelled). On cancel the worker keeps running to
+    its end in the background - a requests call cannot be aborted safely -
+    but its result is discarded and the worker deletes itself.
+    """
+    from PyQt5.QtWidgets import QProgressDialog
+    from PyQt5.QtCore import QEventLoop
+
+    state = {'result': None, 'exc': None, 'done': False, 'cancelled': False}
+    loop = QEventLoop()
+    worker = _FnWorker(fn, args, kwargs)
+
+    def _on_done(result, exc):
+        state['result'], state['exc'], state['done'] = result, exc, True
+        loop.quit()
+
+    worker.done.connect(_on_done)
+    worker.finished.connect(worker.deleteLater)
+
+    dlg = QProgressDialog(label, tr('Cancel'), 0, 0, parent)
+    dlg.setWindowModality(Qt.WindowModal)
+    dlg.setMinimumDuration(400)      # short calls never show a dialog
+    dlg.setAutoClose(False)          # we close it ourselves, exactly once
+
+    def _on_cancel():
+        state['cancelled'] = True
+        loop.quit()
+
+    dlg.canceled.connect(_on_cancel)
+    worker.start()
+    if not state['done']:
+        loop.exec()
+    dlg.canceled.disconnect(_on_cancel)   # closing emits canceled - not a cancel
+    dlg.close()
+    if state['cancelled'] and not state['done']:
+        return None, None, True
+    return state['result'], state['exc'], False
 
 
 class WikidataSearchWorker(QThread):
@@ -319,6 +384,36 @@ def fetch_commons_categories(qids, timeout=8):
         if not label and labels:
             label = next(iter(labels.values())).get('value', '')
         out[qid] = (cat, label)
+    return out
+
+
+def fetch_coordinates(qids, timeout=8):
+    """{qid: (lat, lon)} for up to 50 QIDs via one wbgetentities call.
+
+    Reads P625 "coordinate location" - the coordinate an ITEM carries, e.g.
+    the building. Note this is NOT the property the file gets: on the file,
+    the depicted position is P9149. P625 is where the value comes FROM.
+    Items without a coordinate are simply absent from the result.
+    """
+    qids = [q for q in qids if q]
+    if not qids:
+        return {}
+    r = requests.get(
+        'https://www.wikidata.org/w/api.php',
+        params={'action': 'wbgetentities', 'ids': '|'.join(qids[:50]),
+                'props': 'claims', 'format': 'json'},
+        headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
+    r.raise_for_status()
+    out = {}
+    for qid, ent in (r.json().get('entities') or {}).items():
+        for claim in (ent.get('claims', {}).get('P625') or []):
+            val = (claim.get('mainsnak', {}).get('datavalue', {})
+                   .get('value'))
+            if isinstance(val, dict):
+                lat, lon = val.get('latitude'), val.get('longitude')
+                if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                    out[qid] = (float(lat), float(lon))
+                    break
     return out
 
 

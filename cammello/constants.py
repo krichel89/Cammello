@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.14.3'
+__version__ = '0.15.2'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -111,6 +111,10 @@ SD_KEYS = [
     # keys above this is not a QID - it becomes {{Location dec}} in the
     # wikitext and a globe-coordinate claim (P1259) in the structured data.
     'coordinates',
+    # 0.15.0: position of the DEPICTED object, kept apart from the camera
+    # position above. Becomes {{Object location dec}} in the wikitext and a
+    # P9149 claim in the structured data.
+    'object_coordinates',
 ]
 
 # Licence presets for the dropdowns (0.12.14). Each row pairs the WIKITEXT
@@ -140,6 +144,12 @@ COPYRIGHT_PRESETS = [
     ('public domain', 'Q19652'),
 ]
 
+# Alt text (0.15.2). P11265 "alt text", verified on wikidata.org
+# (29.07.2026). Monolingual, so it is stored per language as alt_<code>=
+# lines, exactly like the captions next to it. NOT in PROPERTY_MAP: the
+# key carries the language, so the worker handles it by prefix.
+ALT_TEXT_PROPERTY = 'P11265'
+
 PROPERTY_MAP = {
     'creator': 'P170',
     'copyright': 'P6216',
@@ -147,10 +157,29 @@ PROPERTY_MAP = {
     'depicts': 'P180',
     'created_during': 'P10408',
     # P1259 "coordinates of the point of view" = where the CAMERA stood,
-    # which is what EXIF GPS records. (The depicted object's position would
-    # be P625 - a different statement, not derivable from EXIF.)
+    # which is what EXIF GPS records.
     'coordinates': 'P1259',
+    # P9149 "coordinates of depicted place" = where the pictured thing
+    # stands. Verified on wikidata.org (28.07.2026), not recalled - an
+    # earlier note in this file guessed P625, which is the general-purpose
+    # coordinate property and NOT the one Commons uses for this.
+    'object_coordinates': 'P9149',
 }
+
+# Source of file (P7482), added automatically at upload (0.15.0). Only the
+# ONE case that is unambiguous: the source field says "own work", so the
+# file is an original creation by the uploader. Anything else (a Flickr
+# import, a scan, a third-party file) needs a judgement Cammello cannot
+# make, and stays for the user or a bot. Both items verified on
+# wikidata.org (28.07.2026).
+SOURCE_PROPERTY = 'P7482'
+SOURCE_OWN_WORK = 'Q66458942'          # original creation by uploader
+
+# The source templates that mean "own work". Matched case-insensitively
+# against the whole source field with the braces stripped; anything else
+# yields no statement at all.
+OWN_WORK_TEMPLATES = ('own', 'own work', 'self-photographed',
+                      'own photograph')
 
 # Standard width (px) for single-value Wikidata QID fields in the structured
 # editor. Keeps QID inputs at a sensible length instead of stretching them
@@ -558,3 +587,32 @@ EXAMPLE_FILE_DESCRIPTION = (
 
 # Category links ([[Category:Name]]) that can be split out of / rebuilt for the
 # structured "Categories" field. The tracking category is added only at upload.
+
+
+# Culling background (0.15.0, Harald: "Background im Übersichtsmodus und im
+# Grid mittelgrau"). A true middle grey, not the theme colour: a photograph
+# is judged against a neutral surround, and black made the single-image view
+# read darker than it is. One constant so the image view and the thumbnail
+# strip cannot drift apart.
+CULL_BG = '#808080'          # kept as the neutral reference value
+
+# 0.15.0 (Harald): "im Darkmode etwas dunkler, im Light Mode etwas heller".
+# A surround that is lighter than the desktop in a dark theme, or darker in a
+# light one, fights the rest of the window - and a photograph is judged
+# against what surrounds it.
+CULL_BG_DARK = '#6E6E6E'
+CULL_BG_LIGHT = '#9A9A9A'
+
+
+def cull_bg(dark):
+    """The culling surround for the active colour scheme."""
+    return CULL_BG_DARK if dark else CULL_BG_LIGHT
+
+
+# Preview watchdog (0.15.0). A request can be lost without any signal: the
+# job is cancelled by a folder change, the cache entry is evicted between
+# "loaded" and the handler, or the signal arrives while another image is
+# current. Nothing used to ask again, so the view stayed blank. These bound
+# the retry so an unreadable file cannot spin.
+CULL_RETRY_MS = 1200
+CULL_RETRIES = 3

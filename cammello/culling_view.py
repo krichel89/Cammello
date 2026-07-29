@@ -8,6 +8,8 @@ from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QBrush
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QRect, QPoint
 
 from . import previews
+from .constants import cull_bg
+from .edit_panel import pipette_cursor
 
 
 class CropOverlay(QLabel):
@@ -318,7 +320,7 @@ class CullImageView(QGraphicsView):
         self._scene.addItem(self._item)
         self.setScene(self._scene)
         self.setRenderHints(QPainter.SmoothPixmapTransform)
-        self.setBackgroundBrush(Qt.black)
+        self.setBackgroundBrush(QColor(cull_bg(False)))
         self.setFrameShape(QGraphicsView.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -421,6 +423,16 @@ class CullImageView(QGraphicsView):
         self._scene.setSceneRect(QRectF(pm.rect()))
         if not keep_view:
             self.fit()
+
+    def set_background(self, color):
+        """Surround colour; follows the colour scheme (0.15.0)."""
+        self.setBackgroundBrush(QColor(color))
+
+    def has_image(self):
+        """Whether pixels are currently on screen (0.15.0). The watchdog in
+        the culling module uses this to notice a preview that never
+        arrived - see _cull_retry_current()."""
+        return self._source_image is not None
 
     def clear_image(self):
         self._source_image = None
@@ -533,7 +545,11 @@ class CullImageView(QGraphicsView):
         """White-balance pipette mode (0.14): the next left click samples a
         pixel instead of zooming."""
         self._pipette = bool(on)
-        self.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
+        # 0.15.0 (Harald): the pipette REPLACES the pointer while sampling -
+        # a crosshair says "aim", a pipette says what will happen. Built as
+        # a cursor from the same painted icon, with the hot spot on the tip
+        # (bottom left), not in the middle.
+        self.setCursor(pipette_cursor() if on else Qt.ArrowCursor)
 
     def pipette_active(self):
         return self._pipette

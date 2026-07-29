@@ -23,8 +23,9 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QComboBox, QCheckBox, QFileDialog, QMessageBox, QSplitter,
     QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
-    QToolButton, QInputDialog)
-from PyQt5.QtGui import QIcon, QPixmap, QColor, QPen, QPainter
+    QToolButton, QInputDialog, QShortcut)
+from PyQt5.QtGui import (QIcon, QPixmap, QColor, QPen, QPainter,
+                         QKeySequence)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 
 from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
@@ -377,11 +378,32 @@ class MWCullingMixin:
         self._cull_wb = culling.WriteBehind(self.logger)
         self._cull_loader = previews.PreviewLoader()
         self._cull_loader.signals.loaded.connect(self._cull_on_loaded)
-        self._cull_loader.signals.failed.connect(
-            lambda key, msg: self.logger.error('Preview failed for "%s": %s',
-                                               os.path.basename(key), msg))
+        self._cull_loader.signals.failed.connect(self._cull_on_failed)
+        # 0.15.0: watchdog for previews that never arrive. Until now every
+        # lost image was final - a decode error only reached the log, an
+        # entry evicted from the cache between "loaded" and the handler made
+        # the handler do nothing at all, and a job cancelled by a folder
+        # change returned without any signal at all. Nothing ever asked
+        # again, so the view stayed blank until the user navigated away and
+        # came back. This timer asks again.
+        self._cull_retry_timer = QTimer(self)
+        self._cull_retry_timer.setSingleShot(True)
+        self._cull_retry_timer.timeout.connect(self._cull_retry_current)
+        self._cull_retry_left = 0
+        self._cull_failed_paths = set()
+        # 0.15.0: undo for IMAGE EDITS only (crop, exposure, white balance).
+        # Every writing path calls _cull_remember_edit() BEFORE it changes
+        # anything, so the stack holds the state to go back to.
+        self._cull_undo = edits.EditHistory()
 
         w = _CullTab(self)
+        # 0.15.0: Ctrl+Z / Cmd+Z for the image edits. Scoped to the culling
+        # page on purpose (WidgetWithChildrenShortcut): a window-wide undo
+        # would swallow the built-in undo of every text field in the other
+        # tabs. QKeySequence.Undo already means Cmd+Z on macOS.
+        self._cull_undo_sc = QShortcut(QKeySequence.Undo, w)
+        self._cull_undo_sc.setContext(Qt.WidgetWithChildrenShortcut)
+        self._cull_undo_sc.activated.connect(self._cull_undo_edit)
         outer = QVBoxLayout(w)
 
         # Toolbar - deliberately slim (0.12.4): tight margins and a fixed,
@@ -549,8 +571,12 @@ class MWCullingMixin:
         self.cull_strip.setMaximumHeight(172)
         self.cull_strip.setMovement(QListWidget.Static)
         self.cull_strip.setFocusPolicy(Qt.NoFocus)     # keys stay with the tab
+        # 0.15.0: the same middle grey as the image view, so switching
+        # between single image and grid does not change the surround the
+        # photographs are judged against.
         self._cull_delegate = _LabelBarDelegate(self.cull_strip)
         self._cull_delegate.set_dark(self._is_dark_scheme())
+        self._cull_apply_bg(self._is_dark_scheme())
         self.cull_strip.setItemDelegate(self._cull_delegate)
         self.cull_strip.currentRowChanged.connect(self._cull_show_index)
         self.cull_strip.itemSelectionChanged.connect(self._cull_set_status)
@@ -848,6 +874,10 @@ class MWCullingMixin:
             self.cull_view.clear_image()
             self._cull_loader.request(path, 'screen',
                                       previews.PreviewLoader.P_CURRENT)
+            # Arm the watchdog: if the pixels are not on screen a moment
+            # from now, ask again instead of leaving the view blank.
+            self._cull_retry_left = CULL_RETRIES
+            self._cull_retry_timer.start(CULL_RETRY_MS)
         self._cull_loader.prefetch_around(
             [i.display_path for i in self._cull_visible],
             idx, self._cull_direction)
@@ -863,6 +893,14 @@ class MWCullingMixin:
             img = self._cull_loader.cache.get('screen', key)
             if img is not None and self.cull_view.is_fit:
                 self.cull_view.set_image(img)
+                self._cull_retry_timer.stop()
+            elif img is None:
+                # 0.15.0: the signal carries only the path, and the entry can
+                # be gone again by the time we look (byte-budgeted LRU, and
+                # the prefetch keeps putting). Silently doing nothing here is
+                # what left the view empty for good - ask again.
+                self._cull_loader.request(
+                    key, 'screen', previews.PreviewLoader.P_CURRENT)
         elif level == 'full' and key == current.display_path:
             img = self._cull_loader.cache.get('full', key)
             if img is not None and not self.cull_view.is_fit:
@@ -871,6 +909,59 @@ class MWCullingMixin:
             i = self._cull_row_by_path.get(key)
             if i is not None:
                 self._cull_decorate_row(i)
+
+    def _cull_apply_bg(self, dark):
+        """Surround colour for image view and strip (0.15.0). One call site
+        for both, so the two halves of the culling module cannot drift, and
+        it follows the colour scheme: darker in the dark theme, lighter in
+        the light one."""
+        col = cull_bg(dark)
+        self.cull_view.set_background(col)
+        self.cull_strip.setStyleSheet(
+            f'QListWidget {{background:{col}; border:none;}}')
+
+    def _cull_on_failed(self, key, msg):
+        """A preview could not be decoded. Logged as before, but no longer
+        ONLY logged: the status line says so, and the watchdog stops for
+        this file so it does not retry a file that cannot be read."""
+        self.logger.error('Preview failed for "%s": %s',
+                          os.path.basename(key), msg)
+        self._cull_failed_paths.add(key)
+        if (0 <= self._cull_index < len(self._cull_visible)
+                and key == self._cull_visible[self._cull_index].display_path):
+            self._cull_retry_timer.stop()
+            self._cull_retry_left = 0
+            self.statusBar().showMessage(
+                tr('Preview could not be read: {name}').format(
+                    name=os.path.basename(key)), 6000)
+
+    def _cull_retry_current(self):
+        """Watchdog: the current image still has no pixels - ask again.
+
+        Covers every way a request could be lost without a signal (job
+        cancelled by a folder change, cache entry evicted, a `loaded` that
+        arrived while another image was current). Bounded by CULL_RETRIES so
+        an unreadable file cannot spin."""
+        if not (0 <= self._cull_index < len(self._cull_visible)):
+            return
+        path = self._cull_visible[self._cull_index].display_path
+        if self.cull_view.has_image() or path in self._cull_failed_paths:
+            return
+        if self._cull_retry_left <= 0:
+            self.logger.warning('Preview for "%s" did not arrive after %d '
+                                'attempts.', os.path.basename(path),
+                                CULL_RETRIES)
+            return
+        self._cull_retry_left -= 1
+        self.logger.info('Preview for "%s" has not arrived; asking again.',
+                         os.path.basename(path))
+        img = self._cull_loader.cache.get('screen', path)
+        if img is not None:
+            self.cull_view.set_image(img)
+            return
+        self._cull_loader.request(path, 'screen',
+                                  previews.PreviewLoader.P_CURRENT)
+        self._cull_retry_timer.start(CULL_RETRY_MS)
 
     def _cull_request_full(self):
         """Click/Z zoom: swap in the unscaled preview when it arrives."""
@@ -1349,6 +1440,7 @@ class MWCullingMixin:
             self.statusBar().showMessage(
                 tr('That spot is too dark to balance on.'), 4000)
             return
+        self._cull_remember_edit(item.display_path)
         edits.set_wb(self._cull_edits, item.display_path, gains)
         self._cull_save_edits_soon()
         self.logger.info('White balance for %s from (%d, %d, %d) -> %s',
@@ -1371,17 +1463,68 @@ class MWCullingMixin:
         new = max(edits.EV_MIN, min(edits.EV_MAX, new))
         if abs(new - current) < 1e-9:
             return
+        self._cull_remember_edit(path)
         edits.set_ev(self._cull_edits, path, new)
         self._cull_save_edits_soon()
         self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
         self._cull_apply_tone()          # debounced: +/- repeats
 
+    def _cull_remember_edit(self, path):
+        """Put the CURRENT state of one file on the undo stack, before it is
+        changed. Called by every writing path - crop, exposure, white
+        balance, reset."""
+        self._cull_undo.push(path, edits.get_edit(self._cull_edits, path))
+
+    def _cull_undo_edit(self):
+        """One step back in the image edits (Ctrl+Z / Cmd+Z, 0.15.0).
+
+        Deliberately limited to image edits: ratings, renames and
+        coordinates are NOT on this stack. A rename has already touched the
+        file system by the time it would be undone, which is a different
+        problem and needs a different answer.
+        """
+        entry = self._cull_undo.pop()
+        if entry is None:
+            self.statusBar().showMessage(tr('Nothing left to undo.'), 3000)
+            return
+        path, record = entry
+        changed = edits.apply_record(self._cull_edits, path, record)
+        if changed:
+            self._cull_save_edits_soon()
+        self.logger.info('Undo: image edits of %s restored.',
+                         os.path.basename(path))
+        # Jump to the file the undo belongs to, or the user sees nothing.
+        visible = False
+        for i, it in enumerate(self._cull_visible):
+            if edits.norm(it.display_path) == path:
+                visible = True
+                if i != self._cull_index:
+                    self.cull_strip.setCurrentRow(i)
+                break
+        if not visible:
+            # The stack survives a folder change on purpose (edits do too),
+            # but an undo the user cannot SEE needs saying - review 0.15.0.
+            self.statusBar().showMessage(
+                tr('Undone in another folder: {name}').format(
+                    name=os.path.basename(path)), 5000)
+            return
+        item = self._cull_current_item()
+        if item is not None:
+            rec = edits.get_edit(self._cull_edits, item.display_path)
+            self.cull_view.set_crop_display(
+                (rec or {}).get('crop'))
+            self._cull_refresh_edit_badge(item)
+        self._cull_update_edit_panel()
+        self._cull_apply_tone(immediate=True)
+        self.statusBar().showMessage(tr('Undone.'), 3000)
+
     def _cull_reset_edits(self):
         """Drop every edit on the current image."""
         item = self._cull_current_item()
         if item is None:
             return
+        self._cull_remember_edit(item.display_path)
         if edits.clear_edit(self._cull_edits, item.display_path):
             self._cull_save_edits_soon()
             self.logger.info('All edits removed for %s',
@@ -1494,6 +1637,7 @@ class MWCullingMixin:
         item = self._cull_current_item()
         if item is not None and overlay.has_box():
             box = overlay._box_tuple()
+            self._cull_remember_edit(item.display_path)
             if edits.set_crop(self._cull_edits, item.display_path, box):
                 self._cull_save_edits_soon()
                 self._cull_refresh_edit_badge(item)
@@ -1513,6 +1657,7 @@ class MWCullingMixin:
     def _cull_crop_remove(self):
         item = self._cull_current_item()
         if item is not None:
+            self._cull_remember_edit(item.display_path)
             if edits.set_crop(self._cull_edits, item.display_path, None):
                 self._cull_save_edits_soon()
                 self._cull_refresh_edit_badge(item)

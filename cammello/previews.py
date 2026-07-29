@@ -516,7 +516,7 @@ class PreviewLoader:
         self._pool = QThreadPool()
         if threads:
             self._pool.setMaxThreadCount(threads)
-        self._inflight = set()
+        self._inflight = {}          # (key, level) -> highest queued priority
         self._lock = threading.Lock()
 
     def new_generation(self):
@@ -527,7 +527,7 @@ class PreviewLoader:
 
     def _done(self, key, level):
         with self._lock:
-            self._inflight.discard((key, level))
+            self._inflight.pop((key, level), None)
 
     def request(self, path, level='screen', priority=P_CURRENT):
         key = path
@@ -535,9 +535,18 @@ class PreviewLoader:
             self.signals.loaded.emit(key, level)
             return
         with self._lock:
-            if (key, level) in self._inflight:
+            queued = self._inflight.get((key, level))
+            if queued is not None and queued >= priority:
                 return
-            self._inflight.add((key, level))
+            # 0.15.0: a job that is already queued CANNOT be re-prioritized -
+            # QThreadPool takes the priority at start() and never looks at it
+            # again. Until now an image that had been queued as a prefetch
+            # (50) stayed at 50 even when the user navigated onto it a moment
+            # later and it was needed at P_CURRENT (100): it waited behind up
+            # to eight other decodes. That was the "shown with a delay".
+            # So queue a SECOND job at the higher priority; whichever runs
+            # first fills the cache, the other finds it there and returns.
+            self._inflight[(key, level)] = priority
         max_edge = {'thumb': THUMB_EDGE, 'screen': self.screen_edge,
                     'full': None}[level]
         self._pool.start(_LoadJob(self, key, path, level, max_edge,

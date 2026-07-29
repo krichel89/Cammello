@@ -301,7 +301,11 @@ class MWUploadMixin:
         # merged description_all (settings SDC + base + per-file). The worker
         # used to take a base_text it never read.
         self.worker = UploadWorker(self.api, rows, gallery_prefix,
-                                   ignore_warnings, journal=journal)
+                                   ignore_warnings, journal=journal,
+                                   capture_sdc=self.settings.value(
+                                       'exif_capture_sdc', True, type=bool),
+                                   edits_store=getattr(self, '_cull_edits',
+                                                       None))
         self.worker.progress.connect(self.on_progress)
         self.worker.error.connect(self.on_error)
         self.worker.finished.connect(self.on_finished)

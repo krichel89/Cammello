@@ -207,3 +207,92 @@ def read_exif_summary(filepath, log=None):
 # ── Target filename on Commons ──────────────────────────────────────────────────
 
 # Extensions accepted as a valid file extension.
+
+
+def read_capture_settings(filepath, log=None):
+    """Exposure time, f-number, ISO and focal length from EXIF (0.15.0).
+
+    -> dict with any of 'exposure_time', 'f_number', 'iso', 'focal_length'
+    (floats; exposure time in seconds, focal length in millimetres), empty
+    when nothing is readable. These four ride into the structured data as
+    quantity statements when the upload option is on:
+        exposure_time -> P6757 (unit second, Q11574)
+        f_number      -> P6790 (dimensionless)
+        iso           -> P6789 (dimensionless)
+        focal_length  -> P2151 (unit millimetre, Q174789)
+    All four properties and both unit items were verified on wikidata.org
+    (2026-07-28), not recalled. The camera MODEL is deliberately not here:
+    P4082 wants an ITEM, and mapping an EXIF model string to a QID is a
+    lookup with wrong-match potential, not a transparent copy.
+    """
+    if not HAS_PIL:
+        return {}
+    out = {}
+    try:
+        img = Image.open(filepath)
+        exif = img.getexif()
+        if not exif:
+            return {}
+        sub = exif.get_ifd(0x8769)
+    except Exception as e:
+        if log:
+            log.debug('Could not read capture settings for %s: %s',
+                      filepath, e)
+        return {}
+
+    def _num(value):
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return None
+        return f if f > 0 else None
+
+    v = _num(sub.get(33434))          # ExposureTime
+    if v is not None:
+        out['exposure_time'] = v
+    v = _num(sub.get(33437))          # FNumber
+    if v is not None:
+        out['f_number'] = v
+    iso = sub.get(34855)              # ISOSpeedRatings / PhotographicSensitivity
+    if isinstance(iso, (tuple, list)) and iso:
+        iso = iso[0]
+    v = _num(iso)
+    if v is not None:
+        out['iso'] = v
+    v = _num(sub.get(37386))          # FocalLength
+    if v is not None:
+        out['focal_length'] = v
+    return out
+
+
+def read_camera_ids(filepath, log=None):
+    """Make, model and lens strings from EXIF, exactly as written (0.15.0).
+
+    -> dict with any of 'make' (271), 'model' (272), 'lens_model' (42036,
+    EXIF sub-IFD). These are the LOOKUP KEYS for camera_map.json - the
+    mapping to Wikidata items happens there, never by guessing here.
+    """
+    if not HAS_PIL:
+        return {}
+    out = {}
+    try:
+        img = Image.open(filepath)
+        exif = img.getexif()
+        if not exif:
+            return {}
+        for tag, key in ((271, 'make'), (272, 'model')):
+            v = exif.get(tag)
+            if v:
+                out[key] = str(v).strip().strip('\x00').strip()
+        try:
+            sub = exif.get_ifd(0x8769)
+            v = sub.get(42036)          # LensModel
+            if v:
+                out['lens_model'] = str(v).strip().strip('\x00').strip()
+        except Exception:
+            pass
+    except Exception as e:
+        if log:
+            log.debug('Could not read camera ids for %s: %s', filepath, e)
+        return out
+    return {k: v for k, v in out.items() if v}

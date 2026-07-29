@@ -9,6 +9,7 @@ from .constants import *
 from .constants import _caption_extra_langs
 from .sdc import *
 from .i18n import tr
+from . import langcodes
 from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
@@ -23,8 +24,12 @@ class CaptionsEditor(QWidget):
     changed = pyqtSignal()
     committed = pyqtSignal()   # fires on field switch (editing finished), not per keystroke
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_base=False):
         super().__init__(parent)
+        # 0.15.2 (Harald): the alt text is a PER-FILE statement - what can
+        # be seen differs from picture to picture - so the base editor,
+        # which describes the whole batch, has no alt row at all.
+        self.is_base = bool(is_base)
         self._rows = []  # list of dicts: {widget, combo, edit}
 
         outer = QVBoxLayout(self)
@@ -35,6 +40,17 @@ class CaptionsEditor(QWidget):
         self._rows_box.setContentsMargins(0, 0, 0, 0)
         self._rows_box.setSpacing(4)
         outer.addLayout(self._rows_box)
+
+        # 0.15.1: names whichever of caption / Information is still empty.
+        # Hidden while both are filled, so it costs no height in the normal
+        # case. See set_attention().
+        self._attention_label = QLabel('')
+        self._attention_label.setStyleSheet('color:#d03030;')
+        self._attention_label.setToolTip(tr(
+            'Strongly recommended: the caption is the structured half, the '
+            'Information text the wikitext half of the description.'))
+        self._attention_label.hide()
+        outer.addWidget(self._attention_label)
 
         btn_row = FlowLayout(spacing=8)
         btn_row.setContentsMargins(0, 0, 0, 0)
@@ -52,7 +68,7 @@ class CaptionsEditor(QWidget):
 
         self.add_row()  # start with one empty row
 
-    def add_row(self, lang='en', value='', info=''):
+    def add_row(self, lang='en', value='', info='', alt=''):
         row_widget = QWidget()
         v = QVBoxLayout(row_widget)
         v.setContentsMargins(0, 0, 0, 0)
@@ -114,6 +130,33 @@ class CaptionsEditor(QWidget):
         bottom.addWidget(info_edit, 9)            # ~90% of the width
         v.addLayout(bottom)
 
+        # Third line: the alt text (0.15.2). Goes ONLY into the structured
+        # data as P11265 - Commons has no wikitext counterpart, and
+        # {{Alt}} is the language template for Southern Altai, not an
+        # alt-text template. One line is right: alt text describes the
+        # picture for someone who cannot see it and should stay short.
+        alt_row = QHBoxLayout()
+        alt_row.setContentsMargins(0, 0, 0, 0)
+        alt_row.addStretch(1)
+        alt_edit = QLineEdit()
+        alt_edit.setText(alt)
+        alt_edit.setPlaceholderText(tr('Alt text for screen readers (SDC only)'))
+        alt_edit.setToolTip(tr(
+            'What someone who cannot see the picture needs to know, in one '
+            'sentence.\nUploaded as the "alt text" statement (P11265) in '
+            'this language.\n\n'
+            'Not the same as the caption: the caption names WHAT this is, '
+            'the alt\ntext describes what can be SEEN. Commons stores it '
+            'only in the\nstructured data - there is no wikitext '
+            'equivalent.'))
+        alt_row.addWidget(alt_edit, 9)
+        if self.is_base:
+            # No alt text for the whole batch; keep the widget so the rest
+            # of the code needs no special case, just never show it.
+            alt_edit.hide()
+        else:
+            v.addLayout(alt_row)
+
         # Drag grip to resize the info field's height (aligned under it).
         grip_row = QHBoxLayout()
         grip_row.setContentsMargins(0, 0, 0, 0)
@@ -124,7 +167,7 @@ class CaptionsEditor(QWidget):
         self._rows_box.addWidget(row_widget)
 
         entry = {'widget': row_widget, 'combo': combo, 'edit': edit,
-                 'info': info_edit}
+                 'info': info_edit, 'alt': alt_edit}
         self._rows.append(entry)
 
         def _update_info_placeholder():
@@ -136,6 +179,8 @@ class CaptionsEditor(QWidget):
         combo.currentIndexChanged.connect(lambda *_: self.committed.emit())
         edit.textChanged.connect(lambda *_: self.changed.emit())
         edit.editingFinished.connect(self.committed)
+        alt_edit.textChanged.connect(lambda *_: self.changed.emit())
+        alt_edit.editingFinished.connect(self.committed)
         # QTextEdit has no editingFinished; live sync uses changed (textChanged).
         info_edit.textChanged.connect(lambda *_: self.changed.emit())
         remove.clicked.connect(lambda: self._remove(entry))
@@ -201,15 +246,35 @@ class CaptionsEditor(QWidget):
         prev = combo.property('prev_code')
         code, ok = QInputDialog.getText(
             self, tr('Caption language'),
-            tr('ISO language code (e.g. nl, pt, ja):'))
-        code = (code or '').strip().lower()
-        if not ok or not re.fullmatch(r'[a-z]{2,3}', code):
+            tr('Language code (e.g. nl, pt, ja, ms-Arab, zh-Hant):'))
+        if not ok:
             self._restore_combo(combo, prev)
-            if ok:
-                QMessageBox.warning(self, tr('Caption language'),
-                                    tr('Not a valid ISO code: {code}').format(
-                                        code=code or '?'))
             return
+        # 0.15.2: codes with a SCRIPT part are valid on Commons - "ms-Arab"
+        # for Malay in Jawi was reported as rejected by a user. The old
+        # check was [a-z]{2,3} plus .lower(), which failed on both counts.
+        code = langcodes.normalize(code)
+        if not langcodes.looks_valid(code):
+            self._restore_combo(combo, prev)
+            QMessageBox.warning(self, tr('Caption language'),
+                                tr('Not a valid language code: {code}')
+                                .format(code=code or '?'))
+            return
+        # Ask Commons which spelling it uses rather than deciding between
+        # "ms-Arab" and "ms-arab" ourselves; both are in circulation. If
+        # the wiki cannot be reached the code is accepted as typed - a
+        # network hiccup must not block a legitimate language.
+        known = langcodes.fetch_commons_languages()
+        if known:
+            official = langcodes.canonical(code, known)
+            if official is None:
+                self._restore_combo(combo, prev)
+                QMessageBox.warning(
+                    self, tr('Caption language'),
+                    tr('Commons does not accept "{code}" as a caption '
+                       'language.').format(code=code))
+                return
+            code = official
         remember_caption_language(code)
         # Rebuild all rows so the new code appears in every dropdown, and put
         # this row on it.
@@ -266,6 +331,26 @@ class CaptionsEditor(QWidget):
         self.changed.emit()
         self.committed.emit()
 
+    def set_attention(self, caption_missing, info_missing):
+        """Red markers for an empty caption / Information (0.15.1).
+
+        The rows here carry no form labels a dot could sit on - the
+        language dropdown is the only heading they have. So the marker is
+        one small line under the rows naming what is missing, which also
+        works when several languages are open: it is about the file, not
+        about a particular row.
+        """
+        parts = []
+        if caption_missing:
+            parts.append(tr('Caption'))
+        if info_missing:
+            parts.append(tr('Information'))
+        if parts:
+            self._attention_label.setText(
+                '\u25cf ' + tr('still empty: {fields}').format(
+                    fields=', '.join(parts)))
+        self._attention_label.setVisible(bool(parts))
+
     def get_captions(self):
         """Return {lang: value} for all non-empty caption rows."""
         out = {}
@@ -274,6 +359,18 @@ class CaptionsEditor(QWidget):
             val = e['edit'].text().strip()
             if val:
                 out[lang] = val
+        return out
+
+    def get_alts(self):
+        """Return {lang: alt text} for all non-empty alt-text rows. Always
+        empty in the base editor, which has no alt rows."""
+        if self.is_base:
+            return {}
+        out = {}
+        for e in self._rows:
+            val = e['alt'].text().strip()
+            if val:
+                out[e['combo'].currentData()] = val
         return out
 
     def get_infos(self):
@@ -286,18 +383,21 @@ class CaptionsEditor(QWidget):
                 out[lang] = val
         return out
 
-    def set_language_data(self, captions, infos):
-        """Rebuild the rows from {lang: caption} and {lang: info}; a language
-        present in either dict gets a row."""
+    def set_language_data(self, captions, infos, alts=None):
+        """Rebuild the rows from {lang: caption}, {lang: info} and
+        {lang: alt text}; a language present in any of them gets a row."""
         captions = captions or {}
         infos = infos or {}
+        alts = alts or {}
         for e in list(self._rows):
             e['widget'].setParent(None)
         self._rows = []
-        langs = list(dict.fromkeys(list(captions) + list(infos)))
+        langs = list(dict.fromkeys(
+            list(captions) + list(infos) + list(alts)))
         if langs:
             for lang in langs:
-                self.add_row(lang, captions.get(lang, ''), infos.get(lang, ''))
+                self.add_row(lang, captions.get(lang, ''),
+                             infos.get(lang, ''), alts.get(lang, ''))
         else:
             self.add_row()
 
@@ -334,7 +434,7 @@ class StructuredDescriptionEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         layout.addWidget(QLabel(tr('Captions:')))
-        self.captions_editor = CaptionsEditor()
+        self.captions_editor = CaptionsEditor(is_base=is_base)
         self.captions_editor.changed.connect(self.changed)
         self.captions_editor.committed.connect(self.committed)
         layout.addWidget(self.captions_editor)
@@ -393,6 +493,12 @@ class StructuredDescriptionEditor(QWidget):
             # every picture has its own position, and one position for a
             # whole session would be wrong for all but one of them.
             self.coordinates = QLineEdit()
+            # Wide enough that a full pair is READABLE without scrolling
+            # (Harald, 0.15.0): sized from the actual text width, not a
+            # magic pixel number, so it holds in every font.
+            _coord_w = self.coordinates.fontMetrics().horizontalAdvance(
+                '-48.775846, -122.182932') + 24
+            self.coordinates.setMinimumWidth(_coord_w)
             self.coordinates.setPlaceholderText(
                 tr('e.g.') + ' 48.137154, 11.576124')
             self.coordinates.setToolTip(tr(
@@ -420,9 +526,39 @@ class StructuredDescriptionEditor(QWidget):
             # copy it up for the label loop below (and for hovering the gap
             # between the input and the button).
             self._coords_row_widget.setToolTip(self.coordinates.toolTip())
+            # 0.15.0: the position of the DEPICTED object, next to the
+            # camera position and deliberately not mixed with it. For a
+            # building the two differ by the width of the street.
+            self.object_coordinates = QLineEdit()
+            self.object_coordinates.setMinimumWidth(_coord_w)
+            self.object_coordinates.setPlaceholderText(
+                tr('e.g.') + ' 48.137154, 11.576124')
+            self.object_coordinates.setToolTip(tr(
+                'Where the DEPICTED thing stands - the building, not the '
+                'spot you\nstood on. Decimal degrees: latitude, longitude.'
+                '\n\n'
+                'Becomes {{Object location dec}} in the wikitext and the '
+                '"coordinates\nof depicted place" statement (P9149) in the '
+                'structured data.\n\n'
+                'Optional: "from Wikidata" fetches it from the item of the '
+                'building\nif that item carries a coordinate.'))
+            self.object_wd_btn = QPushButton(tr('from Wikidata'))
+            self.object_wd_btn.setToolTip(tr(
+                'Take the coordinate from the Wikidata item entered under '
+                'depicts.'))
+            obj_row = QHBoxLayout()
+            obj_row.setContentsMargins(0, 0, 0, 0)
+            obj_row.addWidget(self.object_coordinates)
+            obj_row.addWidget(self.object_wd_btn)
+            self._object_row_widget = QWidget()
+            self._object_row_widget.setLayout(obj_row)
+            self._object_row_widget.setToolTip(self.object_coordinates.toolTip())
         else:
             self.coordinates = None
             self.coords_exif_btn = None
+            self.object_coordinates = None
+            self.object_wd_btn = None
+            self._object_row_widget = None
 
         self.categories = QLineEdit()
         self.categories.setPlaceholderText(tr('e.g.') + ' Berlinale 2026; Portraits')
@@ -454,12 +590,15 @@ class StructuredDescriptionEditor(QWidget):
                 'file, and\n"Suggest" derives the base category from it.'))
 
             self.gallery_suffix = QLineEdit()
-            self.gallery_suffix.setPlaceholderText(tr('e.g.') + ' Berlinale 2026')
+            self.gallery_suffix.setPlaceholderText(
+                tr('e.g.') + ' User:Seewolf/Berlinale 2026')
             self.gallery_suffix.setToolTip(tr(
-                'The part of the gallery page name that is specific to this '
-                'batch,\ne.g. the event name: with suffix "Berlinale 2026" '
-                'the uploads are\nlisted on <gallery prefix>/Berlinale '
-                '2026. Plain text, no brackets.'))
+                'The FULL name of the gallery page these uploads are '
+                'listed on,\ne.g. "User:Seewolf/Berlinale 2026". Plain '
+                'text, no brackets.\n\n'
+                'Leave empty for no gallery. Since 0.15.2 this is the '
+                'whole name -\nthere is no separate prefix setting any '
+                'more.'))
         else:
             self.created_during = None
             self.gallery_suffix = None
@@ -470,6 +609,7 @@ class StructuredDescriptionEditor(QWidget):
         watched = [self.categories]
         if not self.is_base:
             watched.append(self.depicts)
+            watched += [self.coordinates, self.object_coordinates]
         if self.is_base:
             watched += [self.created_during, self.gallery_suffix]
         for w in watched:
@@ -501,14 +641,21 @@ class StructuredDescriptionEditor(QWidget):
         form.addRow(_label_with_button(tr('Categories:'), cat_btn),
                     self.categories)
         if not self.is_base:
-            form.addRow(tr('Coordinates:'), self._coords_row_widget)
+            # 0.15.0: the labels name BOTH halves, so it is visible in the
+            # form itself - not only in a tooltip - which part of this ends
+            # up in the wikitext and which in the structured data.
+            form.addRow(tr('Camera position (wikitext + SDC):'),
+                        self._coords_row_widget)
+            form.addRow(tr('Object position (wikitext + SDC):'),
+                        self._object_row_widget)
         if self.is_base:
-            form.addRow(tr('Gallery suffix:'), self.gallery_suffix)
+            form.addRow(tr('Gallery page:'), self.gallery_suffix)
         # The row LABELS carry the same tooltip as their field: someone who
         # wonders what "P180" means points at the label, not the input.
         for w in (self.depicts, self.override_combo, self.categories,
                   self.created_during, self.gallery_suffix,
-                  self._coords_row_widget if not self.is_base else None):
+                  self._coords_row_widget if not self.is_base else None,
+                  self._object_row_widget if not self.is_base else None):
             if w is not None:
                 lbl = form.labelForField(w)
                 if lbl is not None:
@@ -564,21 +711,38 @@ class StructuredDescriptionEditor(QWidget):
                 (sd.get('depicts_override') or '').strip().lower())
         if self.coordinates is not None:
             self.coordinates.setText(sd.get('coordinates', ''))
+        if self.object_coordinates is not None:
+            self.object_coordinates.setText(sd.get('object_coordinates', ''))
         if self.is_base:
             self.created_during.setText(sd.get('created_during', ''))
-            self.gallery_suffix.setText(sd.get('gallery_suffix', ''))
+            # 0.15.2: one field holding the FULL page name. A value from
+            # the prefix+suffix era has no slash and needs the old prefix
+            # put back in front of it once - otherwise "Berlinale 2026"
+            # would suddenly mean a gallery in the main namespace.
+            gal = sd.get('gallery_suffix', '')
+            if gal and '/' not in gal and ':' not in gal:
+                from PyQt5.QtCore import QSettings
+                old_prefix = (QSettings(APP_NAME, 'Main')
+                              .value('gallery_prefix', '') or '').strip()
+                if old_prefix:
+                    gal = old_prefix.rstrip('/') + '/' + gal.lstrip('/')
+            self.gallery_suffix.setText(gal)
         # Split category links out of the leftover text into the categories field,
         # then pull the {{lang|1=…}} information templates into the per-language
         # information fields. Whatever remains is free extra wikitext.
         cats, extra = split_categories(leftover_text(text))
         infos, extra = split_lang_templates(extra)
-        self.captions_editor.set_language_data(caps, infos)
+        alts = {k[4:]: v for k, v in sd.items() if k.startswith('alt_')}
+        self.captions_editor.set_language_data(caps, infos, alts)
         self.categories.setText('; '.join(cats))
         self.extra.setPlainText(extra)
 
     def assemble(self):
         lines = [f'caption_{lang}={val}'
                  for lang, val in self.captions_editor.get_captions().items()]
+        # 0.15.2: alt text sits next to the captions as alt_<lang>= lines.
+        lines += [f'alt_{lang}={val}'
+                  for lang, val in self.captions_editor.get_alts().items()]
         if self.depicts is not None:
             depicts = self.depicts.text().strip()
             if depicts:
@@ -590,6 +754,10 @@ class StructuredDescriptionEditor(QWidget):
             coords = self.coordinates.text().strip()
             if coords:
                 lines.append(f'coordinates={coords}')
+        if self.object_coordinates is not None:
+            obj = self.object_coordinates.text().strip()
+            if obj:
+                lines.append(f'object_coordinates={obj}')
         if self.is_base:
             for key, w in (('created_during', self.created_during),
                            ('gallery_suffix', self.gallery_suffix)):

@@ -11,13 +11,99 @@ or goes fullscreen, and it is clamped so it can never leave the view.
 The panel holds no state of its own - it displays what the tab tells it and
 emits what the user asked for. All edits live in edits.py.
 """
-from PyQt5.QtWidgets import (QFrame, QVBoxLayout, QHBoxLayout, QLabel,
+from PyQt5.QtWidgets import (QApplication, QFrame, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QToolButton, QSizePolicy,
                              QAbstractButton)
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPointF
+from PyQt5.QtGui import (QIcon, QPixmap, QPainter, QPen, QColor,
+                         QPolygonF, QCursor)
 
 from .i18n import tr
 from . import edits
+
+
+def pipette_icon(px=16, color=None):
+    """A pipette, painted rather than shipped as a file (0.15.0).
+
+    Drawing it keeps the icon crisp on Retina and lets it follow the text
+    colour, so it stays visible in both colour schemes - a bundled PNG
+    would need two variants and a size ladder. Same reasoning as splash.py.
+    """
+    color = QColor(color) if color is not None else QColor('#202020')
+    pm = QPixmap(px, px)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+
+    s = px / 16.0
+    pen = QPen(color)
+    pen.setWidthF(max(1.0, 1.4 * s))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+
+    # Bulb at the top right, barrel running down to the tip at bottom left.
+    p.drawLine(QPointF(10.2 * s, 2.4 * s), QPointF(13.6 * s, 5.8 * s))
+    p.setBrush(color)
+    p.drawPolygon(QPolygonF([
+        QPointF(11.9 * s, 4.1 * s),
+        QPointF(13.2 * s, 5.4 * s),
+        QPointF(5.6 * s, 13.0 * s),
+        QPointF(4.3 * s, 11.7 * s),
+    ]))
+    # The drop leaving the tip.
+    p.drawEllipse(QPointF(3.0 * s, 13.6 * s), 1.5 * s, 1.5 * s)
+    p.end()
+    return QIcon(pm)
+
+
+def pipette_cursor(px=24, ratio=None):
+    """The same pipette as a mouse cursor (0.15.0).
+
+    The hot spot sits on the TIP, bottom left, where the drop leaves - not
+    in the middle of the pixmap, or the sampled pixel would not be the one
+    under the point of the tool. Painted white-outlined so it stays visible
+    over both bright and dark picture areas.
+    """
+    # Painted at the screen's pixel ratio and scaled back down, the same
+    # move splash.py makes - a plain 24 px pixmap is blurry on Retina
+    # (0.15.0 review; the icon variant above goes through QIcon, which
+    # handles this itself, a QCursor pixmap does not).
+    if ratio is None:
+        app = QApplication.instance()
+        ratio = app.devicePixelRatio() if app else 1.0
+    ratio = max(1.0, float(ratio))
+    device_px = int(round(px * ratio))
+    s = device_px / 16.0
+    pm = QPixmap(device_px, device_px)
+    pm.setDevicePixelRatio(ratio)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    body = QPolygonF([
+        QPointF(11.9 * s, 4.1 * s),
+        QPointF(13.2 * s, 5.4 * s),
+        QPointF(5.6 * s, 13.0 * s),
+        QPointF(4.3 * s, 11.7 * s),
+    ])
+    for colour, width in ((QColor('#FFFFFF'), 3.0 * s), (QColor('#101010'), 1.4 * s)):
+        pen = QPen(colour)
+        pen.setWidthF(max(1.0, width))
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(10.2 * s, 2.4 * s), QPointF(13.6 * s, 5.8 * s))
+        p.drawPolygon(body)
+        p.drawEllipse(QPointF(3.0 * s, 13.6 * s), 1.5 * s, 1.5 * s)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor('#101010'))
+    p.drawPolygon(body)
+    p.end()
+    # Hot spot in DEVICE-INDEPENDENT pixels: Qt expects it in the logical
+    # coordinate system once the pixmap carries a devicePixelRatio.
+    ls = px / 16.0
+    return QCursor(pm, int(round(3.0 * ls)), int(round(13.6 * ls)))
 
 
 class EditPanel(QFrame):
@@ -86,6 +172,11 @@ class EditPanel(QFrame):
 
         self.wb_btn = QToolButton()
         self.wb_btn.setText(tr('White balance (W)'))
+        # 0.15.0 (Harald): the white balance button carries a pipette, so
+        # what the tool DOES is visible before reading the label.
+        self.wb_btn.setIcon(pipette_icon(16, self.palette().windowText().color()))
+        self.wb_btn.setIconSize(QSize(16, 16))
+        self.wb_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.wb_btn.setCheckable(True)
         self.wb_btn.setToolTip(tr(
             'Pick a spot that should be neutral grey or white.\n'

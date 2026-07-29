@@ -783,17 +783,48 @@ class CollapsibleGroupBox(QWidget):
         self.content = QFrame(self)
         self.content.setObjectName('groupContent')
 
+        # 0.15.0: the red missing-fields dot is its own label NEXT TO the
+        # title button - QToolButton text is single-colour, so a coloured
+        # dot inside the title itself is impossible without an icon file.
+        self._dot = QLabel(self.ATTENTION_DOT, self)
+        self._dot.setStyleSheet('color:#d03030;')
+        self._dot.setToolTip(tr('Strongly recommended fields in this '
+                                'section are still empty.'))
+        self._dot.hide()
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(4)
+        head.addWidget(self._btn)
+        head.addWidget(self._dot)
+        head.addStretch()
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 4, 0, 4)
         outer.setSpacing(4)
-        outer.addWidget(self._btn)
+        outer.addLayout(head)
         outer.addWidget(self.content)
 
         self._btn.toggled.connect(self._on_toggled)
 
+    # 0.15.0 (Harald): a red dot on the heading when a strongly recommended
+    # field inside is still empty - so the group can START COLLAPSED
+    # without hiding that something is missing. A text glyph for the same
+    # reason the arrow is one (0.12.8): it scales with the heading font.
+    ATTENTION_DOT = '●'
+
     def _apply_title(self, expanded):
         arrow = self.ARROW_EXPANDED if expanded else self.ARROW_COLLAPSED
         self._btn.setText(f'{arrow}  {self._title}')
+
+    def set_attention(self, on):
+        """Show or clear the red missing-fields dot beside the heading."""
+        self._dot.setVisible(bool(on))
+
+    def attention(self):
+        # isHidden, not isVisible: inside a non-current module page
+        # isVisible() answers False for everything (known Qt trap).
+        return not self._dot.isHidden()
 
     def _on_toggled(self, expanded):
         self.content.setVisible(expanded)

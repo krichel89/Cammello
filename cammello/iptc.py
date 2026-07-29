@@ -83,6 +83,10 @@ IPTC_FIELDS = [
     ('headline',     'Iptc.Application2.Headline',      'Headline',            False),
     ('caption',      'Iptc.Application2.Caption',       'Caption / description', False),
     ('keywords',     'Iptc.Application2.Keywords',      'Keywords',            True),
+    # 0.15.0 (Harald): the sublocation - the place WITHIN the city, which
+    # for a building is the interesting one. Ordered above City because
+    # that is how IPTC nests them: sublocation, city, province, country.
+    ('sublocation',  'Iptc.Application2.SubLocation',   'Sublocation',         False),
     ('city',         'Iptc.Application2.City',          'City',                False),
     ('province',     'Iptc.Application2.ProvinceState', 'Province / state',    False),
     ('country',      'Iptc.Application2.CountryName',   'Country',             False),
@@ -186,8 +190,11 @@ def _sidecar_read_xmp(path):
     Returns a dict shaped like pyexiv2's read_xmp() for these keys.
     """
     try:
+        # Bounded read (0.15.0 security review, same limit as geo.py): a
+        # legitimate sidecar is a few hundred KB; a mis-named multi-GB file
+        # must not be handed to memory whole.
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
-            text = f.read()
+            text = f.read(8 * 1024 * 1024)
     except OSError:
         return {}
     out = {}

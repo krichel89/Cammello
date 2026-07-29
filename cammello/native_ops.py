@@ -87,3 +87,118 @@ def modify_all_raw(path, iim_payload, xmp_payload):
             img.modify_xmp(xmp_payload)
     finally:
         img.close()
+
+
+# ── GPS in the file (0.15.0) ─────────────────────────────────────────────────
+# The EXIF GPS keys pyexiv2 exposes. Removal covers ALL of them, not just
+# latitude and longitude: leaving the reference letters, the altitude or the
+# timestamp behind means the file still says where it was (Harald: "alle
+# Koordinatenfelder"). The IPTC place names are deliberately NOT here - those
+# are entered deliberately and stay.
+GPS_EXIF_KEYS = (
+    'Exif.GPSInfo.GPSVersionID',
+    'Exif.GPSInfo.GPSLatitude',
+    'Exif.GPSInfo.GPSLatitudeRef',
+    'Exif.GPSInfo.GPSLongitude',
+    'Exif.GPSInfo.GPSLongitudeRef',
+    'Exif.GPSInfo.GPSAltitude',
+    'Exif.GPSInfo.GPSAltitudeRef',
+    'Exif.GPSInfo.GPSTimeStamp',
+    'Exif.GPSInfo.GPSDateStamp',
+    'Exif.GPSInfo.GPSSatellites',
+    'Exif.GPSInfo.GPSStatus',
+    'Exif.GPSInfo.GPSMeasureMode',
+    'Exif.GPSInfo.GPSDOP',
+    'Exif.GPSInfo.GPSSpeed',
+    'Exif.GPSInfo.GPSSpeedRef',
+    'Exif.GPSInfo.GPSTrack',
+    'Exif.GPSInfo.GPSTrackRef',
+    'Exif.GPSInfo.GPSImgDirection',
+    'Exif.GPSInfo.GPSImgDirectionRef',
+    'Exif.GPSInfo.GPSMapDatum',
+    'Exif.GPSInfo.GPSDestLatitude',
+    'Exif.GPSInfo.GPSDestLatitudeRef',
+    'Exif.GPSInfo.GPSDestLongitude',
+    'Exif.GPSInfo.GPSDestLongitudeRef',
+    'Exif.GPSInfo.GPSProcessingMethod',
+    'Exif.GPSInfo.GPSAreaInformation',
+    'Exif.GPSInfo.GPSDifferential',
+    'Exif.GPSInfo.GPSHPositioningError',
+)
+
+# The XMP twins. A file can carry the position twice; clearing only the EXIF
+# side would leave the XMP copy to be read back by the next tool.
+GPS_XMP_KEYS = (
+    'Xmp.exif.GPSLatitude',
+    'Xmp.exif.GPSLongitude',
+    'Xmp.exif.GPSAltitude',
+    'Xmp.exif.GPSAltitudeRef',
+    'Xmp.exif.GPSTimeStamp',
+    'Xmp.exif.GPSVersionID',
+    'Xmp.exif.GPSMapDatum',
+    'Xmp.exif.GPSProcessingMethod',
+    'Xmp.exif.GPSImgDirection',
+    'Xmp.exif.GPSImgDirectionRef',
+)
+
+
+def _dms_strings(value):
+    """Decimal degrees -> exiv2's rational DMS triple plus the hemisphere.
+
+    exiv2 wants "deg/1 min/1 sec/100" as a string; the sign lives in the
+    reference letter, never in the numbers.
+    """
+    ref_neg = value < 0
+    value = abs(float(value))
+    deg = int(value)
+    rest = (value - deg) * 60.0
+    minutes = int(rest)
+    seconds = (rest - minutes) * 60.0
+    return f'{deg}/1 {minutes}/1 {int(round(seconds * 100))}/100', ref_neg
+
+
+def clear_gps_raw(path):
+    """Remove every GPS key from EXIF and XMP. -> number of keys cleared.
+
+    Uses modify_exif/modify_xmp with an empty string, which is how pyexiv2
+    deletes a key; keys that are not present are skipped, so this never
+    fails on a file that simply has no position.
+    """
+    px = _require()
+    img = px.Image(path)
+    try:
+        present_exif = img.read_exif() or {}
+        present_xmp = img.read_xmp() or {}
+        exif_payload = {k: '' for k in GPS_EXIF_KEYS if k in present_exif}
+        xmp_payload = {k: '' for k in GPS_XMP_KEYS if k in present_xmp}
+        if exif_payload:
+            img.modify_exif(exif_payload)
+        if xmp_payload:
+            img.modify_xmp(xmp_payload)
+        return len(exif_payload) + len(xmp_payload)
+    finally:
+        img.close()
+
+
+def write_gps_raw(path, lat, lon):
+    """Write one camera position into the file's EXIF GPS block.
+
+    Replaces whatever was there: the reference letters are written together
+    with the numbers, so a position moving from north to south cannot leave
+    a stale "N" behind.
+    """
+    px = _require()
+    lat_str, lat_neg = _dms_strings(lat)
+    lon_str, lon_neg = _dms_strings(lon)
+    img = px.Image(path)
+    try:
+        img.modify_exif({
+            'Exif.GPSInfo.GPSVersionID': '2 0 0 0',
+            'Exif.GPSInfo.GPSLatitude': lat_str,
+            'Exif.GPSInfo.GPSLatitudeRef': 'S' if lat_neg else 'N',
+            'Exif.GPSInfo.GPSLongitude': lon_str,
+            'Exif.GPSInfo.GPSLongitudeRef': 'W' if lon_neg else 'E',
+        })
+        return True
+    finally:
+        img.close()

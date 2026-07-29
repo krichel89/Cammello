@@ -2,6 +2,7 @@
 import re
 import os
 from .constants import *
+from . import langcodes
 
 
 def invalid_qid_problems(label, value, multi=False):
@@ -82,9 +83,18 @@ def extract_structured_data(text, logger=None):
 
     # Dynamically extract all caption_XX= lines (any language code). Assigning
     # into the dict means the last occurrence wins.
-    for m in re.finditer(r'(?:^|\n)caption_([a-z]{2,3})=([^\n]+)',
+    for m in re.finditer(r'(?:^|\n)alt_(' + _LANG_CODE + r')=([^\n]+)',
                          result, flags=re.IGNORECASE):
-        lang = m.group(1).lower()
+        sd['alt_' + langcodes.normalize(m.group(1))] = m.group(2).strip()
+    result = re.sub(r'\nalt_' + _LANG_CODE + r'=[^\n]+', '', result,
+                    flags=re.IGNORECASE)
+    result = re.sub(r'^alt_' + _LANG_CODE + r'=[^\n]+\n?', '', result,
+                    flags=re.MULTILINE | re.IGNORECASE)
+    for m in re.finditer(r'(?:^|\n)caption_(' + _LANG_CODE + r')=([^\n]+)',
+                         result, flags=re.IGNORECASE):
+        # Only the LANGUAGE part is case-insensitive; the script tag keeps
+        # the spelling it was written with (see langcodes.normalize).
+        lang = langcodes.normalize(m.group(1))
         val = m.group(2).strip()
         key = 'caption_' + lang
         if logger and key in sd and sd[key] != val:
@@ -92,8 +102,9 @@ def extract_structured_data(text, logger=None):
                         '("%s" -> "%s").', key, sd[key], val)
         sd[key] = val
     # Remove all matched caption_XX= lines from result
-    result = re.sub(r'\ncaption_[a-z]{2,3}=[^\n]+', '', result, flags=re.IGNORECASE)
-    result = re.sub(r'^caption_[a-z]{2,3}=[^\n]+\n?', '', result,
+    result = re.sub(r'\ncaption_' + _LANG_CODE + r'=[^\n]+', '', result,
+                    flags=re.IGNORECASE)
+    result = re.sub(r'^caption_' + _LANG_CODE + r'=[^\n]+\n?', '', result,
                     flags=re.MULTILINE | re.IGNORECASE)
 
     for key in SD_KEYS:
@@ -132,8 +143,16 @@ def extract_structured_data(text, logger=None):
 
 # Keys that look like a structured-data tag when they appear at the start of a line.
 
+# 0.15.2: language codes may carry a SCRIPT and a REGION part - "ms-Arab"
+# (Malay in Jawi), "zh-Hant", "pt-BR". The old [a-z]{2,3} silently dropped
+# such captions again when the description cell was read back, so widening
+# it in the editor alone would have fixed nothing. ONE pattern, used
+# everywhere a language code appears, so the six places cannot drift apart.
+_LANG_CODE = r'[A-Za-z]{2,3}(?:-[A-Za-z]{4})?(?:-(?:[A-Za-z]{2}|[0-9]{3}))?'
+
 _LINT_KEYS_RE = (r'(?:creator|copyright|license|depicts|depicts_override|'
-                 r'created_during|gallery_suffix|caption_[a-z]{2,3})')
+                 r'created_during|gallery_suffix|caption_' + _LANG_CODE +
+                 r'|alt_' + _LANG_CODE + r')')
 
 
 def set_coordinates_line(text, value):
@@ -358,7 +377,8 @@ def split_categories(text):
 
 
 _ASSIGN_RE = re.compile(
-    r'^\s*(?:caption_[a-z]{2,3}|creator|copyright|license|depicts|'
+    r'^\s*(?:caption_' + _LANG_CODE + r'|alt_' + _LANG_CODE +
+    r'|creator|copyright|license|depicts|'
     r'depicts_override|created_during|gallery_suffix)\s*=',
     re.IGNORECASE)
 
@@ -374,7 +394,8 @@ def leftover_text(text):
 # NOTE: the non-greedy match stops at the first '}}', so a value containing a
 # nested template would be cut short; such lines are left in the extra text.
 _LANG_TMPL_RE = re.compile(
-    r'\{\{\s*([a-z]{2,3})\s*\|\s*1\s*=\s*((?:[^{}]|\[\[[^\]]*\]\])*?)\s*\}\}',
+    r'\{\{\s*(' + _LANG_CODE + r')\s*\|\s*1\s*=\s*'
+    r'((?:[^{}]|\[\[[^\]]*\]\])*?)\s*\}\}',
     re.DOTALL)
 
 

@@ -322,9 +322,14 @@ try:
     ed2 = StructuredDescriptionEditor(is_base=False)
     combo = ed2.captions_editor._rows[0]['combo']
     codes = [combo.itemData(i) for i in range(combo.count())]
+    # The dropdown ends with TWO special entries: "Other (ISO code)…" and
+    # "Remove saved language…". The old expectation of '__other__' as the
+    # last item predates the second one - it was simply never reached,
+    # because the run crashed earlier (corrected 0.15.2).
     check('dropdown = base + extras + Other',
           codes[:5] == ['en', 'de', 'es', 'fr', 'ja']
-          and codes[-1] == '__other__', str(codes))
+          and '__other__' in codes and codes[-1] == '__forget__',
+          str(codes))
 finally:
     (settings.remove('caption_extra_langs') if extra_saved is None
      else settings.setValue('caption_extra_langs', extra_saved))

@@ -116,6 +116,7 @@ class MenusMixin:
         self._build_file_menu(bar.addMenu(tr('&File')))
         self._build_metadata_menu(bar.addMenu(tr('&Metadata')))
         self._build_view_menu(bar.addMenu(tr('&View')))
+        self._build_location_menu(bar.addMenu(tr('&Location')))
         upload = bar.addMenu(tr('&Upload'))
         self._build_upload_menu(upload)
         self._build_help_menu(bar.addMenu(tr('&Help')))
@@ -292,6 +293,27 @@ class MenusMixin:
                 action.setChecked(True)
                 return
 
+    def _build_location_menu(self, menu):
+        """Location data (0.15.0). Its own top-level menu on Harald's call:
+        as buttons the three labels had no room to breathe. All three act
+        on the MediaWiki table, so they are scoped to that module."""
+        self._scope('mediawiki',
+                    self._act(menu, tr('&Read location from file'),
+                              '_location_read_selected', None,
+                              tr('Camera position from the .xmp sidecar, or '
+                                 'from the EXIF when the sidecar has '
+                                 'none.')),
+                    self._act(menu, tr('&Match GPX track…'),
+                              '_location_match_gpx', None,
+                              tr('Match a logger track against the capture '
+                                 'times and fill the camera positions.')))
+        menu.addSeparator()
+        self._scope('mediawiki',
+                    self._act(menu, tr('&Clear all location data'),
+                              '_location_clear_all', None,
+                              tr('Remove both coordinates from every file '
+                                 'in the list.')))
+
     def _build_upload_menu(self, menu):
         self._act(menu, tr('&Log in…'), 'do_login',
                   tip=tr('Sign in to Wikimedia Commons.'))
@@ -318,6 +340,12 @@ class MenusMixin:
         # switching the language switches the manual with it.
         self._act(menu, tr('Cammello &manual (on Commons)'), '_open_manual',
                   QKeySequence.HelpContents, None, QAction.NoRole)
+        menu.addSeparator()
+        # 0.15.2: an explicit check, next to the automatic one. NoRole so
+        # macOS does not move it into the application menu.
+        self._act(menu, tr('Check for &updates…'), '_check_for_updates',
+                  None, tr('Ask GitHub whether a newer release exists.'),
+                  QAction.NoRole)
         menu.addSeparator()
         # About and the Log live here and deliberately carry NO shortcut -
         # they are looked up, not used in the flow of work.

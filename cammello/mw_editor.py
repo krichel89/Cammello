@@ -196,14 +196,21 @@ class MWEditorMixin:
         return ''
 
     def _fetch_categories_or_warn(self, qids):
-        """One wbgetentities call; returns the dict or None (after warning)."""
-        try:
-            return fetch_commons_categories(qids)
-        except Exception as e:
-            self.logger.error('Category suggestion failed: %s', e)
-            QMessageBox.warning(self, tr('Categories'),
-                                tr('Wikidata request failed: {e}').format(e=e))
+        """One wbgetentities call; returns the dict or None (after warning).
+
+        Off the GUI thread since 0.15.0: the synchronous call froze the
+        whole window for up to the request timeout on a slow network."""
+        result, exc, cancelled = fetch_in_background(
+            self, tr('Asking Wikidata…'), fetch_commons_categories, qids)
+        if cancelled:
             return None
+        if exc is not None:
+            self.logger.error('Category suggestion failed: %s', exc)
+            QMessageBox.warning(self, tr('Categories'),
+                                tr('Wikidata request failed: {e}').format(
+                                    e=exc))
+            return None
+        return result
 
     def _suggest_depicts_categories(self):
         """Per-file 'Suggest category' next to the categories: Commons
@@ -363,6 +370,12 @@ class MWEditorMixin:
         finally:
             self._loading_desc = False
         self._load_selected_desc()
+        # 0.15.0 (Harald): "im Expert mode soll immer alles bedienbar sein".
+        # The workflow hides controls it has no use for - but that is a
+        # convenience for the normal mode, not a restriction. Expert mode
+        # switches the hiding off entirely.
+        if hasattr(self, '_apply_workflow_visibility'):
+            self._apply_workflow_visibility()
 
     # base_text_edit is the single source of truth for the base description;
     # base_struct is a synced structured view of it.

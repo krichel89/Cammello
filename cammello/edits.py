@@ -561,3 +561,64 @@ def export_name(path):
     which to use via has_edit()."""
     stem = os.path.splitext(os.path.basename(path))[0]
     return stem + EDIT_SUFFIX + '.jpg'
+
+
+# ── Undo (0.15.0) ────────────────────────────────────────────────────────────
+# Harald: "Command-Z bzw. CTRL-Z für einen Schritt zurück", scope "nur
+# Bildbearbeitung". So this covers crop, exposure and white balance - not
+# ratings, not renames, not coordinates. Those have their own consequences
+# (a rename touches the file system) and would need their own machinery.
+#
+# The history stores the record as it was BEFORE a change, together with the
+# path it belonged to. Undo therefore restores a whole record rather than
+# replaying an inverse operation: with three independent values that is both
+# simpler and impossible to get out of step.
+UNDO_DEPTH = 50
+
+
+class EditHistory:
+    """Bounded stack of previous edit records. Qt-free on purpose."""
+
+    def __init__(self, depth=UNDO_DEPTH):
+        self._depth = max(1, int(depth))
+        self._stack = []
+
+    def __len__(self):
+        return len(self._stack)
+
+    def clear(self):
+        self._stack.clear()
+
+    def push(self, path, record):
+        """Remember the state BEFORE a change. `record` may be None, which
+        is the honest representation of "this file had no edits yet" - undo
+        then removes the edit again instead of leaving a stale one."""
+        key = norm(path)
+        self._stack.append((key, dict(record) if record else None))
+        if len(self._stack) > self._depth:
+            del self._stack[0]
+
+    def pop(self):
+        """-> (path, record_or_None), or None when there is nothing left."""
+        if not self._stack:
+            return None
+        return self._stack.pop()
+
+    def peek_path(self):
+        """Which file the next undo would touch, without consuming it."""
+        return self._stack[-1][0] if self._stack else None
+
+
+def apply_record(edits, path, record):
+    """Put a whole record back (undo). Returns True when something changed."""
+    key = norm(path)
+    before = edits.get(key)
+    if record:
+        clean = _normalize_record(record)
+        if clean is None:
+            edits.pop(key, None)
+        else:
+            edits[key] = clean
+    else:
+        edits.pop(key, None)
+    return edits.get(key) != before

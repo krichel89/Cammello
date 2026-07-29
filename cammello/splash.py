@@ -131,7 +131,7 @@ def build_pixmap(ratio=1.0):
     return pm
 
 
-MIN_VISIBLE_MS = 1500   # see finish_after_minimum()
+MIN_VISIBLE_MS = 4000   # 0.15.0 (Harald): four seconds, was 1500
 
 
 class Splash(QSplashScreen):
@@ -171,6 +171,17 @@ class Splash(QSplashScreen):
         elapsed_ms = 0.0
         if self._shown_at is not None:
             elapsed_ms = (time.monotonic() - self._shown_at) * 1000.0
+        # 0.15.0 (Harald): once the main window is up, the splash sits in
+        # front of it for the remaining seconds - so align it HORIZONTALLY
+        # with the window's centre instead of the screen's, or it hangs
+        # visibly off to one side of a window that is not screen-centred.
+        # Vertical position stays as it is, only horizontal was asked for.
+        try:
+            frame = window.frameGeometry()
+            if frame.width() > 0:
+                self.move(frame.center().x() - WIDTH // 2, self.y())
+        except (RuntimeError, AttributeError):
+            pass                      # window half-built: keep screen centre
         remaining = int(max(0.0, minimum_ms - elapsed_ms))
         if remaining <= 0:
             self.finish(window)

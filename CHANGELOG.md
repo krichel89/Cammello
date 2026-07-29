@@ -4,6 +4,82 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.2] - 2026-07-29
+
+### Added
+- Alt text per language, uploaded as the "alt text" statement (P11265).
+- An update check: once a day at startup and on demand from the Help
+  menu. An even final digit means stable, an odd one experimental.
+- Switching workflows now offers to clear fields the new workflow hides -
+  hidden values would otherwise still be uploaded.
+
+### Changed
+- The gallery is one field again: the base description holds the FULL
+  gallery page name, and the separate prefix setting is gone.
+- The first workflow is now called "Events/Portraits".
+
+### Fixed
+- Language codes with a script or region part (ms-Arab, zh-Hant, pt-BR)
+  were rejected and, worse, silently dropped when a description was read
+  back. Reported by a user uploading Malay captions in Jawi script.
+- The red dot on depicts stays away when the override below says there is
+  nothing to link.
+
+## [0.15.1] - 2026-07-28
+
+### Added
+- The red dot now also marks per-file fields that are still empty: the
+  categories, depicts, the caption and the Information text.
+- A file needs at least one CONTENT category. Meta categories - who took
+  it, which project it belongs to, maintenance buckets - do not count.
+  The patterns live in `cammello/assets/meta_categories.txt` and can be
+  edited without touching the source.
+
+## [0.15.0] - 2026-07-28
+
+### Added
+- Second workflow "Buildings and Landscapes" beside "Event with portraits",
+  switched from a dropdown next to "Ignore warnings". It presets templates,
+  categories and structured data and shows only the fields the workflow
+  needs; expert mode always shows everything.
+- Position of the depicted object as a second coordinate, kept apart from
+  the camera position: `{{Object location dec}}` in the wikitext and
+  P9149 in the structured data (the camera keeps `{{Location dec}}` and
+  P1259). Optionally fetched from the Wikidata item under "depicts".
+- Location column in the file table, both coordinates under each other.
+- Location menu: read the position from the file (sidecar first, EXIF
+  second), match a GPX track, or clear all location data.
+- GPX matching dialog with a preview of every match before anything is
+  written; the camera clock offset is preset from the system time zone and
+  stays editable, the maximum time gap is adjustable.
+- Coordinates are written into JPEG and TIFF files and can be removed from
+  them again - all GPS fields, EXIF and XMP. Place names are kept, RAW
+  files are never modified.
+- Sublocation in the IPTC module.
+- Undo for the image edits (Ctrl+Z / Cmd+Z), 50 steps.
+- Capture settings go into the structured data at upload: exposure time,
+  f-number, ISO, focal length, capture date, media type, and the camera
+  (and lens) as a Wikidata item when the EXIF string maps to exactly one.
+  "Own work" additionally sets P7482.
+- A red dot marks strongly recommended fields that are still empty; the
+  "Author and license" group starts collapsed.
+
+### Changed
+- Crop, exposure and white balance now reach the UPLOAD. Until now they
+  only applied to the culling export and the original went to Commons.
+- The culling background is a neutral grey that follows the colour scheme.
+- The pipette replaces the mouse pointer while sampling.
+- The start screen stays for four seconds and is centred on the window.
+
+### Fixed
+- Previews that arrived late or not at all: a queued preview can be raised
+  to a higher priority, a lost one is asked for again, and a failed decode
+  is reported instead of only logged.
+- Hiding a field left its form label standing.
+- Wikidata lookups no longer freeze the window; they run in the background
+  with a cancel button.
+- Sidecar files are read with a size limit.
+
 ## [0.14.3] - 2026-07-25
 
 ### Fixed

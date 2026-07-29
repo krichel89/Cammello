@@ -28,7 +28,8 @@ from .ftp_workers import (FtpUploadWorker, PROTOCOLS, DEFAULT_PORTS,
 from .widgets import (UploadProgressDialog, CollapsibleGroupBox, FlowLayout,
                       apply_form_ratio, NoWheelComboBox)
 from .i18n import tr, current_language
-from .wikidata import WikidataSearchWorker, fetch_commons_categories
+from .wikidata import (WikidataSearchWorker, fetch_commons_categories,
+                       fetch_in_background)
 
 
 class _PersonResolveDialog(QDialog):
@@ -619,10 +620,14 @@ class MWIptcMixin:
                 if v and v != 'literal' and v.upper().startswith('Q')]
         cat_of_qid = {}
         if qids:
-            try:
-                fetched = fetch_commons_categories(qids)
-            except Exception:
-                fetched = {}
+            # Off the GUI thread since 0.15.0 (security review): the
+            # synchronous call froze the window for up to the timeout.
+            # Errors keep their old meaning - an empty fetch, names fall
+            # back to the label.
+            fetched, _exc, _cancelled = fetch_in_background(
+                self, tr('Asking Wikidata…'),
+                fetch_commons_categories, qids)
+            fetched = fetched or {}
             for q in qids:
                 cat, label = fetched.get(q, (None, ''))
                 cat_of_qid[q] = cat or label or ''

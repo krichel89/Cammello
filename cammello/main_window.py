@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import (
     QTextEdit, QFileDialog, QMessageBox, QProgressBar, QSplitter,
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
     QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit,
-    QStyledItemDelegate, QComboBox, QScrollArea, QCompleter)
+    QStyledItemDelegate, QComboBox, QScrollArea, QCompleter,
+    QProgressDialog)
 from PyQt5.QtCore import (QT_VERSION_STR,
                           Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
                           QSize, QRegExp, QTimer, QStringListModel, QEvent,
@@ -15,6 +16,7 @@ from PyQt5.QtCore import (QT_VERSION_STR,
 from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator, QPalette, QColor)
 from .constants import *
+from datetime import date
 from .constants import __version__
 from .logging_setup import *
 from .sdc import *
@@ -39,8 +41,15 @@ from . import credentials
 from . import channels
 from . import splash as splash_mod
 from .menus import MenusMixin
-from .wikidata import refresh_wd_fields
+from .wikidata import (refresh_wd_fields, fetch_coordinates,
+                       fetch_in_background)
 from .exif import read_gps, format_coordinates
+from . import workflows
+from . import geo
+from . import categories
+from . import updates
+from . import wikidata
+from .gpx_dialog import GpxMatchDialog
 from .i18n import (tr, UI_LANGUAGES, set_language,
                    default_language_from_locale, current_language)
 
@@ -53,14 +62,18 @@ class MainWindow(FlickrMixin,
                  MWSettingsMixin, MWFilesMixin, MWEditorMixin, MWUploadMixin,
                  MWIptcMixin, MWCullingMixin, MenusMixin, QMainWindow):
     COLS = ['', 'Source file', 'Target filename (Commons)', 'Date',
-            'Description (file, hidden)', 'Wikitext', 'Status']
+            'Description (file, hidden)', 'Location', 'Wikitext', 'Status']
     COL_THUMB = 0
     COL_FILENAME = 1
     COL_TITLE = 2
     COL_DATE = 3
     COL_DESC = 4
-    COL_EFFECTIVE = 5
-    COL_STATUS = 6
+    # 0.15.0: ONE Location column carrying both coordinates under each
+    # other - camera position on top, depicted position below. Placed
+    # before the two read-only columns so Wikitext and Status stay last.
+    COL_LOCATION = 5
+    COL_EFFECTIVE = 6
+    COL_STATUS = 7
 
     def __init__(self, logger, emitter, gui_handler, log_path):
         super().__init__()
@@ -74,7 +87,7 @@ class MainWindow(FlickrMixin,
         # the English fallback).
         self.COLS = ['', tr('Source file'), tr('Target filename (Commons)'),
                      tr('Date'), tr('Description (file, hidden)'),
-                     tr('Wikitext'), tr('Status')]
+                     tr('Location'), tr('Wikitext'), tr('Status')]
         self.setWindowTitle(f'{APP_NAME} v{__version__}')
         self.setMinimumSize(1150, 740)
         # Higher-contrast borders for all input fields (cascades to children,
@@ -252,6 +265,24 @@ class MainWindow(FlickrMixin,
         page = QWidget()
         main_layout = QVBoxLayout(page)
 
+        # ── Workflow (0.15.0) ──
+        # Built here, placed in the TOOLBAR row below (Harald: "links neben
+        # Ignore Warnings auf derselben Höhe, um vertikal Platz zu sparen").
+        # It presets and shows/hides fields; the workflow-specific controls
+        # follow it via _apply_workflow_visibility().
+        self.workflow_combo = QComboBox()
+        for _wf in workflows.all_workflows():
+            self.workflow_combo.addItem(tr(_wf['label']), _wf['key'])
+        self.workflow_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.workflow_combo.setToolTip(tr(
+            'Presets templates, category suggestions and structured data for '
+            'this tab.\nIt fills fields, it never locks them: everything '
+            'stays editable, and\nswitching does not overwrite what you have '
+            'already entered.\n\nThe IPTC tab is not affected by this.'))
+        self.workflow_combo.currentIndexChanged.connect(
+            self._on_workflow_changed)
+        self._workflow_label = QLabel(tr('Workflow'))
+
         # ── Toolbar ──
         # Deliberately minimal (0.12.5): the file actions all live in the
         # menus now (File > Add files, Metadata/File > list commands, Upload >
@@ -288,6 +319,8 @@ class MainWindow(FlickrMixin,
 
         toolbar.addWidget(self.login_label)
         toolbar.addStretch()
+        toolbar.addWidget(self._workflow_label)
+        toolbar.addWidget(self.workflow_combo)
         toolbar.addWidget(self.ignore_warnings_cb)
         toolbar.addWidget(self.upload_btn)
         slim_toolbar(toolbar)
@@ -508,7 +541,6 @@ class MainWindow(FlickrMixin,
         settings_form.addRow(tr('License (P275):'), self.license_sdc_edit)
         settings_form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_edit)
         settings_form.addRow(tr('Other fields:'), self.other_fields_edit)
-        settings_form.addRow(tr('Gallery prefix:'), self.gallery_prefix_edit)
         settings_form.addRow(tr('HTTP timeout (s):'), self.timeout_edit)
         apply_form_ratio(settings_form)
         # 0.10.0 regression fix: this group was detached from the tab for the
@@ -517,6 +549,16 @@ class MainWindow(FlickrMixin,
         # HERE (primary widgets, attribute names unchanged) and are mirrored
         # into the Settings tab (see _build_mw_settings_mirror).
         right_layout.addWidget(settings_group)
+        # 0.15.0 (Harald): this group starts COLLAPSED - it is filled once
+        # and then rarely touched - and a red dot on the heading says when
+        # the strongly recommended fields (author, source, license) are
+        # still empty, so collapsing hides nothing that matters. Commons
+        # rejects uploads without author/source/license information, which
+        # is what makes exactly these three "strongly recommended".
+        self._settings_group = settings_group
+        settings_group.setChecked(False)
+        for _w in (self.author_edit, self.source_edit, self.license_edit):
+            _w.textChanged.connect(self._refresh_required_marks)
         self._mw_settings_group = settings_group
 
         # Mode toggle: expert mode shows the raw description_all text; when it is
@@ -606,11 +648,34 @@ class MainWindow(FlickrMixin,
             self._suggest_depicts_categories)
         self.file_struct.coords_exif_btn.clicked.connect(
             self._fill_coordinates_from_exif)
+        self.file_struct.object_wd_btn.clicked.connect(
+            self._fill_object_from_wikidata)
         self.file_struct.changed.connect(self._commit_editor)
         self.file_struct.committed.connect(self._commit_editor)
         self.file_struct.setVisible(False)
         file_layout.addWidget(self.file_struct)
+        self._file_group = file_group
+        # 0.15.1: the per-file dots follow the selection and every edit in
+        # the fields they judge.
+        self.file_struct.categories.textChanged.connect(
+            self._refresh_file_marks)
+        if self.file_struct.depicts is not None:
+            self.file_struct.depicts.textChanged.connect(
+                self._refresh_file_marks)
+        self.file_struct.captions_editor.changed.connect(
+            self._refresh_file_marks)
+        self.table.itemSelectionChanged.connect(self._refresh_file_marks)
+        # 0.15.2: the automatic update check, deferred so it never delays
+        # the window appearing.
+        self._maybe_check_updates_on_start()
         right_layout.addWidget(file_group)
+
+        # ── Location (0.15.0) ──
+        # The three batch actions (read from file, match GPX, clear all)
+        # live in the LOCATION MENU since Harald's review - as buttons in
+        # this column their labels had no room. What remains here is
+        # nothing: the two coordinate fields sit in the structured editor
+        # above, and the menu carries the actions.
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
@@ -636,6 +701,534 @@ class MainWindow(FlickrMixin,
         main_layout.addWidget(self.progress_bar)
 
         return page
+
+    # ── Workflow (0.15.0) ────────────────────────────────────────────────────
+
+    def current_workflow(self):
+        """Key of the selected workflow. Falls back to the default while the
+        UI is still being built, so callers never have to guard for it."""
+        cb = getattr(self, 'workflow_combo', None)
+        if cb is None:
+            return workflows.DEFAULT_KEY
+        return cb.currentData() or workflows.DEFAULT_KEY
+
+    def _on_workflow_changed(self, _index=0):
+        """Remember the choice and apply the workflow's presets.
+
+        Applying is deliberately non-destructive: a preset only fills a
+        field that is still EMPTY. Switching workflows must never throw
+        away something the user typed - that was the explicit condition
+        for having a switch at all.
+        """
+        key = self.current_workflow()
+        self.settings.setValue('workflow', key)
+        wf = workflows.by_key(key)
+
+        # "Other templates" is a QLineEdit, the base description a
+        # QPlainTextEdit - hence the two shapes. Both are filled only when
+        # they are still empty.
+        line = getattr(self, 'other_templates_edit', None)
+        if line is not None and wf['templates'] and not line.text().strip():
+            line.setText(wf['templates'])
+        box = getattr(self, 'base_text_edit', None)
+        if box is not None and wf['base_description'] \
+                and not box.toPlainText().strip():
+            box.setPlainText(wf['base_description'])
+
+        self._apply_workflow_visibility(key)
+        self.logger.info('Workflow switched to %s.', key)
+        # 0.15.2: fields the new workflow HIDES may still be filled, and
+        # hidden is not inactive - they would upload regardless. Offer to
+        # clear them; never do it unasked.
+        self._clear_hidden_workflow_fields(key)
+
+    @staticmethod
+    def _mark_label(lbl, missing):
+        """Put the red dot in front of a form label, or take it away."""
+        if lbl is None or not hasattr(lbl, 'text'):
+            return
+        base = lbl.text().lstrip('● ').lstrip()
+        lbl.setText(('● ' + base) if missing else base)
+        lbl.setStyleSheet('color:#d03030;' if missing else '')
+
+    # ── update check (0.15.2) ────────────────────────────────────────────
+    def _check_for_updates(self, quiet=False):
+        """Ask GitHub for newer releases.
+
+        quiet=True is the automatic check at startup: it says nothing when
+        everything is current and nothing when the network is unreachable.
+        An update check that interrupts work to report its own failure is
+        worse than no update check.
+        """
+        if quiet:
+            releases = updates.fetch_releases()
+        else:
+            releases, exc, cancelled = wikidata.fetch_in_background(
+                self, tr('Asking GitHub\u2026'), updates.fetch_releases)
+            if cancelled:
+                return
+            if exc is not None or releases is None:
+                QMessageBox.warning(
+                    self, tr('Check for updates'),
+                    tr('Could not reach GitHub: {error}').format(
+                        error=str(exc or updates.LAST_ERROR)))
+                return
+        if releases is None:
+            self.logger.info('Update check failed: %s', updates.LAST_ERROR)
+            return
+        stable_only = self.settings.value('update_stable_only', True,
+                                          type=bool)
+        hit = updates.newest_relevant(releases, __version__, stable_only)
+        if hit is None:
+            self.logger.info('Update check: %s is current.', __version__)
+            if not quiet:
+                QMessageBox.information(
+                    self, tr('Check for updates'),
+                    tr('You are running the newest version ({version}).')
+                    .format(version=__version__))
+            return
+        version, tag, url = hit
+        label = updates.format_version(version)
+        kind = (tr('stable') if updates.is_stable(version)
+                else tr('experimental'))
+        self.logger.info('Update available: %s (%s).', label, kind)
+        QMessageBox.information(
+            self, tr('Check for updates'),
+            tr('Version {new} ({kind}) is available - you are running '
+               '{old}.\n\n{url}').format(new=label, kind=kind,
+                                          old=__version__, url=url))
+
+    def _maybe_check_updates_on_start(self):
+        """Once a day at most, and only if the user leaves it switched on."""
+        if not self.settings.value('update_check', True, type=bool):
+            return
+        today = date.today().isoformat()
+        if self.settings.value('update_last_check', '') == today:
+            return
+        self.settings.setValue('update_last_check', today)
+        self.settings.sync()
+        QTimer.singleShot(3000, lambda: self._check_for_updates(quiet=True))
+
+    def _refresh_required_marks(self, *_a):
+        """Red dots on strongly recommended fields and their groups.
+
+        Two groups, two reasons (0.15.0/0.15.1):
+
+        * Author, source and license - Commons refuses an upload without
+          them. They sit in the settings group, which starts collapsed, so
+          the dot on the heading is what keeps collapsing safe.
+        * Per file: at least one CONTENT category, plus depicts, caption
+          and Information. "Photographs by …" and the maintenance buckets
+          are meta and do not count - see categories.py and the editable
+          list in assets/meta_categories.txt.
+        """
+        missing = False
+        for edit in (getattr(self, 'author_edit', None),
+                     getattr(self, 'source_edit', None),
+                     getattr(self, 'license_edit', None)):
+            if edit is None:
+                continue
+            empty = not edit.text().strip()
+            missing = missing or empty
+            self._mark_label(self._label_for(self._settings_group, edit),
+                             empty)
+        grp = getattr(self, '_settings_group', None)
+        if grp is not None:
+            grp.set_attention(missing)
+        self._refresh_file_marks()
+
+    def _refresh_file_marks(self, *_a):
+        """The per-file dots (0.15.1). Only meaningful while a row is
+        selected - with nothing selected the fields are empty for a reason
+        and nothing is marked."""
+        struct = getattr(self, 'file_struct', None)
+        if struct is None:
+            return
+        group = getattr(self, '_file_group', None)
+        ce = getattr(struct, 'captions_editor', None)
+        if not self.table.selectedIndexes():
+            for w in (struct.categories, struct.depicts):
+                self._mark_label(self._label_for(struct, w), False)
+            if ce is not None:
+                ce.set_attention(False, False)
+            if group is not None:
+                group.set_attention(False)
+            return
+
+        missing = False
+
+        # Categories: at least one that says what is IN the picture.
+        cats = categories.parse_field(struct.categories.text())
+        cat_missing = not categories.has_content_category(cats)
+        missing = missing or cat_missing
+        self._mark_label(self._label_for(struct, struct.categories),
+                         cat_missing)
+
+        # Depicts (P180) - but NOT when the override below deliberately
+        # says there is nothing to link (no Wikidata item, not applicable,
+        # unidentified). Nagging about a field the user has just declared
+        # inapplicable is how people learn to ignore red dots.
+        if struct.depicts is not None:
+            overridden = bool(
+                struct.override_combo.currentData()
+                if getattr(struct, 'override_combo', None) is not None
+                else '')
+            dep_missing = (not struct.depicts.text().strip()
+                           and not overridden)
+            missing = missing or dep_missing
+            self._mark_label(self._label_for(struct, struct.depicts),
+                             dep_missing)
+
+        # Caption and Information sit in the captions editor, one row per
+        # language: "present" means at least one language carries text.
+        if ce is not None:
+            cap_missing = not ce.get_captions()
+            info_missing = not ce.get_infos()
+            missing = missing or cap_missing or info_missing
+            ce.set_attention(cap_missing, info_missing)
+
+        if group is not None:
+            group.set_attention(missing)
+
+    # Which SD keys each workflow HIDES - and therefore silently carries
+    # along if they are already filled (0.15.2, Harald's report). The
+    # danger is not cosmetic: a hidden object coordinate still becomes
+    # {{Object location dec}} and P9149 on upload.
+    _WORKFLOW_HIDDEN_KEYS = {
+        'portraits': ('coordinates', 'object_coordinates'),
+        'buildings': ('created_during',),
+    }
+
+    def _clear_hidden_workflow_fields(self, key):
+        """Offer to clear fields the NEW workflow hides (0.15.2).
+
+        Only fields that are actually FILLED are touched, and never
+        silently: clearing on a mere dropdown change would be data loss
+        without an undo - the undo covers image edits only. So the
+        question is asked once, listing what would go, and No leaves
+        everything alone.
+        """
+        keys = self._WORKFLOW_HIDDEN_KEYS.get(key, ())
+        if not keys:
+            return
+        # Expert mode shows everything, so nothing is hidden and nothing
+        # needs clearing.
+        if getattr(self, 'expert_cb', None) is not None \
+                and self.expert_cb.isChecked():
+            return
+        affected = []
+        for row in range(self.table.rowCount()):
+            for sd_key in keys:
+                if (self._row_sd_get(row, sd_key) or '').strip():
+                    affected.append((row, sd_key))
+        if not affected:
+            return
+        names = sorted({k for _r, k in affected})
+        if QMessageBox.question(
+                self, tr('Workflow changed'),
+                tr('{n} file(s) still carry values in fields this workflow '
+                   'hides ({fields}). Hidden does not mean inactive - they '
+                   'would still be uploaded. Clear them now?').format(
+                       n=len({r for r, _k in affected}),
+                       fields=', '.join(names)),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            self.logger.info('Workflow switch: %d hidden value(s) kept.',
+                             len(affected))
+            return
+        for row, sd_key in affected:
+            self._row_sd_set(row, sd_key, '')
+            self._location_refresh_row(row)
+            self._refresh_effective(row)
+        self.logger.info('Workflow switch: %d hidden value(s) cleared.',
+                         len(affected))
+        self._load_selected_desc()
+
+    def _apply_workflow_visibility(self, key=None):
+        """Show only the controls the selected workflow needs (0.15.0).
+
+        Harald: "alles mit Location brauchen wir nicht im Event-Workflow",
+        and "Created during nicht im Buildings-Workflow". Nothing is
+        disabled or thrown away - values stay where they are, only the
+        controls are out of the way where they have no use.
+        """
+        key = key or self.current_workflow()
+        wants_location = workflows.offers_object_location(key)
+        # Expert mode overrules the workflow: everything stays reachable
+        # there, because that is what expert mode is for.
+        expert_cb = getattr(self, 'expert_cb', None)
+        if expert_cb is not None and expert_cb.isChecked():
+            wants_location = True
+        struct = getattr(self, 'file_struct', None)
+        if struct is not None:
+            for attr in ('_coords_row_widget', '_object_row_widget'):
+                row = getattr(struct, attr, None)
+                if row is not None:
+                    row.setVisible(wants_location)
+                    lbl = self._label_for(struct, row)
+                    if lbl is not None:
+                        lbl.setVisible(wants_location)
+        # "Created during" (P10408) belongs to the event workflow: the
+        # Wikidata item of the festival. A building was not created during
+        # anything the photographer attended.
+        hide_event = wants_location and not (
+            expert_cb is not None and expert_cb.isChecked())
+        base = getattr(self, 'base_struct', None)
+        if base is not None and getattr(base, 'created_during', None) is not None:
+            base.created_during.setVisible(not hide_event)
+            lbl = self._label_for(base, base.created_during)
+            if lbl is not None:
+                lbl.setVisible(not hide_event)
+        btn = getattr(self, 'iptc_event_btn', None)
+        if btn is not None:
+            btn.setVisible(not hide_event)
+
+    @staticmethod
+    def _label_for(struct, widget):
+        """The form label belonging to a field - hiding the field alone
+        would leave its caption standing in an empty row.
+
+        Searches EVERY QFormLayout under the editor: the field's direct
+        parent carries a QVBoxLayout, the form sits deeper - asking only
+        the parent's layout returned None and left the captions standing
+        (Harald's report, 0.15.0)."""
+        for lay in struct.findChildren(QFormLayout):
+            try:
+                lbl = lay.labelForField(widget)
+            except (RuntimeError, TypeError):
+                continue
+            if lbl is None:
+                continue
+            if isinstance(lbl, QLabel):
+                return lbl
+            # Some rows use a composite caption (label + button, see
+            # _label_with_button): the QLabel to mark sits INSIDE it.
+            inner = lbl.findChildren(QLabel)
+            if inner:
+                return inner[0]
+        return None
+
+    def _selected_or_all_rows(self):
+        """Rows the location actions work on: the selection, or every row
+        when nothing is selected - the same rule the IPTC tab follows."""
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        return rows or list(range(self.table.rowCount()))
+
+    def _row_path(self, row):
+        item = self.table.item(row, self.COL_FILENAME)
+        return item.data(Qt.UserRole) if item else None
+
+    def _row_sd_set(self, row, key, value):
+        """Set (or with value='' remove) one key=value line in the file's
+        description cell. That cell is the ONE place a per-file coordinate
+        lives - the same place the structured editor writes to, so the two
+        can never disagree."""
+        item = self.table.item(row, self.COL_DESC)
+        if item is None:
+            return False
+        lines = [ln for ln in item.text().split('\n')
+                 if ln.strip() and not ln.startswith(key + '=')]
+        if value:
+            lines.append(f'{key}={value}')
+        text = '\n'.join(lines)
+        if text == item.text():
+            return False
+        item.setText(text)
+        return True
+
+    def _row_sd_get(self, row, key):
+        item = self.table.item(row, self.COL_DESC)
+        if item is None:
+            return ''
+        for ln in item.text().split('\n'):
+            if ln.startswith(key + '='):
+                return ln[len(key) + 1:].strip()
+        return ''
+
+    def _location_refresh_row(self, row):
+        item = self.table.item(row, self.COL_LOCATION)
+        if item is None:
+            return
+        parts = [self._row_sd_get(row, 'coordinates'),
+                 self._row_sd_get(row, 'object_coordinates')]
+        item.setText('\n'.join(p for p in parts if p))
+
+    def _location_read_selected(self):
+        """Camera position from the sidecar (first) or the EXIF (second)."""
+        found = missing = kept = 0
+        for row in self._selected_or_all_rows():
+            path = self._row_path(row)
+            if not path:
+                continue
+            if self._row_sd_get(row, 'coordinates'):
+                kept += 1
+                continue
+            hit = geo.read_camera_position(path, log=self.logger)
+            if hit is None:
+                missing += 1
+                continue
+            self._row_sd_set(row, 'coordinates', geo.format_pair(hit[0]))
+            self._location_refresh_row(row)
+            self._refresh_effective(row)
+            found += 1
+        self.logger.info('Location read: %d found, %d without coordinates, '
+                         '%d already had one.', found, missing, kept)
+        self.statusBar().showMessage(
+            tr('Location read: {found} of {total}.').format(
+                found=found, total=found + missing + kept), 6000)
+        self._load_selected_desc()
+
+    def _fill_object_from_wikidata(self):
+        """Object position from the Wikidata item under "depicts" (0.15.0).
+
+        Optional by design: it only helps when the depicted thing HAS an
+        item with a coordinate (P625). A festival portrait does not, which
+        is why this button lives in the buildings workflow.
+        """
+        text = self.file_struct.depicts.text().strip()
+        qids = [q.strip() for q in re.split(r'[;,]', text) if q.strip()]
+        qids = [q for q in qids if re.fullmatch(r'[Qq]\d+', q)]
+        if not qids:
+            QMessageBox.information(
+                self, tr('from Wikidata'),
+                tr('No Wikidata item under "depicts" to take a coordinate '
+                   'from.'))
+            return
+        # Off the GUI thread since 0.15.0 (security review) - the
+        # synchronous call froze the window for up to the timeout.
+        found, exc, cancelled = fetch_in_background(
+            self, tr('Asking Wikidata…'),
+            fetch_coordinates, [q.upper() for q in qids])
+        if cancelled:
+            return
+        if exc is not None:
+            self.logger.error('Wikidata coordinate lookup failed: %s', exc)
+            QMessageBox.warning(self, tr('from Wikidata'),
+                                tr('Wikidata could not be reached: {error}')
+                                .format(error=str(exc)))
+            return
+        found = found or {}
+        for q in qids:
+            coords = found.get(q.upper())
+            if coords:
+                self.file_struct.object_coordinates.setText(
+                    geo.format_pair(coords))
+                self.logger.info('Object position taken from %s: %s',
+                                 q.upper(), geo.format_pair(coords))
+                return
+        QMessageBox.information(
+            self, tr('from Wikidata'),
+            tr('That item carries no coordinate (P625).'))
+
+    def _location_match_gpx(self):
+        """The GPX dialog (0.15.0): preview first, write after Apply."""
+        files = []
+        for row in range(self.table.rowCount()):
+            path = self._row_path(row)
+            if not path:
+                continue
+            date_item = self.table.item(row, self.COL_DATE)
+            files.append((path,
+                          date_item.text().strip() if date_item else '',
+                          bool(self._row_sd_get(row, 'coordinates'))))
+        if not files:
+            QMessageBox.information(self, tr('Match GPX track'),
+                                    tr('The list holds no files.'))
+            return
+        dlg = GpxMatchDialog(files, self, settings=self.settings)
+        if dlg.exec() != QDialog.Accepted or not dlg.results:
+            return
+        touched = written = failed = skipped = 0
+        rows = list(range(self.table.rowCount()))
+        progress = QProgressDialog(tr('Writing positions…'), tr('Cancel'),
+                                   0, len(rows), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(400)
+        for i, row in enumerate(rows):
+            progress.setValue(i)
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
+            path = self._row_path(row)
+            coords = dlg.results.get(path)
+            if coords is None:
+                continue
+            self._row_sd_set(row, 'coordinates', geo.format_pair(coords))
+            self._location_refresh_row(row)
+            self._refresh_effective(row)
+            touched += 1
+            # 0.15.0: the match goes INTO the file too - JPEG and TIFF only,
+            # a RAW keeps its Cammello record but is never modified.
+            if not geo.is_writable_image(path):
+                skipped += 1
+                continue
+            ok, _detail = geo.write_gps_in_file(path, coords, self.logger)
+            if ok:
+                written += 1
+            else:
+                failed += 1
+        progress.setValue(len(rows))
+        self.logger.info('GPX match applied to %d row(s); %d files written, '
+                         '%d skipped (not JPEG/TIFF), %d failed.',
+                         touched, written, skipped, failed)
+        self.statusBar().showMessage(
+            tr('GPX: {touched} matched, {written} written into files, '
+               '{skipped} skipped, {failed} failed.').format(
+                   touched=touched, written=written, skipped=skipped,
+                   failed=failed), 8000)
+        self._load_selected_desc()
+
+    def _location_clear_all(self):
+        """Both coordinates out of EVERY row, after confirmation."""
+        rows = list(range(self.table.rowCount()))
+        if not rows:
+            return
+        if QMessageBox.question(
+                self, tr('Clear all location data'),
+                tr('Remove both coordinates from all {n} files - in Cammello '
+                   'AND from the image files themselves? JPEG and TIFF are '
+                   'changed on disk; RAW files are left alone. Place names '
+                   '(city, country) are kept.').format(n=len(rows)),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            return
+        touched = 0
+        wiped = failed = skipped = 0
+        progress = QProgressDialog(tr('Clearing location data…'),
+                                   tr('Cancel'), 0, len(rows), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(400)
+        for i, row in enumerate(rows):
+            progress.setValue(i)
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
+            changed = self._row_sd_set(row, 'coordinates', '')
+            changed = self._row_sd_set(row, 'object_coordinates', '') or changed
+            if changed:
+                touched += 1
+                self._location_refresh_row(row)
+                self._refresh_effective(row)
+            path = self._row_path(row)
+            if not path:
+                continue
+            if not geo.is_writable_image(path):
+                skipped += 1
+                continue
+            ok, _detail = geo.clear_gps_in_file(path, self.logger)
+            if ok:
+                wiped += 1
+            else:
+                failed += 1
+        progress.setValue(len(rows))
+        self.logger.info('Location data cleared: %d rows, %d files wiped, '
+                         '%d skipped (not JPEG/TIFF), %d failed.',
+                         touched, wiped, skipped, failed)
+        self.statusBar().showMessage(
+            tr('Location cleared: {wiped} file(s), {skipped} skipped, '
+               '{failed} failed.').format(wiped=wiped, skipped=skipped,
+                                          failed=failed), 8000)
+        self._load_selected_desc()
 
     def _on_thumb_column_resized(self, index, _old, new):
         if index != self.COL_THUMB:
@@ -713,6 +1306,44 @@ class MainWindow(FlickrMixin,
             self.settings.value('exif_coordinates', True, type=bool))
         self.exif_coords_cb.toggled.connect(
             lambda on: (self.settings.setValue('exif_coordinates', bool(on)),
+                        self.settings.sync()))
+        # 0.15.0 (Harald): capture settings -> structured data, transparent
+        # at upload. Exposure time, f-number, ISO and focal length only -
+        # values a viewer can read off the picture anyway; nothing
+        # identifying (no serial numbers, and the position has its own
+        # switch above).
+        self.exif_capture_cb = QCheckBox(
+            tr('Add capture settings to the structured data at upload'))
+        self.exif_capture_cb.setToolTip(tr(
+            'Copies exposure time, f-number, ISO, focal length, the capture '
+            'date and\nthe media type from the file into the structured '
+            'data at upload - plus the\ncamera (and lens) as a Wikidata '
+            'item, but ONLY when the EXIF string maps\nto exactly one '
+            'item. Nothing to fill in; ambiguous cameras are skipped.'))
+        self.exif_capture_cb.setChecked(
+            self.settings.value('exif_capture_sdc', True, type=bool))
+        self.exif_capture_cb.toggled.connect(
+            lambda on: (self.settings.setValue('exif_capture_sdc', bool(on)),
+                        self.settings.sync()))
+        # 0.15.2: the update check, and whether experimental releases count.
+        self.update_check_cb = QCheckBox(
+            tr('Check for new versions at startup (once a day)'))
+        self.update_check_cb.setChecked(
+            self.settings.value('update_check', True, type=bool))
+        self.update_check_cb.toggled.connect(
+            lambda on: (self.settings.setValue('update_check', bool(on)),
+                        self.settings.sync()))
+        self.update_stable_cb = QCheckBox(
+            tr('Only tell me about stable versions'))
+        self.update_stable_cb.setToolTip(tr(
+            'Releases with an EVEN final digit are stable, odd ones are '
+            'experimental.\nWhile you are running an experimental version '
+            'you are told about\nexperimental ones regardless.'))
+        self.update_stable_cb.setChecked(
+            self.settings.value('update_stable_only', True, type=bool))
+        self.update_stable_cb.toggled.connect(
+            lambda on: (self.settings.setValue('update_stable_only',
+                                               bool(on)),
                         self.settings.sync()))
 
         appearance = QGroupBox(tr('Appearance'))
@@ -1026,9 +1657,11 @@ class MainWindow(FlickrMixin,
         form.addRow(tr('License (P275):'), self.license_sdc_mirror)
         form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_mirror)
         form.addRow(tr('Other fields:'), self.other_fields_mirror)
-        form.addRow(tr('Gallery prefix:'), self.gallery_prefix_mirror)
         form.addRow(tr('HTTP timeout (s):'), self.timeout_mirror)
         form.addRow('', self.exif_coords_cb)
+        form.addRow('', self.exif_capture_cb)
+        form.addRow('', self.update_check_cb)
+        form.addRow('', self.update_stable_cb)
         apply_form_ratio(form)
         return box
 
@@ -1297,6 +1930,7 @@ class MainWindow(FlickrMixin,
         if scheme == _APPLIED_SCHEME[0]:
             if hasattr(self, '_cull_delegate'):
                 self._cull_delegate.set_dark(self._is_dark_scheme_for(scheme))
+                self._cull_apply_bg(self._is_dark_scheme_for(scheme))
             return
         _APPLIED_SCHEME[0] = scheme
         def _ensure_style(name):
@@ -1356,6 +1990,8 @@ class MainWindow(FlickrMixin,
         # on the window (dialogs pick it up at construction).
         dark = self._is_dark_scheme_for(scheme)
         set_current_input_style(dark)
+        if hasattr(self, '_cull_delegate'):
+            self._cull_apply_bg(dark)      # 0.15.0: surround follows the scheme
         QApplication.instance().setStyleSheet(app_style())
         refresh_wd_fields()   # WD fields carry their own (border) stylesheet
         # A style/palette change does not repolish existing widgets; without

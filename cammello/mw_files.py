@@ -34,6 +34,7 @@ from .editors import *
 from . import mw_oauth
 from . import channels
 from . import previews
+from . import geo
 
 
 def _with_channel_dot(icon, color_hex, dot=12):
@@ -601,6 +602,13 @@ class MWFilesMixin:
         self.table.setItem(row, self.COL_DESC, QTableWidgetItem(
             f'coordinates={format_coordinates(*coords)}' if coords else ''))
 
+        # 0.15.0: Location column. Reads the SAME description cell the
+        # structured editor writes to - one fact, one place. The camera
+        # position is already in there via the coordinates= line above.
+        loc_item = QTableWidgetItem('')
+        loc_item.setFlags(loc_item.flags() & ~Qt.ItemIsEditable)
+        self.table.setItem(row, self.COL_LOCATION, loc_item)
+
         # Effective (base + file) preview, read-only.
         eff_item = QTableWidgetItem('')
         eff_item.setFlags(eff_item.flags() & ~Qt.ItemIsEditable)
@@ -611,6 +619,7 @@ class MWFilesMixin:
         self.table.setItem(row, self.COL_STATUS, status_item)
 
         self._refresh_effective(row)
+        self._location_refresh_row(row)
 
         if seen is not None:
             seen.add(norm)

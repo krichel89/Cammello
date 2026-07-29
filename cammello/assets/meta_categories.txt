@@ -1,0 +1,48 @@
+# Meta categories (Cammello 0.15.1)
+#
+# A file should carry at least one CONTENT category - one that says what is
+# in the picture. Categories that only say who took it, which project it
+# belongs to or which tool uploaded it are META and do not count towards
+# that. The red dot on the Categories field goes by this list.
+#
+# Format: one pattern per line. Lines starting with # and empty lines are
+# ignored. Matching is case-insensitive and ignores a leading "Category:".
+#
+#   Exact       Photographs by Harald Krichel
+#   Prefix      Photographs by *          (everything starting that way)
+#   Suffix      * by Harald Krichel
+#   Contains    *WikiPortraits*
+#
+# This file is yours to edit - add whatever you consider meta. Cammello
+# reads it at startup; there is no need to touch the source.
+
+# Who took it.
+Photographs by *
+Photos by *
+Files by *
+Self-published work by *
+
+# Which project it belongs to.
+WikiPortraits*
+*WikiPortraits*
+Media supported by Wikimedia Deutschland*
+Supported by Wikimedia*
+
+# What uploaded it, and the usual maintenance buckets.
+Uploaded with *
+Files uploaded by *
+Media needing categories*
+Uncategorized*
+Media needing category review*
+Files with no machine-readable *
+Images with extracted images
+Photographs taken on *
+Taken with *
+Scanned with *
+
+# Licence and rights housekeeping.
+CC-BY-*
+CC-BY-SA-*
+CC-Zero
+Self-published work
+Files with restrictions*

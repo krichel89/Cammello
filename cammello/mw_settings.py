@@ -18,6 +18,7 @@ from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
 from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
+from . import workflows
 from . import native_exec
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
@@ -59,6 +60,27 @@ class MWSettingsMixin:
 
 
     def _restore_settings(self):
+        # 0.15.0: the selected workflow survives a restart. Signals are
+        # blocked so restoring does not count as a switch (which would
+        # re-apply presets over restored field values).
+        wf_cb = getattr(self, 'workflow_combo', None)
+        if wf_cb is not None:
+            saved_wf = workflows.by_key(
+                self.settings.value('workflow', workflows.DEFAULT_KEY))['key']
+            idx = wf_cb.findData(saved_wf)
+            if idx >= 0:
+                wf_cb.blockSignals(True)
+                wf_cb.setCurrentIndex(idx)
+                wf_cb.blockSignals(False)
+        # Visibility follows the restored workflow (0.15.0). Signals were
+        # blocked above, so this has to run explicitly.
+        if hasattr(self, '_apply_workflow_visibility'):
+            self._apply_workflow_visibility()
+        # 0.15.0: the required-field dots reflect the RESTORED values, so
+        # they must run after the restore, not only on textChanged.
+        if hasattr(self, '_refresh_required_marks'):
+            self._refresh_required_marks()
+
         self.author_edit.setText(self.settings.value('author', ''))
         self.source_edit.setText(self.settings.value('source', '{{own}}'))
         self.permission_edit.setText(self.settings.value('permission', ''))

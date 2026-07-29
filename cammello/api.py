@@ -394,6 +394,89 @@ class MediaWikiApi:
                     'rank': 'normal'
                 })
                 continue
+            # 0.15.0: ('quantity', amount, unit_qid_or_None) for the EXIF
+            # capture settings (exposure time, f-number, ISO, focal
+            # length). Wikibase wants the amount as a SIGNED STRING and the
+            # unit as an entity URI - or the literal string '1' for a
+            # dimensionless number, NOT None.
+            # 0.15.0: ('time', 'YYYY-MM-DD') for inception (P571). Day
+            # precision (11) on purpose - that is what the community sets,
+            # and the camera clock's minutes add nothing but noise.
+            if isinstance(value, (tuple, list)) and value \
+                    and value[0] == 'time':
+                _tag, iso_date = value
+                claims_data.append({
+                    'mainsnak': {
+                        'snaktype': 'value',
+                        'property': prop,
+                        'datavalue': {
+                            'type': 'time',
+                            'value': {
+                                'time': f'+{iso_date}T00:00:00Z',
+                                'timezone': 0, 'before': 0, 'after': 0,
+                                'precision': 11,
+                                'calendarmodel':
+                                    'http://www.wikidata.org/entity/Q1985727',
+                            }
+                        }
+                    },
+                    'type': 'statement',
+                    'rank': 'normal'
+                })
+                continue
+            # 0.15.2: ('monolingual', text, lang) for alt text (P11265).
+            # Wikibase wants text and language in one value object.
+            if isinstance(value, (tuple, list)) and value \
+                    and value[0] == 'monolingual':
+                _tag, text, lang = value
+                claims_data.append({
+                    'mainsnak': {
+                        'snaktype': 'value',
+                        'property': prop,
+                        'datavalue': {
+                            'type': 'monolingualtext',
+                            'value': {'text': str(text),
+                                      'language': str(lang)},
+                        }
+                    },
+                    'type': 'statement',
+                    'rank': 'normal'
+                })
+                continue
+            # 0.15.0: ('string', text) for plain-string properties such as
+            # the media type (P1163).
+            if isinstance(value, (tuple, list)) and value \
+                    and value[0] == 'string':
+                claims_data.append({
+                    'mainsnak': {
+                        'snaktype': 'value',
+                        'property': prop,
+                        'datavalue': {'type': 'string',
+                                      'value': str(value[1])},
+                    },
+                    'type': 'statement',
+                    'rank': 'normal'
+                })
+                continue
+            if isinstance(value, (tuple, list)) and value \
+                    and value[0] == 'quantity':
+                _tag, amount, unit_qid = value
+                unit = ('http://www.wikidata.org/entity/' + unit_qid
+                        if unit_qid else '1')
+                amt = ('%+.10g' % float(amount))
+                claims_data.append({
+                    'mainsnak': {
+                        'snaktype': 'value',
+                        'property': prop,
+                        'datavalue': {
+                            'type': 'quantity',
+                            'value': {'amount': amt, 'unit': unit},
+                        }
+                    },
+                    'type': 'statement',
+                    'rank': 'normal'
+                })
+                continue
             qid = (value or '').strip()
             m = re.match(r'^Q(\d+)$', qid, flags=re.IGNORECASE)
             if not m:
