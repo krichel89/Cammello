@@ -54,69 +54,238 @@ class FilenameDelegate(QStyledItemDelegate):
 
 
 class BulkRenameDialog(QDialog):
-    """Lightroom-style bulk rename for the target Commons filenames.
+    """Bulk rename for the target Commons filenames, in the shape macOS
+    Photos and Lightroom use (0.16.0, Harald): you PICK A SCHEME instead of
+    writing a template with placeholders.
 
-    The template names all selected files; {n} is replaced by a running
-    number (start value below, zero-padded to the width of the largest
-    number). A template without {n} gets ' {n}' appended automatically -
-    identical target names would collide on Commons anyway. Extensions are
-    NOT part of the template; the caller re-appends each row's own.
+    The schemes are a table (SCHEMES) - a new one is an entry, not a
+    rewrite. Each says which inputs it needs, so the custom text and the
+    start number enable themselves only where they mean something; the rest
+    stay greyed out the way Photos greys "Anfangsnummer".
 
-    Last-used template and start number persist in QSettings 'BulkRename'.
+    How many trailing digits of the original file name are used is NOT a
+    setting any more (0.16.0, Harald: "die Stellenzahl automatisch, im
+    Bereich 3-6"). It is derived from the selection - see auto_digits.
+
+    The free template survives as the last entry for anyone who wants
+    {name}, {c}, {n}, {date} in an order no scheme offers.
+
+    Extensions are NOT part of a name; the caller re-appends each row's own.
+    The example line shows them anyway, because that is what the user will
+    see in the table afterwards.
     """
 
-    def __init__(self, count, parent=None):
+    # key -> (label, builder, needs_text, needs_start)
+    # builder(ctx) -> str, with ctx carrying everything a scheme may use.
+    SCHEMES = [
+        ('text_orig', 'Custom name - original file number',
+         lambda c: f"{c['text']}-{c['cam'] or c['seq']}", True, False),
+        ('text_seq', 'Custom name - sequence',
+         lambda c: f"{c['text']}-{c['seq']}", True, True),
+        ('text_xofy', 'Custom name (x of y)',
+         lambda c: f"{c['text']} ({c['index']} of {c['total']})",
+         True, False),
+        ('orig', 'Original file name',
+         lambda c: c['name'] or c['seq'], False, False),
+        ('orig_seq', 'Original file name - sequence',
+         lambda c: f"{c['name']}-{c['seq']}" if c['name'] else c['seq'],
+         False, True),
+        ('date_orig', 'Date - original file name',
+         lambda c: '-'.join(p for p in (c['date'], c['name'] or c['seq'])
+                            if p), False, False),
+        ('date_text_seq', 'Date - custom name - sequence',
+         lambda c: '-'.join(p for p in (c['date'], c['text'], c['seq'])
+                            if p), True, True),
+        ('template', 'Custom template\u2026', None, False, True),
+    ]
+
+    # Apple's own range for a camera counter: fewer than 3 digits is not a
+    # counter any more, more than 6 no camera writes. Harald: Lumix counts
+    # with 6, Canon always with 4.
+    DIGITS_MIN = 3
+    DIGITS_MAX = 6
+
+    def __init__(self, count, parent=None, sources=None, exts=None,
+                 dates=None):
         super().__init__(parent)
         self.setWindowTitle(tr('Rename {count} files').format(count=count))
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(520)
         self._count = count
+        # Per-row source data, same order as the names this returns.
+        self._sources = list(sources or [])
+        self._exts = list(exts or [])
+        self._dates = list(dates or [])
+        # Derived once from the selection, not asked for (0.16.0).
+        self._digits = self.auto_digits(self._sources)
         self.settings = QSettings(APP_NAME, 'BulkRename')
 
         form = QFormLayout(self)
-        self.template_edit = QLineEdit(
-            self.settings.value('template', '') or '')
-        self.template_edit.setPlaceholderText(
-            tr('e.g.') + ' Berlinale 2026 Press Conference {n}')
-        form.addRow(tr('Name template:'), self.template_edit)
+
+        self.scheme_combo = QComboBox()
+        for key, label, _b, _t, _s in self.SCHEMES:
+            self.scheme_combo.addItem(tr(label), key)
+        want = self.settings.value('scheme', 'text_seq')
+        idx = self.scheme_combo.findData(want)
+        self.scheme_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        form.addRow(tr('File naming:'), self.scheme_combo)
+
+        self.text_edit = QLineEdit(self.settings.value('text', '') or '')
+        self.text_edit.setPlaceholderText(
+            tr('e.g.') + ' Berlinale 2026 Press Conference')
+        form.addRow(tr('Custom text:'), self.text_edit)
 
         self.start_spin = QSpinBox()
         self.start_spin.setRange(0, 999999)
         self.start_spin.setValue(int(self.settings.value('start', 1)))
         form.addRow(tr('Start number:'), self.start_spin)
 
+        self.template_edit = QLineEdit(self.settings.value('template', '')
+                                       or '')
+        self.template_edit.setPlaceholderText('{date} {text} {c}')
+        self.template_edit.setToolTip(tr(
+            'Free template. {n} running number, {c} original file number, '
+            '{name}\noriginal file name, {text} the custom text above, '
+            '{date} the capture date.'))
+        self.template_row_label = QLabel(tr('Template:'))
+        form.addRow(self.template_row_label, self.template_edit)
+
         self.preview_lbl = QLabel()
         self.preview_lbl.setWordWrap(True)
         self.preview_lbl.setStyleSheet('color: gray;')
-        form.addRow(tr('Preview:'), self.preview_lbl)
+        form.addRow(tr('Example:'), self.preview_lbl)
 
-        self.template_edit.textChanged.connect(self._update_preview)
+        self.scheme_combo.currentIndexChanged.connect(self._update_enabled)
+        for w in (self.text_edit, self.template_edit):
+            w.textChanged.connect(self._update_preview)
         self.start_spin.valueChanged.connect(self._update_preview)
-        self._update_preview()
+        self._update_enabled()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok |
+                                   QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
 
-    def names(self):
-        """The final base names (without extension), one per selected row."""
-        template = self.template_edit.text().strip()
-        if '{n}' not in template:
-            template += ' {n}'
+    # ── scheme plumbing ──────────────────────────────────────────────────
+    def _scheme(self):
+        key = self.scheme_combo.currentData()
+        for entry in self.SCHEMES:
+            if entry[0] == key:
+                return entry
+        return self.SCHEMES[0]
+
+    def _update_enabled(self):
+        """Grey out what the chosen scheme does not use - the same courtesy
+        Photos does with its start number."""
+        key, _label, _b, needs_text, needs_start = self._scheme()
+        is_template = key == 'template'
+        self.text_edit.setEnabled(needs_text or is_template)
+        self.start_spin.setEnabled(needs_start)
+        self.template_edit.setVisible(is_template)
+        self.template_row_label.setVisible(is_template)
+        self._update_preview()
+
+    @classmethod
+    def auto_digits(cls, sources):
+        """How many trailing digits to take from the original file names.
+
+        The LARGEST COMMON RUN: every file has to be able to supply the
+        digits, so the length of the shortest trailing digit run in the
+        selection decides, clamped to DIGITS_MIN..DIGITS_MAX. Names with no
+        trailing digits at all are left out of the vote - they can supply
+        nothing and fall back to the running number anyway; letting them
+        count would drag a set of six-digit Lumix names down to three.
+
+        Returns 0 ("take the whole number") when nothing in the selection
+        ends in a digit.
+        """
+        runs = [len(cls.camera_number(s)) for s in (sources or [])]
+        runs = [r for r in runs if r]
+        if not runs:
+            return 0
+        return max(cls.DIGITS_MIN, min(cls.DIGITS_MAX, min(runs)))
+
+    @staticmethod
+    def camera_number(source, digits=0):
+        """The trailing digits of a source file name, or '' if it has none.
+
+        IMG_4711 -> 4711; DSC00123 -> 00123. With `digits` > 0 only the
+        last that many are kept. Cameras put the counter at the END of the
+        name, so this is the piece worth keeping - it is what lets someone
+        find the raw file again from the Commons name.
+        """
+        base = str(source or '')
+        tail = ''
+        for ch in reversed(base):
+            if not ch.isdigit():
+                break
+            tail = ch + tail
+        if digits > 0:
+            tail = tail[-digits:]
+        return tail
+
+    def _context(self, i):
         start = self.start_spin.value()
         width = len(str(start + self._count - 1))
-        return [template.replace('{n}', str(start + i).zfill(width))
-                for i in range(self._count)]
+        name = self._sources[i] if i < len(self._sources) else ''
+        date = self._dates[i] if i < len(self._dates) else ''
+        return {
+            'seq': str(start + i).zfill(width),
+            'index': str(i + 1),
+            'total': str(self._count),
+            'name': name,
+            'cam': self.camera_number(name, self._digits),
+            'date': (date or '')[:10],
+            'text': self.text_edit.text().strip(),
+        }
+
+    def names(self):
+        """The final base names (without extension), one per selected row."""
+        key, _label, builder, _t, _s = self._scheme()
+        out = []
+        for i in range(self._count):
+            ctx = self._context(i)
+            if key == 'template':
+                tpl = self.template_edit.text().strip() or '{text} {n}'
+                name = (tpl.replace('{n}', ctx['seq'])
+                        .replace('{c}', ctx['cam'] or ctx['seq'])
+                        .replace('{name}', ctx['name'])
+                        .replace('{date}', ctx['date'])
+                        .replace('{text}', ctx['text']))
+            else:
+                name = builder(ctx)
+            out.append(' '.join(name.split()).strip(' -') or ctx['seq'])
+        # Identical target names collide on Commons, so a scheme that did
+        # not separate them gets the running number appended - to ALL of
+        # them, otherwise the numbering would look arbitrary.
+        if len(set(out)) != len(out):
+            out = [f'{n} {self._context(i)["seq"]}'
+                   for i, n in enumerate(out)]
+        return out
 
     def _update_preview(self):
         names = self.names()
-        tail = '' if self._count == 1 else f'  …  {names[-1]}'
-        self.preview_lbl.setText(names[0] + tail)
+        if not names:
+            self.preview_lbl.setText('')
+            return
+        first = names[0] + (self._exts[0] if self._exts else '')
+        if self._count > 1:
+            last = names[-1] + (self._exts[-1] if len(self._exts) ==
+                                self._count else '')
+            self.preview_lbl.setText(f'{first}  \u2026  {last}')
+        else:
+            self.preview_lbl.setText(first)
 
     def _on_accept(self):
-        if not self.template_edit.text().strip():
+        key, _label, _b, needs_text, _s = self._scheme()
+        if needs_text and not self.text_edit.text().strip():
+            self.text_edit.setFocus()
+            return
+        if key == 'template' and not self.template_edit.text().strip():
             self.template_edit.setFocus()
             return
+        self.settings.setValue('scheme', key)
+        self.settings.setValue('text', self.text_edit.text().strip())
         self.settings.setValue('template', self.template_edit.text().strip())
         self.settings.setValue('start', self.start_spin.value())
         self.accept()

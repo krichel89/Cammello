@@ -68,7 +68,32 @@ class CaptionsEditor(QWidget):
 
         self.add_row()  # start with one empty row
 
-    def add_row(self, lang='en', value='', info='', alt=''):
+    def used_languages(self):
+        """The language codes that already have a row here."""
+        return [e['combo'].currentData() for e in self._rows]
+
+    def next_language(self):
+        """The first offered language without a row yet (0.16.0, Harald).
+
+        add_row() used to hand out 'en' every time, so a second click on
+        "Add language" produced a second English row. Order comes from
+        caption_language_choices(), i.e. the four base languages followed by
+        the codes the user has saved. When every offered language is taken
+        we fall back to the first one rather than refusing to add a row -
+        duplicates are the user's business, a dead button is not.
+        """
+        choices = [c for c, _name in caption_language_choices()]
+        if not choices:
+            return 'en'
+        used = set(self.used_languages())
+        for code in choices:
+            if code not in used:
+                return code
+        return choices[0]
+
+    def add_row(self, lang=None, value='', info='', alt=''):
+        if lang is None:
+            lang = self.next_language()
         row_widget = QWidget()
         v = QVBoxLayout(row_widget)
         v.setContentsMargins(0, 0, 0, 0)

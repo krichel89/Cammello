@@ -189,7 +189,10 @@ jobs:
           canvas.save("cammello/assets/icon_rounded.png")
           PY
           mkdir -p icon.iconset
-          for size in 16 32 64 128 256 512; do
+          # 64 is NOT a valid Apple iconset size (it exists only as
+          # 32x32@2x); listing it can make iconutil reject the whole
+          # set. 0.16.0.
+          for size in 16 32 128 256 512; do
             sips -z $size $size icon_padded.png \
               --out icon.iconset/icon_${size}x${size}.png
             double=$((size * 2))

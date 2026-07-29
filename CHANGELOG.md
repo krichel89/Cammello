@@ -4,6 +4,35 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-07-29
+
+### Added
+- The update check leads to the download page: a button opens the release
+  instead of printing an address to retype.
+- Bulk rename works by picking a naming scheme, the way Photos and
+  Lightroom do, with a live example and only the inputs that scheme needs.
+  One of the schemes keeps the camera's own number - the digits the source
+  file name ends with.
+- "Open directory..." in the MediaWiki toolbar loads a whole directory into
+  the table without going through the culling module: top level only,
+  uploadable extensions only, with a progress dialog that can be cancelled
+  and a question before more than a thousand files.
+
+### Changed
+- Test and working versions are told apart by the MINOR number, the digit
+  behind the first dot: odd is a test version, even a working one. So
+  0.15.x was a test line and 0.16.x is a working one.
+- How many of the camera's trailing digits a rename keeps is no longer a
+  setting: it is derived from the selection as the largest run every
+  selected file can supply, clamped to 3-6 digits. The spin box is gone.
+- "Add language" preselects the first language that has no row yet instead
+  of handing out English every time.
+
+### Fixed
+- The dock icon on macOS was square while the app ran. The bundle icon has
+  been correctly rounded since 0.14.2, but the running app replaced it
+  with the un-rounded source.
+
 ## [0.15.2] - 2026-07-29
 
 ### Added
@@ -23,7 +52,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   were rejected and, worse, silently dropped when a description was read
   back. Reported by a user uploading Malay captions in Jawi script.
 - The red dot on depicts stays away when the override below says there is
-  nothing to link.
+  nothing to link, and it now appears reliably: the marks are refreshed
+  where the editor is loaded, not only when a field's text changes.
+- Committing the editor after the file list had been replaced raised a
+  RuntimeError and aborted the program.
+
+### Removed
+- The HTTP timeout field. The value still applies and a stored one is
+  still honoured; only the input is gone.
 
 ## [0.15.1] - 2026-07-28
 

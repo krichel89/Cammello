@@ -306,6 +306,16 @@ class MainWindow(FlickrMixin,
         self.login_label.linkActivated.connect(lambda _url: self.do_login())
         self._set_login_state('out')
 
+        # 0.16.0 (Harald): the way into a batch that needs no picking -
+        # load a folder straight into this table and skip the culling
+        # module. Sits between the login name and the workflow dropdown.
+        self.open_folder_btn = QPushButton(tr('Open directory\u2026'))
+        self.open_folder_btn.setToolTip(tr(
+            'Load every uploadable file of one directory into the '
+            'table,\nwithout going through the culling module. Only the '
+            'directory\nitself, not its subdirectories.'))
+        self.open_folder_btn.clicked.connect(self.open_directory)
+
         self.ignore_warnings_cb = QCheckBox(tr('Ignore warnings (overwrite)'))
 
         # Label is kept in sync with the selection by _update_upload_btn:
@@ -319,6 +329,7 @@ class MainWindow(FlickrMixin,
 
         toolbar.addWidget(self.login_label)
         toolbar.addStretch()
+        toolbar.addWidget(self.open_folder_btn)
         toolbar.addWidget(self._workflow_label)
         toolbar.addWidget(self.workflow_combo)
         toolbar.addWidget(self.ignore_warnings_cb)
@@ -471,8 +482,6 @@ class MainWindow(FlickrMixin,
             tr('e.g.') + ' {{Credit line|Author=Harald Krichel|Other=WikiPortraits}}')
         self.gallery_prefix_edit = QLineEdit()
         self.gallery_prefix_edit.setPlaceholderText(tr('e.g.') + ' User:Seewolf')
-        self.timeout_edit = QLineEdit('120')
-        self.timeout_edit.setMaximumWidth(80)
 
         self.creator_edit.setToolTip(tr(
             'P170 "creator": the photographer as a Wikidata item, IF there '
@@ -541,7 +550,6 @@ class MainWindow(FlickrMixin,
         settings_form.addRow(tr('License (P275):'), self.license_sdc_edit)
         settings_form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_edit)
         settings_form.addRow(tr('Other fields:'), self.other_fields_edit)
-        settings_form.addRow(tr('HTTP timeout (s):'), self.timeout_edit)
         apply_form_ratio(settings_form)
         # 0.10.0 regression fix: this group was detached from the tab for the
         # "everything in the Settings tab" move but never added THERE either,
@@ -664,6 +672,11 @@ class MainWindow(FlickrMixin,
                 self._refresh_file_marks)
         self.file_struct.captions_editor.changed.connect(
             self._refresh_file_marks)
+        # The override decides whether an empty depicts is worth a dot, so
+        # changing it has to refresh them too.
+        if self.file_struct.override_combo is not None:
+            self.file_struct.override_combo.currentIndexChanged.connect(
+                self._refresh_file_marks)
         self.table.itemSelectionChanged.connect(self._refresh_file_marks)
         # 0.15.2: the automatic update check, deferred so it never delays
         # the window appearing.
@@ -789,14 +802,27 @@ class MainWindow(FlickrMixin,
             return
         version, tag, url = hit
         label = updates.format_version(version)
-        kind = (tr('stable') if updates.is_stable(version)
-                else tr('experimental'))
+        kind = (tr('working version') if updates.is_stable(version)
+                else tr('test version'))
         self.logger.info('Update available: %s (%s).', label, kind)
-        QMessageBox.information(
-            self, tr('Check for updates'),
-            tr('Version {new} ({kind}) is available - you are running '
-               '{old}.\n\n{url}').format(new=label, kind=kind,
-                                          old=__version__, url=url))
+        # 0.16.0 (Harald): don't just PRINT the address - offer the way
+        # there. A URL in a message box is something the user has to
+        # retype; a button is one click.
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(tr('Check for updates'))
+        box.setText(tr('Version {new} ({kind}) is available - you are '
+                       'running {old}.').format(new=label, kind=kind,
+                                                old=__version__))
+        open_btn = box.addButton(tr('Open download page'),
+                                 QMessageBox.AcceptRole)
+        box.addButton(tr('Later'), QMessageBox.RejectRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            target = url or updates.RELEASES_PAGE
+            QDesktopServices.openUrl(QUrl(target))
+            self.logger.info('Opened the download page: %s', target)
 
     def _maybe_check_updates_on_start(self):
         """Once a day at most, and only if the user leaves it switched on."""
@@ -1334,11 +1360,12 @@ class MainWindow(FlickrMixin,
             lambda on: (self.settings.setValue('update_check', bool(on)),
                         self.settings.sync()))
         self.update_stable_cb = QCheckBox(
-            tr('Only tell me about stable versions'))
+            tr('Only tell me about working versions'))
         self.update_stable_cb.setToolTip(tr(
-            'Releases with an EVEN final digit are stable, odd ones are '
-            'experimental.\nWhile you are running an experimental version '
-            'you are told about\nexperimental ones regardless.'))
+            'Releases with an ODD minor number (the digit behind the first '
+            'dot) are\ntest versions, even ones are working versions. '
+            'While you are running a\ntest version you are told about test '
+            'versions regardless.'))
         self.update_stable_cb.setChecked(
             self.settings.value('update_stable_only', True, type=bool))
         self.update_stable_cb.toggled.connect(
@@ -1647,7 +1674,6 @@ class MainWindow(FlickrMixin,
         _style_wd_field(self.copyright_sdc_mirror)
         self.other_fields_mirror = mirror_line_edit(self.other_fields_edit)
         self.gallery_prefix_mirror = mirror_line_edit(self.gallery_prefix_edit)
-        self.timeout_mirror = mirror_line_edit(self.timeout_edit)
 
         form.addRow(tr('Author:'), self.author_mirror)
         form.addRow(tr('Creator (P170):'), self.creator_mirror)
@@ -1657,7 +1683,6 @@ class MainWindow(FlickrMixin,
         form.addRow(tr('License (P275):'), self.license_sdc_mirror)
         form.addRow(tr('Copyright (P6216):'), self.copyright_sdc_mirror)
         form.addRow(tr('Other fields:'), self.other_fields_mirror)
-        form.addRow(tr('HTTP timeout (s):'), self.timeout_mirror)
         form.addRow('', self.exif_coords_cb)
         form.addRow('', self.exif_capture_cb)
         form.addRow('', self.update_check_cb)
@@ -1896,8 +1921,8 @@ class MainWindow(FlickrMixin,
         for e in short:
             if e is not None:
                 e.setMaximumWidth(180)          # QIDs: Q18199165 fits easily
-        for name, wpx in (('ftp_port_edit', 90), ('timeout_edit', 70),
-                          ('ftp_port_mirror', 90), ('timeout_mirror', 70),
+        for name, wpx in (('ftp_port_edit', 90),
+                          ('ftp_port_mirror', 90),
                           # Combos: room for the widest entry + indicator.
                           ('scheme_combo', 130),
                           ('language_combo', 140),
@@ -2137,7 +2162,16 @@ def main():
     # every size hint is computed with the final font.
     apply_ui_font(app)
     # Window/Dock icon, if an icon file is bundled (see assets/README.md).
-    _icon_file = asset_path('icon.png')
+    # 0.16.0 (Harald: "der Icon auf dem Mac ist immer noch nicht
+    # abgerundet"): the ROUNDED one first. The bundle's .icns has been
+    # correctly squircled since 0.14.2, so Finder showed the right shape -
+    # but setWindowIcon REPLACES the dock icon as soon as the app runs, and
+    # this line still handed it the full-bleed square source. The two other
+    # places that show the icon (splash, About) already preferred
+    # icon_rounded.png; this one was missed.
+    _icon_file = asset_path('icon_rounded.png')
+    if not os.path.exists(_icon_file):
+        _icon_file = asset_path('icon.png')
     if os.path.exists(_icon_file):
         app.setWindowIcon(QIcon(_icon_file))
 

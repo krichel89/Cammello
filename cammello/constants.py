@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.15.2'
+__version__ = '0.16.0'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -206,6 +206,12 @@ WIKITEXT_MAX_LINES = 12
 
 # Accepted image extensions (used by the file dialog and by drag-and-drop).
 IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.svg', '.webp')
+
+# Above this many files in one folder, "Open folder" asks first (0.16.0,
+# Harald's number). Nothing breaks beyond it - but a thumbnail costs about
+# 0.21 MB of memory at THUMB_SRC_W x THUMB_SRC_H RGBA, so a thousand files
+# are roughly 210 MB plus the decoding time, and that is worth a question.
+FOLDER_WARN_COUNT = 1000
 
 # Highlighted style for the main section headings (Upload settings, Base
 # description, Selected file): a bold, colored title badge on the group box.

@@ -87,3 +87,19 @@ Galerieseite im Hauptnamensraum wird.
   ausdrücklich sagt, dass es nichts zu verknüpfen gibt („No Wikidata
   item", „Not applicable", „Unidentified"). Wer ein Feld gerade für
   unzutreffend erklärt hat, soll dafür nicht gemahnt werden.
+
+## Nachtrag aus der Durchsicht
+
+* Der rote Punkt bei **depicts** blieb manchmal aus. Die Ursache war der
+  Zeitpunkt, nicht die Bedingung: Die Markierungen hingen nur an
+  Textänderungen, und eine Datei mit leerem depicts in einen Editor zu
+  laden, dessen depicts schon leer war, ändert keinen Text und löst kein
+  Signal aus — die Marken der vorherigen Datei blieben stehen. Sie werden
+  jetzt dort neu berechnet, wo der Editor geladen wird.
+* **Absturz behoben:** Wurde die Dateiliste ersetzt, während eine Datei im
+  Editor lag, brach das Programm beim nächsten Übernehmen mit einem
+  RuntimeError ab. Das Editorfeld ist an ein Tabellenelement gebunden, das
+  beim Neuladen zerstört wird; das wird jetzt abgefangen.
+* Das Feld **HTTP-Timeout** ist aus den Einstellungen verschwunden. Der
+  Wert gilt weiter, ein gespeicherter wird weiter beachtet — nur die
+  Eingabe ist weg.

@@ -88,7 +88,6 @@ class MWSettingsMixin:
         self.other_templates_edit.setText(self.settings.value('other_templates', ''))
         self.other_fields_edit.setText(self.settings.value('other_fields', ''))
         self.gallery_prefix_edit.setText(self.settings.value('gallery_prefix', ''))
-        self.timeout_edit.setText(self.settings.value('timeout', '120'))
 
         # SDC fields moved out of base_description into upload settings in 0.7.3.
         # If they were never saved but the old base_description carries them,
@@ -136,7 +135,6 @@ class MWSettingsMixin:
         self.settings.setValue('other_templates', self.other_templates_edit.text())
         self.settings.setValue('other_fields', self.other_fields_edit.text())
         self.settings.setValue('gallery_prefix', self.gallery_prefix_edit.text())
-        self.settings.setValue('timeout', self.timeout_edit.text())
         self.settings.setValue('base_description', self.base_text_edit.toPlainText())
         self.settings.setValue('expert_mode', self.expert_cb.isChecked())
         if hasattr(self, 'iptc_export_dir_edit'):
@@ -180,7 +178,7 @@ class MWSettingsMixin:
     # Single-line keys written as "key = value".
     _FILE_KEYS = ('author', 'creator_sdc', 'source', 'permission', 'license',
                   'license_sdc', 'copyright_sdc', 'other_templates',
-                  'other_fields', 'gallery_prefix', 'timeout', 'expert_mode')
+                  'other_fields', 'gallery_prefix', 'expert_mode')
 
     def _save_settings_to_file(self):
         default = os.path.join(os.path.expanduser('~'), 'cammello_settings.txt')
@@ -203,7 +201,6 @@ class MWSettingsMixin:
             'other_templates': self.other_templates_edit.text(),
             'other_fields': self.other_fields_edit.text(),
             'gallery_prefix': self.gallery_prefix_edit.text(),
-            'timeout': self.timeout_edit.text(),
             'expert_mode': 'true' if self.expert_cb.isChecked() else 'false',
         }
         lines = ['# Cammello settings file', f'# version: {__version__}', '']
@@ -305,7 +302,6 @@ class MWSettingsMixin:
             'other_templates': self.other_templates_edit.setText,
             'other_fields': self.other_fields_edit.setText,
             'gallery_prefix': self.gallery_prefix_edit.setText,
-            'timeout': self.timeout_edit.setText,
         }
         for key, setter in setters.items():
             if key in singles:
@@ -346,11 +342,20 @@ class MWSettingsMixin:
         native_exec.shutdown()
         super().closeEvent(event)
 
+    # 0.15.2 (Harald): the timeout field is gone from the settings page.
+    # The VALUE still matters - it is what keeps a large upload over a slow
+    # line from being cut off - but the field was never turned by anyone,
+    # and the only realistic interaction with it was the harmful one
+    # (entering 5 and wondering why nothing uploads). The stored value is
+    # still honoured, so anyone who did set one keeps it, and it can be
+    # changed in the settings file.
+    DEFAULT_TIMEOUT = 120
+
     def _get_timeout(self):
         try:
-            t = int(self.timeout_edit.text())
-            return t if t > 0 else 120
+            t = int(self.settings.value('timeout', self.DEFAULT_TIMEOUT))
+            return t if t > 0 else self.DEFAULT_TIMEOUT
         except (ValueError, TypeError):
-            return 120
+            return self.DEFAULT_TIMEOUT
 
     # ── Login / test ─────────────────────────────────────────────────────────

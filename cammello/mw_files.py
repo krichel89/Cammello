@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QGroupBox, QFormLayout, QHeaderView, QAbstractItemView, QDialog,
     QDialogButtonBox, QCheckBox, QStatusBar, QTabWidget, QPlainTextEdit,
     QStyledItemDelegate, QComboBox, QScrollArea, QCompleter,
-    QListWidgetItem, QMenu)
+    QListWidgetItem, QMenu, QProgressDialog)
 from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QSettings, QObject, QUrl,
                           QSize, QRegExp, QTimer, QStringListModel, QEvent,
                           QItemSelectionModel)
@@ -217,6 +217,96 @@ class MWFilesMixin:
             self.logger.debug('%d file(s) added to the table.', added)
         self._report_add_result(added, dups, failed)
 
+    @staticmethod
+    def folder_image_files(folder):
+        """The uploadable files directly inside `folder`, sorted by name.
+
+        NOT recursive (0.16.0, Harald): only the top level, the way a card
+        or a day's folder is organised. And only the extensions the upload
+        path itself accepts - IMAGE_EXTS, the very list add_files filters
+        its dialog with, so there is no second list to keep in step. RAW
+        files are deliberately not among them: Cammello has no raw
+        converter, so they could not be uploaded anyway - which also means
+        a folder holding RAW+JPEG pairs yields one row per picture instead
+        of two.
+        """
+        try:
+            entries = sorted(os.listdir(folder))
+        except OSError:
+            return []
+        out = []
+        for name in entries:
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
+                out.append(path)
+        return out
+
+    def open_directory(self):
+        """Load a whole folder into the table, skipping the culling module.
+
+        The short way in for a batch that needs no picking: choose a
+        folder, every uploadable file in it becomes a row.
+        """
+        folder = QFileDialog.getExistingDirectory(
+            self, tr('Select directory'), remembered_dir(self.settings))
+        if not folder:
+            return
+        remember_dir(self.settings, folder)
+        paths = self.folder_image_files(folder)
+        if not paths:
+            QMessageBox.information(
+                self, tr('Open directory'),
+                tr('No uploadable files in this directory.'))
+            return
+        if len(paths) > FOLDER_WARN_COUNT:
+            answer = QMessageBox.question(
+                self, tr('Open directory'),
+                tr('This directory holds {n} files. Loading them all takes a '
+                   'while and a lot of memory. Continue?').format(
+                       n=len(paths)),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+        self.logger.info('Opening folder %r with %d file(s).',
+                         folder, len(paths))
+        self._add_paths_with_progress(paths)
+
+    def _add_paths_with_progress(self, paths):
+        """_add_paths with a progress dialog that can be cancelled.
+
+        The dialog is shown, never exec()d - an exec would block the very
+        loop it reports on. Cancelling keeps the rows added so far; that is
+        friendlier than throwing away work the user has already waited for.
+        """
+        total = len(paths)
+        dlg = QProgressDialog(
+            tr('Reading files\u2026'), tr('Cancel'), 0, total, self)
+        dlg.setWindowTitle(tr('Open directory'))
+        dlg.setWindowModality(Qt.WindowModal)
+        # Half a second of grace: a small folder is loaded before the
+        # dialog would even have finished appearing.
+        dlg.setMinimumDuration(500)
+        dlg.setValue(0)
+
+        def step(done, count):
+            dlg.setLabelText(tr('Reading file {i} of {n}\u2026').format(
+                i=done + 1, n=count))
+            dlg.setValue(done)
+            QApplication.processEvents()
+            return not dlg.wasCanceled()
+
+        try:
+            added, dups, failed, cancelled = self._add_paths(
+                paths, progress=step)
+        finally:
+            dlg.close()
+        if cancelled:
+            self.logger.info('Folder import cancelled after %d file(s).',
+                             added)
+        self._report_add_result(added, dups, failed, cancelled)
+
     def _add_dropped_files(self, paths):
         """Add image files dropped onto the table.
 
@@ -275,12 +365,17 @@ class MWFilesMixin:
         list_widget.blockSignals(False)
         return restored
 
-    def _add_paths(self, paths):
+    def _add_paths(self, paths, progress=None):
         """Add the given files to the table, skipping duplicates.
 
-        Returns (added, duplicates, failed). Sorting is disabled for the
-        duration of the batch so setSortingEnabled does not reshuffle rows
-        while they are only partially populated.
+        Returns (added, duplicates, failed) - or, when a `progress`
+        callback is given, (added, duplicates, failed, cancelled). The
+        callback is called as progress(done, total) before each file and
+        returns False to stop; the rows added so far stay.
+
+        Sorting is disabled for the duration of the batch so
+        setSortingEnabled does not reshuffle rows while they are only
+        partially populated.
         """
         was_sorting = self.table.isSortingEnabled()
         self.table.setSortingEnabled(False)
@@ -292,8 +387,13 @@ class MWFilesMixin:
         header.setSectionResizeMode(QHeaderView.Fixed)
         seen = self._current_filepaths()
         added = duplicates = failed = 0
+        cancelled = False
+        total = len(paths)
         try:
-            for filepath in paths:
+            for done, filepath in enumerate(paths):
+                if progress is not None and not progress(done, total):
+                    cancelled = True
+                    break
                 try:
                     if self._add_row(filepath, seen):
                         added += 1
@@ -310,10 +410,15 @@ class MWFilesMixin:
         # Freshly added files may already carry a persisted channel mark.
         self._apply_channel_marks_to_table()
         self._update_upload_btn()   # the row count changed
+        if progress is not None:
+            return added, duplicates, failed, cancelled
         return added, duplicates, failed
 
-    def _report_add_result(self, added, duplicates, failed):
+    def _report_add_result(self, added, duplicates, failed,
+                           cancelled=False):
         parts = []
+        if cancelled:
+            parts.append(tr('cancelled'))
         if added:
             parts.append(tr('{n} added').format(n=added))
         if duplicates:
@@ -498,8 +603,9 @@ class MWFilesMixin:
         """F2 in the file table (Lightroom habit): one selected row edits its
         target filename inline (via the FilenameDelegate, extension fixed);
         several rows open the bulk-rename dialog whose template names them all
-        with a running number. Only the target Commons name changes - the
-        source files on disk are never touched."""
+        with a running number, or with the camera's own number via {c}.
+        Only the target Commons name changes - the source files on disk are
+        never touched."""
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         if not rows and self.table.currentRow() >= 0:
             rows = [self.table.currentRow()]
@@ -511,7 +617,20 @@ class MWFilesMixin:
                 self.table.setCurrentItem(item)
                 self.table.editItem(item)
             return
-        dlg = BulkRenameDialog(len(rows), self)
+        # 0.16.0: the dialog needs the SOURCE names so {c} can take the
+        # camera's own number from them.
+        sources, exts, dates = [], [], []
+        for row in rows:
+            path = self._row_path(row) if hasattr(self, '_row_path') else None
+            if not path:
+                item = self.table.item(row, self.COL_FILENAME)
+                path = (item.data(Qt.UserRole) or item.text()) if item else ''
+            sources.append(os.path.splitext(os.path.basename(path or ''))[0])
+            exts.append(self._ext_for_row(row))
+            date_item = self.table.item(row, self.COL_DATE)
+            dates.append(date_item.text().strip() if date_item else '')
+        dlg = BulkRenameDialog(len(rows), self, sources=sources,
+                               exts=exts, dates=dates)
         if dlg.exec() != QDialog.Accepted:
             return
         for row, base in zip(rows, dlg.names()):

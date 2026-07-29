@@ -154,6 +154,26 @@ class MWEditorMixin:
             if pix is not None and not pix.isNull():
                 self.preview_label.setPixmap(pix)
 
+    def _editor_row(self):
+        """Row of the item the editor is bound to, or None.
+
+        The binding is a QTableWidgetItem rather than an index, so it
+        survives sorting. What it does NOT survive is the row being
+        replaced - loading a different folder deletes the underlying C++
+        object, and every later access raises RuntimeError. Found while
+        testing 0.15.2; reachable in normal use by simply opening a second
+        folder with a file still loaded in the editor.
+        """
+        item = self._editor_item
+        if item is None:
+            return None
+        try:
+            row = item.row()
+        except RuntimeError:          # underlying item already destroyed
+            self._editor_item = None
+            return None
+        return row if row >= 0 else None
+
     def _load_selected_desc(self):
         """Load the selected row's description into the active per-file editor."""
         row = self._selected_row()
@@ -186,12 +206,21 @@ class MWEditorMixin:
             self.status_bar.showMessage(
                 tr('{n} files selected - a changed field is applied to all '
                    'of them.').format(n=len(self._editor_sel_items)), 5000)
+        # 0.15.2 (Harald's report: empty depicts without a red dot). THIS is
+        # the one place where the per-file editor becomes what is on screen,
+        # so the marks belong here. Hanging them on textChanged alone was
+        # not enough: loading a file whose depicts is empty into an editor
+        # whose depicts was ALREADY empty changes no text, emits no signal -
+        # and the marks kept whatever the previous file had left behind.
+        if hasattr(self, '_refresh_file_marks'):
+            self._refresh_file_marks()
 
     def _date_text_for_current(self):
         """Date column text of the row loaded in the per-file editor (for the
         'missing year' fill-in), or '' if nothing is loaded."""
-        if self._editor_item is not None and self._editor_item.row() >= 0:
-            date_item = self.table.item(self._editor_item.row(), self.COL_DATE)
+        row = self._editor_row()
+        if row is not None:
+            date_item = self.table.item(row, self.COL_DATE)
             return date_item.text() if date_item else ''
         return ''
 
@@ -289,11 +318,9 @@ class MWEditorMixin:
         """
         if self._loading_desc:
             return
-        if self._editor_item is None:
-            return
-        row = self._editor_item.row()
-        if row < 0:
-            return  # the row was removed from the table
+        row = self._editor_row()
+        if row is None:
+            return  # nothing loaded, or the row is gone from the table
         item = self.table.item(row, self.COL_DESC)
         if item is None:
             return
