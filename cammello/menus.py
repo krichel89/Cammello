@@ -161,6 +161,15 @@ class MenusMixin:
             menu, tr('C&lear list'), 'clear_all',
             tip=tr('Remove every file from the list.')))
         menu.addSeparator()
+        # 0.16.1: the workflow file is configuration, so it sits next to
+        # Settings rather than in its own menu.
+        self._act(menu, tr('Open &workflow file…'), '_open_workflow_file',
+                  None, tr('Edit the workflows in a text editor.'),
+                  QAction.NoRole)
+        self._act(menu, tr('Reload &workflows'), '_reload_workflows',
+                  None, tr('Read the workflow file again after editing it.'),
+                  QAction.NoRole)
+        menu.addSeparator()
         # macOS moves this into the application menu automatically.
         # NoRole on purpose (0.12.5): with PreferencesRole macOS moves the
         # entry into the application menu - which, when Cammello runs from

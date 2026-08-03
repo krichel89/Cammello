@@ -688,7 +688,8 @@ class StructuredDescriptionEditor(QWidget):
         apply_form_ratio(form)
         layout.addLayout(form)
 
-        layout.addWidget(QLabel(tr('Extra wikitext / comments:')))
+        self.extra_label = QLabel(tr('Extra wikitext / comments:'))
+        layout.addWidget(self.extra_label)
         self.extra = QTextEdit()
         self.extra.setPlaceholderText(
             tr('e.g.') + ' {{en|1=…}}\n'

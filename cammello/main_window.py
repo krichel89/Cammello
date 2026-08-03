@@ -45,6 +45,7 @@ from .wikidata import (refresh_wd_fields, fetch_coordinates,
                        fetch_in_background)
 from .exif import read_gps, format_coordinates
 from . import workflows
+from . import workflow_config
 from . import geo
 from . import categories
 from . import updates
@@ -151,8 +152,9 @@ class MainWindow(FlickrMixin,
         # Without this reference Qt garbage-collects the unparented widget.
         self._mw_tab = mw_tab
 
-        # Hidden per-tab switches (no UI): QSettings booleans, flipped from
-        # the command line via --disable-tab / --enable-tab (see main()).
+        # Per-tab switches: QSettings booleans, offered in Settings >
+        # Modules and flippable from the command line via --disable-tab /
+        # --enable-tab (see main()).
         # pyexiv2 remains the hard gate for all three, as before.
         avail = iptc_mod.available()
         self._feat_culling = avail and self.settings.value(
@@ -165,6 +167,13 @@ class MainWindow(FlickrMixin,
             self.settings.value('feature_iptc', False, type=bool) and avail,
             self.settings.value('feature_ftp', True, type=bool) and avail,
             self.settings.value('feature_flickr', True, type=bool))
+        # 0.16.1: say where the workflows came from and what was wrong with
+        # the file, if anything. Log only at startup - a message box during
+        # launch would be in the way; File > Reload workflows says it aloud.
+        self.logger.info('Workflows: %d from %s.',
+                         len(workflows.all_workflows()),
+                         workflow_config.path())
+        self._report_workflow_problems()
         # RELEASE DEFAULT 0.10.0: the IPTC tab is hidden; `--enable-tab
         # iptc` brings it back (persists in QSettings).
         self._feat_iptc = avail and self.settings.value(
@@ -212,11 +221,15 @@ class MainWindow(FlickrMixin,
             self.tabs.addTab(self._iptc_tab_widget, 'IPTC')
             self._iptc_load_settings()
         if self._feat_ftp or self._feat_flickr:
-            # Merged FTP / Flickr tab (title reflects what is enabled).
-            title = ('FTP / Flickr' if (self._feat_ftp and self._feat_flickr)
-                     else ('FTP' if self._feat_ftp else 'Flickr'))
+            # 0.16.1 (Harald): "Von der Logik her muss das letzte Modul
+            # 'Uploads' heissen." It carries Commons, FTP and Flickr now, so
+            # naming it after two of the three was the odd part - the more
+            # so as Commons is the main target. The title no longer varies
+            # with which service is switched on: the module is the place
+            # where uploading happens, whatever is enabled inside it.
             self._ftpflickr_tab_widget = self._build_ftp_tab()
-            self.tabs.addTab(self._ftpflickr_tab_widget, title)
+            self._uploads_tab_widget = self._ftpflickr_tab_widget
+            self.tabs.addTab(self._ftpflickr_tab_widget, tr('Uploads'))
             if self._feat_ftp:
                 self._ftp_load_settings()
             if self._feat_flickr:
@@ -735,18 +748,21 @@ class MainWindow(FlickrMixin,
         """
         key = self.current_workflow()
         self.settings.setValue('workflow', key)
-        wf = workflows.by_key(key)
 
-        # "Other templates" is a QLineEdit, the base description a
-        # QPlainTextEdit - hence the two shapes. Both are filled only when
-        # they are still empty.
-        line = getattr(self, 'other_templates_edit', None)
-        if line is not None and wf['templates'] and not line.text().strip():
-            line.setText(wf['templates'])
-        box = getattr(self, 'base_text_edit', None)
-        if box is not None and wf['base_description'] \
-                and not box.toPlainText().strip():
-            box.setPlainText(wf['base_description'])
+        # 0.16.1: both come out of workflows.toml now, by field name, so a
+        # workflow can preset ANY text field - not just the two that used
+        # to be hard-coded here.
+        filled = []
+        for name, text in workflows.presets_of(key).items():
+            for w in self._workflow_field_widgets(name):
+                if self._set_field_text(w, text):
+                    filled.append(name)
+        for name, text in workflows.examples_of(key).items():
+            for w in self._workflow_field_widgets(name):
+                self._set_field_text(w, text, placeholder_only=True)
+        if filled:
+            self.logger.info('Workflow %s preset: %s.', key,
+                             ', '.join(sorted(set(filled))))
 
         self._apply_workflow_visibility(key)
         self.logger.info('Workflow switched to %s.', key)
@@ -920,9 +936,14 @@ class MainWindow(FlickrMixin,
     # along if they are already filled (0.15.2, Harald's report). The
     # danger is not cosmetic: a hidden object coordinate still becomes
     # {{Object location dec}} and P9149 on upload.
-    _WORKFLOW_HIDDEN_KEYS = {
-        'portraits': ('coordinates', 'object_coordinates'),
-        'buildings': ('created_during',),
+    # 0.16.1: keyed by REGISTRY FIELD NAME, not by workflow. The old table
+    # named the two built-in workflows, which stopped working the moment
+    # Harald could invent his own in workflows.toml. Only fields that have
+    # a per-row value need an entry here - the base-only ones (the event,
+    # the gallery page) are single values, not one per file.
+    _WORKFLOW_FIELD_ROW_KEYS = {
+        'kamerastandort': 'coordinates',
+        'objektstandort': 'object_coordinates',
     }
 
     def _clear_hidden_workflow_fields(self, key):
@@ -934,7 +955,9 @@ class MainWindow(FlickrMixin,
         question is asked once, listing what would go, and No leaves
         everything alone.
         """
-        keys = self._WORKFLOW_HIDDEN_KEYS.get(key, ())
+        keys = tuple(self._WORKFLOW_FIELD_ROW_KEYS[name]
+                     for name in workflows.hidden_fields(key)
+                     if name in self._WORKFLOW_FIELD_ROW_KEYS)
         if not keys:
             return
         # Expert mode shows everything, so nothing is hidden and nothing
@@ -971,43 +994,194 @@ class MainWindow(FlickrMixin,
         self._load_selected_desc()
 
     def _apply_workflow_visibility(self, key=None):
-        """Show only the controls the selected workflow needs (0.15.0).
+        """Show only the controls the selected workflow needs (0.16.1).
 
         Harald: "alles mit Location brauchen wir nicht im Event-Workflow",
-        and "Created during nicht im Buildings-Workflow". Nothing is
-        disabled or thrown away - values stay where they are, only the
-        controls are out of the way where they have no use.
+        and "Created during nicht im Buildings-Workflow" - which is now his
+        to decide in workflows.toml rather than something coded in here.
+        Nothing is disabled or thrown away: values stay where they are, only
+        the controls are out of the way where they have no use. Which is
+        also why a hidden field would still upload - see
+        _clear_hidden_workflow_fields, called after every switch.
         """
         key = key or self.current_workflow()
-        wants_location = workflows.offers_object_location(key)
+        # 0.16.1: the list of hidden fields comes from workflows.toml. It is
+        # an EXCLUSION list, so every field the file does not mention is
+        # shown - a field a later version adds appears by itself.
+        hidden = set(workflows.hidden_fields(key))
         # Expert mode overrules the workflow: everything stays reachable
         # there, because that is what expert mode is for.
         expert_cb = getattr(self, 'expert_cb', None)
         if expert_cb is not None and expert_cb.isChecked():
-            wants_location = True
-        struct = getattr(self, 'file_struct', None)
-        if struct is not None:
-            for attr in ('_coords_row_widget', '_object_row_widget'):
-                row = getattr(struct, attr, None)
-                if row is not None:
-                    row.setVisible(wants_location)
-                    lbl = self._label_for(struct, row)
-                    if lbl is not None:
-                        lbl.setVisible(wants_location)
-        # "Created during" (P10408) belongs to the event workflow: the
-        # Wikidata item of the festival. A building was not created during
-        # anything the photographer attended.
-        hide_event = wants_location and not (
-            expert_cb is not None and expert_cb.isChecked())
-        base = getattr(self, 'base_struct', None)
-        if base is not None and getattr(base, 'created_during', None) is not None:
-            base.created_during.setVisible(not hide_event)
-            lbl = self._label_for(base, base.created_during)
-            if lbl is not None:
-                lbl.setVisible(not hide_event)
+            hidden = set()
+        for name in workflow_config.FIELD_NAMES:
+            self._set_field_visible(name, name not in hidden)
+        # The button that fills "Created during" from the IPTC tab is not a
+        # form field, so it is not in the registry - it simply follows the
+        # field it fills. Hiding the field but leaving its button would be
+        # the kind of half state that produces bug reports.
         btn = getattr(self, 'iptc_event_btn', None)
         if btn is not None:
-            btn.setVisible(not hide_event)
+            btn.setVisible('entstanden_waehrend' not in hidden)
+
+    def _open_workflow_file(self):
+        """Open workflows.toml in whatever the system uses for .toml.
+
+        The file is created first if it is not there yet, so this always
+        opens something - a user who has never touched it gets the
+        commented template with the whole field list in it.
+        """
+        target = workflow_config.ensure_file(tr)
+        if not target:
+            QMessageBox.warning(
+                self, tr('Workflows'),
+                tr('The workflow file could not be written: {error}').format(
+                    error=workflow_config.LAST_ERROR or '?'))
+            return
+        self.logger.info('Opening workflow file %r.', target)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+
+    def _reload_workflows(self):
+        """Re-read the workflow file and rebuild the dropdown.
+
+        Keeps the selected workflow if its key still exists - editing the
+        file should not silently move the user to another workflow.
+        """
+        wanted = self.current_workflow()
+        workflows.reload(tr)
+        self._rebuild_workflow_combo(wanted)
+        self._report_workflow_problems(spoken=True)
+
+    def _rebuild_workflow_combo(self, wanted=None):
+        """Fill the workflow dropdown from the current file."""
+        cb = getattr(self, 'workflow_combo', None)
+        if cb is None:
+            return
+        entries = workflows.all_workflows()
+        blocked = cb.blockSignals(True)
+        cb.clear()
+        for wf in entries:
+            # tr() on a label the user invented simply returns it unchanged.
+            cb.addItem(tr(wf['label']), wf['key'])
+        index = cb.findData(wanted if wanted is not None
+                            else workflows.default_key())
+        if index < 0:
+            index = cb.findData(workflows.default_key())
+        cb.setCurrentIndex(max(0, index))
+        cb.blockSignals(blocked)
+        self._on_workflow_changed()
+
+    def _report_workflow_problems(self, spoken=False):
+        """Log what was wrong with the workflow file; say it once if asked.
+
+        A broken file never stops Cammello - it falls back to the built-in
+        workflows. But it must not fail SILENTLY either, or an edit that
+        did not take effect looks like a bug in the program.
+        """
+        error = workflow_config.LAST_ERROR
+        warnings = list(workflow_config.LAST_WARNINGS)
+        for w in warnings:
+            self.logger.warning('Workflow file: %s', w)
+        if error:
+            self.logger.error('Workflow file unusable: %s', error)
+        if not spoken:
+            return
+        if error:
+            QMessageBox.warning(
+                self, tr('Workflows'),
+                tr('The workflow file could not be read, so the built-in '
+                   'workflows are being used:\n\n{error}').format(error=error))
+        elif warnings:
+            QMessageBox.information(
+                self, tr('Workflows'),
+                tr('Workflows reloaded. Some entries were ignored:\n\n{list}')
+                .format(list='\n'.join(warnings[:10])))
+        else:
+            self.status_bar.showMessage(
+                tr('Workflows reloaded: {n}').format(
+                    n=len(workflows.all_workflows())), 4000)
+
+    def _workflow_field_widgets(self, name):
+        """The widgets belonging to a registry field name.
+
+        The ONE place that maps the names in workflows.toml onto real
+        controls. A field can live in both description editors (categories
+        and the extra wikitext do), hence a list. Missing attributes are
+        skipped rather than guarded for at every call site: this runs while
+        the UI is still being built, too.
+        """
+        base = getattr(self, 'base_struct', None)
+        per_file = getattr(self, 'file_struct', None)
+        table = {
+            'vorlagen': [getattr(self, 'other_templates_edit', None)],
+            'basisbeschreibung': [getattr(self, 'base_text_edit', None)],
+            'autor': [getattr(self, 'author_edit', None)],
+            'ersteller': [getattr(self, 'creator_edit', None)],
+            'quelle': [getattr(self, 'source_edit', None)],
+            'genehmigung': [getattr(self, 'permission_edit', None)],
+            'lizenz': [getattr(self, 'license_edit', None)],
+            'zeigt': [getattr(per_file, 'depicts', None)],
+            'falls_kein_depicts': [getattr(per_file, 'override_combo', None)],
+            'kategorien': [getattr(base, 'categories', None),
+                           getattr(per_file, 'categories', None)],
+            'entstanden_waehrend': [getattr(base, 'created_during', None)],
+            'kamerastandort': [getattr(per_file, '_coords_row_widget', None)],
+            'objektstandort': [getattr(per_file, '_object_row_widget', None)],
+            'galerieseite': [getattr(base, 'gallery_suffix', None)],
+            'zusatz_wikitext': [getattr(base, 'extra', None),
+                                getattr(per_file, 'extra', None)],
+        }
+        return [w for w in table.get(name, []) if w is not None]
+
+    def _extra_labels(self):
+        """The captions of the two "Extra wikitext" boxes, which sit in a
+        plain layout instead of a form row (see editors.py)."""
+        out = []
+        for struct in (getattr(self, 'base_struct', None),
+                       getattr(self, 'file_struct', None)):
+            lbl = getattr(struct, 'extra_label', None)
+            if lbl is not None:
+                out.append(lbl)
+        return out
+
+    def _set_field_visible(self, name, visible):
+        """Show or hide one registry field, caption included."""
+        for w in self._workflow_field_widgets(name):
+            w.setVisible(visible)
+            lbl = self._label_for(self, w)
+            if lbl is not None:
+                lbl.setVisible(visible)
+        if name == 'zusatz_wikitext':
+            for lbl in self._extra_labels():
+                lbl.setVisible(visible)
+
+    @staticmethod
+    def _set_field_text(widget, text, placeholder_only=False):
+        """Fill a control, or only hint at it.
+
+        `placeholder_only` is the difference between [workflow.beispiel]
+        and [workflow.vorbelegung]: a placeholder is grey, is never read
+        back and never uploaded. Filling happens ONLY into a still-empty
+        control - a workflow presets, it does not overwrite.
+        """
+        if placeholder_only:
+            if hasattr(widget, 'setPlaceholderText'):
+                widget.setPlaceholderText(text)
+            return False
+        current = ''
+        if hasattr(widget, 'toPlainText'):
+            current = widget.toPlainText()
+        elif hasattr(widget, 'text'):
+            current = widget.text()
+        if current.strip():
+            return False
+        if hasattr(widget, 'setPlainText'):
+            widget.setPlainText(text)
+        elif hasattr(widget, 'setText'):
+            widget.setText(text)
+        else:
+            return False
+        return True
 
     @staticmethod
     def _label_for(struct, widget):

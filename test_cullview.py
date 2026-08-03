@@ -71,8 +71,8 @@ open(os.path.join(folder, 'IMG_0001.CR3'), 'wb').write(b'\0' * 32)
 
 w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 tabs = [w.tabs.tabText(i) for i in range(w.tabs.count())]
-check('tabs order (0.12.6: workflow tabs only)',
-      tabs == ['Culling', 'MediaWiki', 'IPTC', 'FTP'],
+check('tabs order (0.16.1: the last module is Uploads)',
+      tabs == ['Culling', 'MediaWiki', 'IPTC', 'Uploads'],
       str(tabs))
 w.tabs.setCurrentWidget(w._cull_tab_widget)
 w._cull_tab_widget.setFocus()

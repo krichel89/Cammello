@@ -9,7 +9,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from .i18n import tr
 from .constants import *
 from .sdc import *
-from .api import MediaWikiApi
+from .api import MediaWikiApi, LocalFileError
 from .exif import (parse_coordinates, read_capture_settings,
                    read_camera_ids)
 from . import camera_map
@@ -130,6 +130,7 @@ class UploadWorker(QThread):
                               sum(len(v) for v in gallery_entries.values()))
         success_count = 0
         sdc_failures = 0
+        unreadable_count = 0
         cancelled_at = None
 
         self.log.info('=== Upload run started: %d file(s) ===', len(self.rows))
@@ -246,6 +247,20 @@ class UploadWorker(QThread):
                     filename, send_path, wikitext,
                     f'Uploaded with {APP_NAME}', self.ignore_warnings
                 )
+            except LocalFileError as e:
+                # 0.16.1: the file could not be read from disk, so nothing
+                # was ever sent. Logged WITHOUT a traceback - the sentence
+                # says everything the stack does not, and a traceback here
+                # reads like a crash in Cammello when the problem is the
+                # user's storage. Marked UNREADABLE, not FAILED, so a resume
+                # picks it up once the file is available again.
+                self.log.error('✗ Cannot read "%s": %s', e.path, e.reason)
+                msg = str(e)
+                self._journal_mark(row, journal_mod.UNREADABLE, error=msg)
+                self.error.emit(i, msg)
+                self.progress.emit(i, '✗ ' + tr('Unreadable'))
+                unreadable_count += 1
+                continue
             except Exception as e:
                 # The file never made it to Commons.
                 self.log.error('✗ Error for "%s": %s', fname, e, exc_info=True)
@@ -448,8 +463,10 @@ class UploadWorker(QThread):
             # run completed anyway. Saying "Done" without a word about it would
             # look like the Cancel button did nothing.
             self.log.info('=== Upload run finished (cancel came too late): '
-                          '%d/%d succeeded, %d SDC failure(s) ===',
-                          success_count, total, sdc_failures)
+                          '%d/%d succeeded, %d SDC failure(s), '
+                          '%d unreadable ===',
+                          success_count, total, sdc_failures,
+                          unreadable_count)
             self.finished.emit(
                 f'Done: {success_count}/{total} file(s) uploaded. The cancel '
                 f'arrived while the last file was already being uploaded, so '
@@ -457,10 +474,20 @@ class UploadWorker(QThread):
             )
         else:
             self.log.info('=== Upload run finished: %d/%d succeeded, '
-                          '%d SDC failure(s) ===',
-                          success_count, total, sdc_failures)
+                          '%d SDC failure(s), %d unreadable ===',
+                          success_count, total, sdc_failures,
+                          unreadable_count)
+            # 0.16.1: a run that ends "11/501" without a word about the
+            # other 490 tells the user nothing. If files could not be read,
+            # say so here - that is the one line they will actually see.
+            note = sdc_note
+            if unreadable_count:
+                note += ' ' + tr(
+                    '{n} file(s) could not be read from disk and were not '
+                    'uploaded - see the log for the paths. They stay in the '
+                    'queue and can be resumed.').format(n=unreadable_count)
             self.finished.emit(
-                f'Done: {success_count}/{total} file(s) uploaded.{sdc_note}'
+                f'Done: {success_count}/{total} file(s) uploaded.{note}'
             )
 
 

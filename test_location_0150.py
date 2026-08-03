@@ -1,5 +1,12 @@
 """Location data: reading, storing, and the workflow-dependent UI (0.15.0)."""
 import os
+import tempfile
+# 0.16.1: point the workflow file at a scratch copy BEFORE cammello is
+# imported. Without this every window test would read the user's own
+# workflows.toml, so editing it could break tests unrelated to workflows.
+os.environ.setdefault('CAMMELLO_WORKFLOWS',
+                      os.path.join(tempfile.mkdtemp(), 'workflows.toml'))
+import os
 import sys
 import tempfile
 

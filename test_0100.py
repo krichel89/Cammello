@@ -89,7 +89,7 @@ try:
 
     if have_iptc:
         check('tabs all-on',
-              tab_names(w) == ['Culling', 'MediaWiki', 'IPTC', 'FTP / Flickr',
+              tab_names(w) == ['Culling', 'MediaWiki', 'IPTC', 'Uploads',
                                'Settings', 'Log', 'About'],
               str(tab_names(w)))
         # FTP mirrors: line edit, combo, checkbox.
@@ -141,7 +141,7 @@ try:
         w = make_window()
         names = tab_names(w)
         check('iptc off: no IPTC tab', 'IPTC' not in names, str(names))
-        check('iptc off: FTP tab stays', 'FTP / Flickr' in names,
+        check('iptc off: the uploads module stays', 'Uploads' in names,
               str(names))
         # 0.10.0: the FTP tab has its own file list and an as-is upload
         # button even when IPTC is off (the IPTC-writing variant is gone).

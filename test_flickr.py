@@ -113,15 +113,16 @@ try:
     settings.sync()
     w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
     names = tab_names(w)
-    check('merged FTP / Flickr tab present', 'FTP / Flickr' in names,
+    # 0.16.1: one module for all three upload targets, fixed title.
+    check('the uploads module is present', 'Uploads' in names,
           str(names))
     check('license combo present', hasattr(w, 'flickr_license_combo'))
     check('license combo default = account default',
           w.flickr_license_combo.currentData() is None)
     check('license combo has CC BY-SA',
           w.flickr_license_combo.findData('5') > 0)
-    check('FTP / Flickr tab last (0.12.6: About is a dialog)',
-          names[-1] == 'FTP / Flickr', str(names))
+    check('the uploads module is last (0.12.6: About is a dialog)',
+          names[-1] == 'Uploads', str(names))
     check('flickr mirror in settings', hasattr(w, 'flickr_api_key_mirror'))
     w.flickr_api_key_edit.setText('k123')
     check('flickr key primary->mirror', w.flickr_api_key_mirror.text() == 'k123')
@@ -142,8 +143,10 @@ try:
     settings.sync()
     w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
     names = tab_names(w)
-    check('flickr off: tab is plain FTP', 'FTP' in names
-          and 'FTP / Flickr' not in names, str(names))
+    # 0.16.1: the title no longer varies with what is switched on -
+    # the module is where uploading happens, whatever it contains.
+    check('flickr off: the module keeps its name', 'Uploads' in names,
+          str(names))
     check('flickr off: no cull button', not hasattr(w, 'cull_flickr_btn'))
     check('flickr off: no mirror', not hasattr(w, 'flickr_api_key_mirror'))
     if hasattr(w, '_cull_wb'):

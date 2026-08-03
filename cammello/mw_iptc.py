@@ -18,15 +18,19 @@ from PyQt5.QtWidgets import (
     QPushButton, QListWidget, QListWidgetItem, QSplitter, QComboBox,
     QCheckBox, QGroupBox, QMessageBox, QFileDialog, QTextEdit, QScrollArea,
     QAbstractItemView, QDialog, QDialogButtonBox)
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import (Qt, QSize, QItemSelection,
+                          QItemSelectionModel)
 
 from .constants import *
 from . import iptc
 from . import channels
 from .ftp_workers import (FtpUploadWorker, PROTOCOLS, DEFAULT_PORTS,
                           sftp_available, sftp_unavailable_reason)
+from PyQt5.QtGui import QBrush, QColor, QPalette
 from .widgets import (UploadProgressDialog, CollapsibleGroupBox, FlowLayout,
-                      apply_form_ratio, NoWheelComboBox)
+                      apply_form_ratio, NoWheelComboBox, FilterBar)
+from . import culling
+from . import filters
 from .i18n import tr, current_language
 from .wikidata import (WikidataSearchWorker, fetch_commons_categories,
                        fetch_in_background)
@@ -248,12 +252,15 @@ class MWIptcMixin:
         return w
 
     def _build_ftp_tab(self):
-        """The merged FTP / Flickr tab (0.10.0). One shared file list on the
-        left and one status area at the bottom right serve BOTH services; the
-        FTP server/upload groups appear when the ftp feature is on, the
-        Flickr account/upload groups when the flickr feature is on (the tab
-        is built when either is). Upload buttons follow the SELECTION in the
-        list: selected files, or all files when nothing is selected."""
+        """The Uploads module (0.16.1; merged FTP / Flickr tab since
+        0.10.0, renamed and extended when Commons moved in). One shared
+        file list on the left - with the filter bar at its head - and one
+        status area at the bottom right serve every service; the Commons
+        group appears when the mediawiki feature is on, the FTP
+        server/upload groups when the ftp feature is on, the Flickr groups
+        when flickr is. Upload buttons follow the SELECTION in the list:
+        selected files, or all files when nothing is selected - unless a
+        filter is active, in which case empty means empty."""
         w = QWidget()
         outer = QVBoxLayout(w)
         split = QSplitter(Qt.Horizontal)
@@ -264,6 +271,12 @@ class MWIptcMixin:
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.addWidget(QLabel(tr('Files (shared with the MediaWiki tab):')))
+        # 0.16.1: the filter bar sits at the HEAD of the image column and
+        # drives the SELECTION - it does not hide anything. Everything stays
+        # visible, what does not match is greyed lightly (Harald).
+        self.ftp_filter_bar = FilterBar()
+        self.ftp_filter_bar.changed.connect(self._ftp_apply_filter)
+        lv.addWidget(self.ftp_filter_bar)
         self.ftp_list = QListWidget()
         self.ftp_list.setIconSize(QSize(96, 64))
         self.ftp_list.setUniformItemSizes(True)
@@ -288,6 +301,29 @@ class MWIptcMixin:
         self.ftp_status = QTextEdit()
         self.ftp_status.setReadOnly(True)
         self.ftp_status.setMaximumHeight(120)
+
+        if getattr(self, '_feat_mediawiki', True):
+            # 0.16.1 (Harald): "bau den Mediawiki-Upload da zusaetzlich
+            # ein". Commons comes FIRST because it is the main target - the
+            # module used to be named after the two lesser channels.
+            # "Zusaetzlich": the Upload button in the MediaWiki module stays
+            # where it is, this is a second way in, not a move.
+            box = CollapsibleGroupBox(tr('Wikimedia Commons'))
+            cv = QVBoxLayout(box.content)
+            note = QLabel(tr('Uploads the files selected on the left (or '
+                             'all, when nothing is selected) to Commons, '
+                             'with the descriptions from the MediaWiki '
+                             'module. Files marked for commercial use are '
+                             'skipped.'))
+            note.setWordWrap(True)
+            cv.addWidget(note)
+            self.commons_upload_btn = QPushButton(tr('Upload to Commons'))
+            self.commons_upload_btn.setProperty('cammelloPrimary', True)
+            self.commons_upload_btn.clicked.connect(
+                self._uploads_start_commons)
+            cv.addWidget(self.commons_upload_btn)
+            self._commons_box = box
+            rv.addWidget(box)
 
         if getattr(self, '_feat_ftp', True):
             # 0.12.8 (Harald): the FTP/Flickr sections match the rest of the
@@ -367,18 +403,166 @@ class MWIptcMixin:
 
     def _ftp_refresh_list(self):
         self._populate_shared_list(self.ftp_list)
+        # The list was rebuilt from scratch, so the greying and the
+        # selection have to be re-applied - otherwise a filter that is
+        # switched on would silently stop meaning anything after a refresh.
+        self._ftp_apply_filter()
+
+    def _ftp_current_filter(self):
+        bar = getattr(self, 'ftp_filter_bar', None)
+        return bar.current_filter() if bar is not None else filters.FileFilter()
+
+    def _ftp_file_traits(self, path):
+        """(rating, colour index, channel mark) for one path.
+
+        Ratings and labels live on disk in XMP, so they are read once per
+        path and cached: the filter runs over the whole list on every click,
+        and re-reading a few hundred sidecars each time would make the bar
+        feel broken. The cache is dropped whenever the list is rebuilt,
+        which is also when a rating could have changed.
+        """
+        cache = getattr(self, '_ftp_trait_cache', None)
+        if cache is None:
+            cache = self._ftp_trait_cache = {}
+        hit = cache.get(path)
+        if hit is None:
+            rating, label = culling.rating_label_for_path(path)
+            hit = (rating, culling.label_index(label))
+            cache[path] = hit
+        mark = self._channel_mark(path) if hasattr(self, '_channel_mark') \
+            else None
+        return hit[0], hit[1], mark
+
+    def _ftp_apply_filter(self, file_filter=None):
+        """Grey what does not match and select what does.
+
+        The filter STEERS THE SELECTION rather than the visibility, because
+        the upload buttons already follow the selection - so filtering and
+        uploading need no new concept between them. Files the channel rules
+        disable (commons-marked files in the commercial list) are never
+        selected, filter or not.
+        """
+        lst = getattr(self, 'ftp_list', None)
+        if lst is None:
+            return
+        if file_filter is None:
+            file_filter = self._ftp_current_filter()
+        active = file_filter.active
+        base = lst.palette().color(QPalette.Text)
+        # "Leicht gegraut": halfway to the background, not the hard grey the
+        # disabled channel items use - the two states must stay tellable
+        # apart at a glance.
+        dimmed = QColor(base)
+        dimmed.setAlpha(90)
+        blocked = lst.palette().color(QPalette.Disabled, QPalette.Text)
+
+        matched = 0
+        hit_rows = []
+        lst.blockSignals(True)
+        for i in range(lst.count()):
+            it = lst.item(i)
+            path = it.data(Qt.UserRole)
+            enabled = bool(it.flags() & Qt.ItemIsEnabled)
+            hit = False
+            if enabled and path:
+                rating, color_index, mark = self._ftp_file_traits(path)
+                hit = file_filter.matches(rating, color_index, mark)
+            if not enabled:
+                it.setForeground(QBrush(blocked))
+            elif not active:
+                # Filter off: restore the channel colouring, which is the
+                # only thing that may colour an item otherwise.
+                it.setForeground(QBrush(base))
+                self._style_shared_list_item(it, path)
+            elif hit:
+                it.setForeground(QBrush(base))
+                self._style_shared_list_item(it, path)
+                hit_rows.append(i)
+            else:
+                it.setForeground(QBrush(dimmed))
+            matched += 1 if hit else 0
+        # The selection is applied in ONE call. item.setSelected() walks
+        # the selection model once PER ITEM - measured at 92 ms for 1000
+        # files, and it dwarfed everything else in this loop (styling and
+        # the trait cache together: 7 ms). Contiguous rows are folded into
+        # ranges first, so a filter that matches a block costs one span.
+        selection = QItemSelection()
+        model = lst.model()
+        start = prev = None
+        for r in hit_rows + [None]:
+            if start is None:
+                start = prev = r
+            elif r is not None and r == prev + 1:
+                prev = r
+            else:
+                selection.select(model.index(start, 0), model.index(prev, 0))
+                start = prev = r
+        lst.selectionModel().select(selection,
+                                    QItemSelectionModel.ClearAndSelect)
+        lst.blockSignals(False)
+        if active:
+            self.logger.info('[Uploads] Filter %s: %d of %d file(s).',
+                             file_filter.describe(), matched, lst.count())
         self._ftp_update_count()
 
     def _ftp_update_count(self):
         self.ftp_count_lbl.setText(self._selection_count_text(
             len(self.ftp_list.selectedItems()), self.ftp_list.count()))
 
+    def _uploads_start_commons(self):
+        """Commons upload driven by the list in the Uploads module.
+
+        The list selection is carried over to the MediaWiki table and then
+        the ORDINARY start_upload() runs. Deliberately not a second upload
+        path: everything that button does - the login prompt, the QID
+        check, the mandatory depicts, the commercial-channel exclusion, the
+        progress dialog - has to apply here too, and the only way to
+        guarantee that is to use it rather than to copy it.
+        """
+        paths = self._ftp_selected_paths()
+        table_sel = self.table.selectionModel()
+        if paths is None:
+            # Nothing selected and no filter: the app-wide "all files".
+            self.table.clearSelection()
+        else:
+            if not paths:
+                QMessageBox.information(
+                    self, tr('Uploads'),
+                    tr('The filter matches no files, so there is nothing to '
+                       'upload.'))
+                return
+            wanted = {os.path.normpath(p) for p in paths}
+            self.table.clearSelection()
+            mode = (QItemSelectionModel.Select | QItemSelectionModel.Rows)
+            for path, _name, _target, row in self._iptc_paths():
+                if os.path.normpath(path) in wanted:
+                    table_sel.select(self.table.model().index(row, 0), mode)
+        # Switch to the MediaWiki module: the upload reports its progress
+        # and any per-file problem there, and a dialog appearing over a
+        # module that shows none of it would be baffling.
+        widget = getattr(self, '_mw_tab_widget', None)
+        if widget is not None:
+            index = self.tabs.indexOf(widget)
+            if index >= 0:
+                self.tabs.setCurrentIndex(index)
+        self.logger.info('[Uploads] Commons upload started from the uploads '
+                         'module (%s).',
+                         'all files' if paths is None
+                         else f'{len(paths)} selected')
+        self.start_upload()
+
     def _ftp_selected_paths(self):
-        """Paths of the selection in the FTP list, or None for 'all files'
-        (nothing selected = everything, the app-wide convention)."""
+        """Paths of the selection in the list, or None for 'all files'.
+
+        Nothing selected = everything is the app-wide convention, but it
+        must NOT apply while a filter is on (0.16.1): a filter that matches
+        nothing would otherwise clear the selection and thereby hand the
+        WHOLE list to the upload - the exact opposite of what the user
+        asked for. With a filter active, an empty selection means empty.
+        """
         items = self.ftp_list.selectedItems()
         if not items:
-            return None
+            return set() if self._ftp_current_filter().active else None
         return {it.data(Qt.UserRole) for it in items}
 
     def _commercial_allowed_paths(self):

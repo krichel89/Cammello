@@ -218,7 +218,7 @@ w5 = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 tabs5 = [w5.tabs.tabText(i) for i in range(w5.tabs.count())]
 check('IPTC tab present with pyexiv2 (0.12.6: only the four workflow '
       'tabs remain; Settings/Log/About are dialogs)',
-      tabs5 == ['Culling', 'MediaWiki', 'IPTC', 'FTP / Flickr'],
+      tabs5 == ['Culling', 'MediaWiki', 'IPTC', 'Uploads'],
       str(tabs5))
 w5._add_paths([src])
 w5.tabs.setCurrentWidget(w5._iptc_tab_widget)

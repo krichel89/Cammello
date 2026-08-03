@@ -5,6 +5,13 @@ dropdown that drives it: position, entries, persistence, and the promise
 that switching never overwrites something already entered.
 """
 import os
+import tempfile
+# 0.16.1: point the workflow file at a scratch copy BEFORE cammello is
+# imported. Without this every window test would read the user's own
+# workflows.toml, so editing it could break tests unrelated to workflows.
+os.environ.setdefault('CAMMELLO_WORKFLOWS',
+                      os.path.join(tempfile.mkdtemp(), 'workflows.toml'))
+import os
 import sys
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -42,13 +49,21 @@ check('portraits offers no object location',
       not workflows.offers_object_location('portraits'))
 check('buildings offers the object location',
       workflows.offers_object_location('buildings'))
-check('both workflows offer the camera location',
-      all(workflows.offers_camera_location(k) for k in workflows.keys()))
+# 0.16.1: the camera position is hidden in the event workflow just like the
+# object position - "alles mit Location brauchen wir nicht im
+# Event-Workflow". Until 0.16.0 the flag said the opposite of what the UI
+# did: camera_location was True for portraits, while
+# _apply_workflow_visibility hid BOTH coordinate rows there. Nothing was
+# broken because nobody read the flag; now that the file drives the UI, the
+# two agree.
+check('portraits offers no camera location either',
+      not workflows.offers_camera_location('portraits'))
+check('buildings offers the camera location',
+      workflows.offers_camera_location('buildings'))
 check('every entry carries the full set of fields',
-      all(set(wf) == {'key', 'label', 'templates', 'base_description',
-                      'categories', 'sdc', 'camera_location',
-                      'object_location'}
-          for wf in workflows.all_workflows()))
+      all(set(wf) == {'key', 'label', 'hide', 'preset', 'example'}
+          for wf in workflows.all_workflows()),
+      str([sorted(wf) for wf in workflows.all_workflows()][:1]))
 check('the keys are unique',
       len(set(workflows.keys())) == len(workflows.keys()))
 

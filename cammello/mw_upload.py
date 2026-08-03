@@ -349,6 +349,15 @@ class MWUploadMixin:
         if failed:
             detail += '\n' + tr('{n} file(s) failed and will not be '
                                 'retried.').format(n=failed)
+        # 0.16.1: unreadable files ARE resumed, so say so - otherwise they
+        # sit inside the "still to go" number with no explanation of why
+        # they did not go up the first time.
+        unreadable = len(j.unreadable_entries())
+        if unreadable:
+            detail += '\n' + tr(
+                '{n} file(s) could not be read from disk last time (offline '
+                'files, a disconnected drive). Make sure they are available, '
+                'then resume.').format(n=unreadable)
         box.setInformativeText(detail + '\n\n'
                                + tr('Resume it now?'))
         resume_btn = box.addButton(tr('Resume'), QMessageBox.AcceptRole)

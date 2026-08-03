@@ -42,8 +42,15 @@ PENDING = 'pending'
 IN_FLIGHT = 'in_flight'
 DONE = 'done'
 FAILED = 'failed'
+# 0.16.1: the upload never happened because the file could not be READ from
+# the local disk. Deliberately NOT 'failed': a server rejection (bad
+# filename, missing licence) repeats itself on a resume, which is why failed
+# entries are skipped - but an unreadable file usually means it was offline
+# (a cloud placeholder), on a disconnected drive or on removed media. Once
+# that is sorted out the very same file goes up fine, so it stays open.
+UNREADABLE = 'unreadable'
 
-OPEN_STATES = (PENDING, IN_FLIGHT)
+OPEN_STATES = (PENDING, IN_FLIGHT, UNREADABLE)
 
 
 def journal_dir():
@@ -135,11 +142,18 @@ class Journal:
         return done, failed, openc, len(self.entries)
 
     def is_resumable(self):
-        """True while files remain that were never uploaded. Entries that
-        FAILED are not counted: they were attempted and rejected (a bad
-        filename, a missing licence), so resuming would only repeat the
-        error. They stay in the journal for the report."""
+        """True while files remain that were never uploaded.
+
+        Entries that FAILED are not counted: they were attempted and
+        rejected (a bad filename, a missing licence), so resuming would only
+        repeat the error. They stay in the journal for the report.
+        UNREADABLE entries DO count - see the constant for why.
+        """
         return any(e['status'] in OPEN_STATES for e in self.entries)
+
+    def unreadable_entries(self):
+        """Entries whose file could not be read locally (0.16.1)."""
+        return [e for e in self.entries if e['status'] == UNREADABLE]
 
     def open_entries(self):
         return [e for e in self.entries if e['status'] in OPEN_STATES]

@@ -1,5 +1,12 @@
 """Undo for image edits, and expert mode overruling the workflow (0.15.0)."""
 import os
+import tempfile
+# 0.16.1: point the workflow file at a scratch copy BEFORE cammello is
+# imported. Without this every window test would read the user's own
+# workflows.toml, so editing it could break tests unrelated to workflows.
+os.environ.setdefault('CAMMELLO_WORKFLOWS',
+                      os.path.join(tempfile.mkdtemp(), 'workflows.toml'))
+import os
 import sys
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')

@@ -6,9 +6,80 @@ import requests
 from .constants import *
 from .constants import __version__
 from .sdc import extract_name_from_caption
+from .i18n import tr
 
 
 REDACT_KEYS = {'password', 'lgpassword', 'token', 'lgtoken', 'logintoken'}
+
+
+class LocalFileError(Exception):
+    """The file could not be READ from the local disk (0.16.1).
+
+    Kept apart from every other upload failure for two reasons, both learned
+    from a user who lost 490 of 501 files to it:
+
+      * The message has to name the LOCAL PATH. The old code let the bare
+        OSError escape, and the surrounding log line names the COMMONS
+        TARGET name - so the report pointed at a file that does not exist on
+        the user's disk, and there was no way to tell which photo was
+        actually unreadable.
+      * It is worth RETRYING. A server rejection (bad filename, missing
+        licence) will fail again on a resume, which is why the journal skips
+        failed entries. A local read error is the opposite: it usually means
+        the file was offline (a cloud placeholder), on a disconnected drive
+        or on removed media, and once that is sorted out the very same file
+        goes up fine.
+
+    `path` is the local file, `reason` the original OSError text.
+    """
+
+    def __init__(self, path, reason):
+        self.path = path
+        self.reason = reason
+        self.remote = is_remote_path(path)
+        msg = tr('The file could not be read: {path} ({reason})').format(
+            path=path, reason=reason)
+        if self.remote:
+            # 0.16.1 (Harald: "nur bei Problemen hinweisen"): the hint is
+            # attached HERE, where a read has actually failed - not as a
+            # warning when files are added. A network drive works fine most
+            # of the time, so warning up front would cry wolf; at this point
+            # it is the single most useful sentence we can offer, because a
+            # dropped share is exactly what this failure looks like.
+            msg += ' ' + tr('The file is on a network or removable drive. '
+                            'Copy it to a local folder and try again.')
+        super().__init__(msg)
+
+
+def is_remote_path(path):
+    """Whether `path` lives on a network share or removable drive.
+
+    Windows: a UNC path (two leading backslashes) is remote by definition;
+    for a drive letter GetDriveTypeW is asked - 4 is DRIVE_REMOTE, 2 is
+    DRIVE_REMOVABLE. Other systems: anything under the usual mount points
+    for mounted volumes.
+
+    Best effort by design. Never raises and never blocks: this runs while an
+    upload has already gone wrong, and a wrong guess must cost nothing more
+    than a missing hint.
+    """
+    try:
+        path = os.path.abspath(path)
+        if sys.platform == 'win32':
+            if path.startswith('\\\\'):
+                return True
+            drive = os.path.splitdrive(path)[0]
+            if not drive:
+                return False
+            import ctypes
+            kind = ctypes.windll.kernel32.GetDriveTypeW(f'{drive}\\')
+            return kind in (2, 4)      # DRIVE_REMOVABLE, DRIVE_REMOTE
+        if sys.platform == 'darwin':
+            return path.startswith('/Volumes/')
+        return path.startswith(('/media/', '/mnt/', '/run/media/'))
+    except Exception:
+        return False
+
 
 class MediaWikiApi:
     def __init__(self, api_url, username, password, timeout=120, logger=None,
@@ -282,7 +353,25 @@ class MediaWikiApi:
 
     # ── Upload ───────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def check_readable(filepath):
+        """Raise LocalFileError unless the file can actually be read.
+
+        Opening is not enough to tell: Windows hands out a handle for a
+        OneDrive placeholder or a file on a dropped network share and only
+        fails when the data is asked for. So one byte is actually read.
+        Cheap - one open and one byte - and it turns a traceback from deep
+        inside requests into a sentence naming the file.
+        """
+        try:
+            with open(filepath, 'rb') as fh:
+                fh.read(1)
+        except OSError as e:
+            raise LocalFileError(filepath, e.strerror or str(e)) from e
+
     def upload(self, filename, filepath, wikitext, comment, ignore_warnings=False):
+        # Before anything else: can this file be read at all? (0.16.1)
+        self.check_readable(filepath)
         size = os.path.getsize(filepath) if os.path.exists(filepath) else -1
         self.log.info('Uploading "%s" (%.1f MB)…',
                       filename, size / 1e6 if size > 0 else 0.0)
@@ -298,8 +387,17 @@ class MediaWikiApi:
                 }
                 if ignore_warnings:
                     data['ignorewarnings'] = '1'
-                r = self._request('POST', f'upload {filename}', data=data,
-                                  files={'file': (os.path.basename(filepath), f)})
+                try:
+                    r = self._request(
+                        'POST', f'upload {filename}', data=data,
+                        files={'file': (os.path.basename(filepath), f)})
+                except OSError as e:
+                    # requests reads the handle itself while building the
+                    # multipart body, so a disk that goes away mid-run
+                    # surfaces HERE, not at check_readable above. Same
+                    # translation, so both look alike to the user.
+                    raise LocalFileError(filepath,
+                                         e.strerror or str(e)) from e
             result = self._json(r, f'upload {filename}')
 
             code, info = self._check_error(result, f'upload {filename}')

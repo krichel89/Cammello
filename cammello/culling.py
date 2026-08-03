@@ -426,6 +426,37 @@ _XMP_SKELETON = ('<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
                  '<?xpacket end="w"?>')
 
 
+def rating_label_for_path(path):
+    """(rating, label_text) for ONE file path, without pyexiv2 (0.16.1).
+
+    read_item_metadata() needs a CullItem, which only the culling module
+    has. The upload list works with bare paths, so the filter bar needs
+    this way in. Same precedence and same sources as read_item_metadata:
+    an XMP sidecar next to the file wins over the file's own embedded XMP,
+    and a RAW file is never opened.
+
+    Returns (0, '') for anything unrated or unreadable - a file that cannot
+    be read must look "unrated" to the filter, never raise.
+    """
+    stem, ext = os.path.splitext(path)
+    sources = []
+    sidecar = stem + '.xmp'
+    if os.path.exists(sidecar):
+        sources.append(sidecar)
+    if ext.lower() in JPEG_EXTENSIONS:
+        sources.append(path)
+    for src in sources:
+        rating, label = _read_rating_label_text(src)
+        if rating is None and label is None:
+            continue
+        try:
+            value = int(float(rating)) if rating is not None else 0
+        except (TypeError, ValueError):
+            value = 0
+        return max(-1, min(5, value)), label or ''
+    return 0, ''
+
+
 def read_item_metadata(item):
     """Fill item.rating / item.label from disk WITHOUT pyexiv2.
 

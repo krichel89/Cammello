@@ -4,6 +4,57 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.1]
+
+### Added
+- The workflows are an editable text file: `workflows.toml` in the user
+  directory next to the log, created from a commented template on first
+  start and never touched again, so it survives updates. A new workflow is
+  a new `[[workflow]]` block; `felder_aus` hides fields, `vorbelegung`
+  fills an empty field, `beispiel` sets nothing but the grey placeholder.
+  Deliberately NOT under assets/: a built Cammello unpacks that fresh on
+  every start, so an edit there would be gone at the next launch.
+- File > Open workflow file... and File > Reload workflows.
+- The last module is called "Uploads" and carries a Wikimedia Commons
+  group with its own upload button; the button in the MediaWiki module
+  stays. The list selection is carried over to the table and the ordinary
+  upload runs, so every check that button does applies here too.
+- A filter bar at the head of the image column: rating, colour label and
+  channel. It drives the SELECTION instead of hiding anything - what does
+  not match stays visible, lightly greyed. Lightroom semantics: stars are
+  a ">= n" threshold, colours and channels are OR within their group, the
+  groups combine with AND.
+- The generated template lists every available field name, produced from
+  the registry in the code so it cannot drift.
+
+### Changed
+- Field visibility is driven by field NAME instead of two hard-coded
+  booleans, so any field can be hidden - not just the coordinates and the
+  event. The list is an exclusion list: a field a later version adds shows
+  up on its own.
+- Presets are no longer limited to the templates and the base description;
+  a workflow can preset any text field.
+
+### Fixed
+- A file that cannot be READ from the local disk (an offline cloud
+  placeholder, a disconnected drive, removed media) now reports the LOCAL
+  PATH and the reason instead of letting a bare OSError escape as a
+  traceback that named the Commons target - a file that does not exist on
+  the user's disk. Cammello test-reads one byte before each upload.
+- When the unreadable file sits on a network or removable drive, the
+  message says so and suggests copying it locally. Only then - adding files
+  from such a drive is not warned about, because it usually works.
+- Such files are marked `unreadable` rather than `failed`, so a resume
+  offers them again once they are available; genuine rejections are still
+  skipped. The run summary and the resume dialog both say how many there
+  were.
+- With a filter active, an empty selection no longer means "all files":
+  a filter matching nothing would otherwise have handed the whole list to
+  the upload.
+- A broken or unreadable workflow file falls back to the built-in
+  workflows and reports the reason (with line and column) instead of
+  failing silently.
+
 ## [0.16.0] - 2026-07-29
 
 ### Added

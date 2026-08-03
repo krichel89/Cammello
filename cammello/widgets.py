@@ -17,6 +17,11 @@ from .constants import *
 from .i18n import tr
 from .sdc import *
 from . import credentials
+from . import channels
+from . import filters
+# The colour-label swatches must match the culling module's exactly -
+# same colours, same order - so one swatch means one thing app-wide.
+from .culling import LABEL_COLORS as LABEL_COLORS_UI
 
 
 class FilenameDelegate(QStyledItemDelegate):
@@ -1598,3 +1603,147 @@ class ModuleStrip(QWidget):
     def _sync(self, index):
         for i, b in enumerate(self._buttons):
             b.setChecked(i == index)
+
+
+class FilterBar(QWidget):
+    """Stars, colour swatches and channel dots for the upload list (0.16.1).
+
+    Harald: "im Kopf der Bilderspalte noch Filtermoeglichkeiten nach
+    Sternen, Farben und Kanaelen ... Sterne als und, farben als oder, wie
+    Lightroom."
+
+    Deliberately built to LOOK AND FEEL like the culling toolbar's filter
+    cluster, down to the ★/☆ toggle and the swatch styling: the same gesture
+    should mean the same thing in both modules. What differs is the effect -
+    the culling bar hides what does not match, this one drives the
+    SELECTION and leaves everything visible but greyed (Harald: "Die Filter
+    sollen die Auswahl steuern, nicht gewaehlte Bilder werden leicht
+    gegraut").
+
+    Emits `changed` with a filters.FileFilter whenever the user touches
+    anything. The widget owns no file list - the module that embeds it
+    decides what to do with the filter.
+    """
+
+    changed = pyqtSignal(object)
+
+    def __init__(self, parent=None, with_channels=True):
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        self._min_rating = 0
+
+        row.addWidget(QLabel(tr('Filter:')))
+
+        # ── Stars: a threshold, exactly like the culling bar ─────────────
+        self.star_btns = []
+        for n in range(1, filters.MAX_STARS + 1):
+            b = QToolButton()
+            b.setText('☆')
+            b.setCheckable(True)
+            b.setAutoRaise(True)
+            b.setFixedSize(22, 22)
+            b.setProperty('cammelloCompact', True)
+            b.setToolTip(tr('Select images with {n} stars or more '
+                            '(click again to switch it off).').format(n=n))
+            b.clicked.connect(lambda _c, n=n: self._on_star(n))
+            self.star_btns.append(b)
+            row.addWidget(b)
+
+        # ── Colours: OR ──────────────────────────────────────────────────
+        row.addSpacing(8)
+        self.color_btns = []
+        swatches = list(LABEL_COLORS_UI) + ['#888']       # last = no label
+        for i, col in enumerate(swatches):
+            b = QToolButton()
+            b.setCheckable(True)
+            b.setFixedSize(20, 20)
+            b.setProperty('cammelloSwatch', True)
+            b.setProperty('cammelloCompact', True)
+            # Repeating the :checked variant is required - see the same
+            # comment in mw_culling: the generic "checked = blue" rule would
+            # otherwise paint the swatch blue.
+            b.setStyleSheet(f'QToolButton, QToolButton:checked,'
+                            f' QToolButton:hover, QToolButton:pressed'
+                            f' {{background:{col};}}')
+            b.setToolTip(tr('no label') if i == len(swatches) - 1
+                         else tr('colour {n}').format(n=i + 1))
+            b.clicked.connect(self._emit)
+            self.color_btns.append(b)
+            row.addWidget(b)
+
+        # ── Channels: OR ─────────────────────────────────────────────────
+        self.channel_btns = []
+        if with_channels:
+            row.addSpacing(8)
+            for key, col, tip in (
+                    (channels.MARK_COMMONS, channels.COLOR_COMMONS,
+                     tr('Marked for Commons (CC)')),
+                    (channels.MARK_COMMERCIAL, channels.COLOR_COMMERCIAL,
+                     tr('Marked for commercial use')),
+                    (filters.NO_CHANNEL, '#888', tr('No channel mark'))):
+                b = QToolButton()
+                b.setCheckable(True)
+                b.setFixedSize(20, 20)
+                b.setProperty('cammelloSwatch', True)
+                b.setProperty('cammelloCompact', True)
+                b.setStyleSheet(f'QToolButton, QToolButton:checked,'
+                                f' QToolButton:hover, QToolButton:pressed'
+                                f' {{background:{col};'
+                                f' border-radius:10px;}}')
+                b.setToolTip(tip)
+                b.setProperty('cammelloChannelKey', key)
+                b.clicked.connect(self._emit)
+                self.channel_btns.append(b)
+                row.addWidget(b)
+
+        row.addSpacing(8)
+        self.clear_btn = QToolButton()
+        self.clear_btn.setText('\u2715')
+        self.clear_btn.setAutoRaise(True)
+        self.clear_btn.setFixedSize(22, 22)
+        self.clear_btn.setProperty('cammelloCompact', True)
+        self.clear_btn.setToolTip(tr('Switch the filter off'))
+        self.clear_btn.clicked.connect(self.clear)
+        row.addWidget(self.clear_btn)
+        row.addStretch(1)
+
+        self._update_stars()
+
+    # ── Reading the state ────────────────────────────────────────────────
+    def current_filter(self):
+        """The FileFilter the buttons currently describe."""
+        colors = set()
+        for i, b in enumerate(self.color_btns):
+            if not b.isChecked():
+                continue
+            colors.add(filters.NO_COLOR if i == len(self.color_btns) - 1
+                       else i)
+        chans = {b.property('cammelloChannelKey')
+                 for b in self.channel_btns if b.isChecked()}
+        return filters.FileFilter(self._min_rating, colors, chans)
+
+    # ── Reacting ─────────────────────────────────────────────────────────
+    def _on_star(self, stars):
+        """Clicking the star that is already the threshold switches it off -
+        the same gesture as the culling bar."""
+        self._min_rating = 0 if stars == self._min_rating else stars
+        self._update_stars()
+        self._emit()
+
+    def _update_stars(self):
+        for i, b in enumerate(self.star_btns, start=1):
+            active = i <= self._min_rating
+            b.setChecked(active)
+            b.setText('★' if active else '☆')
+
+    def clear(self):
+        self._min_rating = 0
+        self._update_stars()
+        for b in self.color_btns + self.channel_btns:
+            b.setChecked(False)
+        self._emit()
+
+    def _emit(self):
+        self.changed.emit(self.current_filter())
