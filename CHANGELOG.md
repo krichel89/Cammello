@@ -36,6 +36,10 @@ adheres to [Semantic Versioning](https://semver.org/).
   a workflow can preset any text field.
 
 ### Fixed
+- Windows build: pyexiv2 is capped below 2.16. Version 2.16.0 (released
+  2026-08-02) crashes PyInstaller's dependency analysis on Windows with an
+  access violation while importing `pyexiv2.lib`. Mac and Linux are not
+  affected.
 - A file that cannot be READ from the local disk (an offline cloud
   placeholder, a disconnected drive, removed media) now reports the LOCAL
   PATH and the reason instead of letting a bare OSError escape as a

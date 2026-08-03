@@ -43,9 +43,21 @@ if command -v wd >/dev/null 2>&1; then
           [ -n "$guid" ] && wd update-claim "$guid" --rank "$OLD_RANK" \
             --summary "demote superseded software version"
         done
-    # 2) Add the new version as preferred (date + reference URL, see template).
-    wd edit-entity ./wikidata_version.js "$QID" "$VERSION" "$URL" \
-      --summary "add software version ${VERSION}"
+    # 2) Add the new version as preferred (date + reference URL, see
+    #    template) - but ONLY if it is not recorded yet. Without this guard a
+    #    RE-RUN at the same version (e.g. after a failed platform build, as
+    #    with the Windows job of 0.16.1) creates a SECOND, identical P348
+    #    statement. Step 1 above cannot catch that: it deliberately skips
+    #    the current version so it does not demote what it just promoted.
+    if wd data "$QID" --props claims \
+         | jq -e --arg v "$VERSION" \
+             '.claims.P348[]? | select(.mainsnak.datavalue.value == $v)' \
+             >/dev/null; then
+      echo "NOTE: Wikidata already lists version ${VERSION} - not adding it again."
+    else
+      wd edit-entity ./wikidata_version.js "$QID" "$VERSION" "$URL" \
+        --summary "add software version ${VERSION}"
+    fi
   } || echo "WARNING: Wikidata P348 update failed - run it manually (see release.sh)."
 else
   echo "NOTE: wikibase-cli (wd) not installed - skipping Wikidata P348 update."

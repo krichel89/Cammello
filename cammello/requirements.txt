@@ -1,7 +1,16 @@
 PyQt5>=5.15.0
 requests>=2.28.0
 Pillow>=9.0.0
-pyexiv2>=2.15
+# 03.08.2026: OBERGRENZE, nicht kosmetisch. pyexiv2 2.16.0 (erschienen
+# am 02.08.2026) laesst den Windows-Build von PyInstaller abstuerzen:
+# beim Ermitteln der Bibliotheksabhaengigkeiten importiert PyInstaller
+# jedes eingesammelte Paket in einem eigenen Prozess, und der Import
+# von pyexiv2.lib (laedt exiv2.dll per ctypes) endet mit
+# 0xC0000005 (Zugriffsverletzung). Mac und Linux sind NICHT betroffen -
+# der 0.16.1-Release hat dort mit 2.16.0 sauber gebaut.
+# Vor dem Anheben: einen Windows-Build mit der neuen Version testen.
+pyexiv2>=2.15,<2.16
 paramiko>=3.0
 rawpy>=0.27
 exifread>=3.0
+keyring>=24
