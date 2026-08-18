@@ -83,7 +83,8 @@ def is_remote_path(path):
 
 class MediaWikiApi:
     def __init__(self, api_url, username, password, timeout=120, logger=None,
-                 oauth_token=None, oauth_secret=None):
+                 oauth_token=None, oauth_secret=None,
+                 bearer_token=None, bearer_refresher=None):
         self.api_url = api_url
         self.timeout = timeout
         self.log = logger or logging.getLogger(APP_NAME)
@@ -101,6 +102,16 @@ class MediaWikiApi:
         self._oauth_token = oauth_token or ''
         self._oauth_secret = oauth_secret or ''
         self._use_oauth = bool(self._oauth_token and self._oauth_secret)
+        # OAuth 2.0 (0.17.0): one Bearer header instead of per-request
+        # signing. bearer_refresher is a callable returning a FRESH access
+        # token (renewing via the refresh token and persisting the rotated
+        # pair) or None; access tokens expire after four hours, so one
+        # failed request gets one refresh-and-retry before giving up.
+        self._bearer_token = bearer_token or ''
+        self._bearer_refresher = bearer_refresher
+        self._use_bearer = bool(self._bearer_token)
+        if self._use_bearer:
+            self._use_oauth = False
 
     # ── central helpers ──────────────────────────────────────────────────────
 
@@ -172,6 +183,10 @@ class MediaWikiApi:
                 method, url, sign_params,
                 self._oauth_token, self._oauth_secret)
             kwargs['headers'] = headers
+        elif self._use_bearer:
+            headers = dict(kwargs.get('headers') or {})
+            headers['Authorization'] = f'Bearer {self._bearer_token}'
+            kwargs['headers'] = headers
 
         try:
             r = self.session.request(method, url, **kwargs)
@@ -179,9 +194,54 @@ class MediaWikiApi:
             self.log.error('✗ Network error during %s: %s', desc, e, exc_info=True)
             raise Exception(f'Network error during {desc}: {e}') from e
 
+        # OAuth 2.0 (0.17.0): access tokens die after four hours. When a
+        # bearer request comes back as unauthorized, refresh ONCE and
+        # retry the same request - and only once, so a genuinely revoked
+        # authorization fails loudly instead of looping.
+        if (self._use_bearer and self._bearer_refresher is not None
+                and self._bearer_looks_expired(r)):
+            fresh = None
+            try:
+                fresh = self._bearer_refresher()
+            except Exception as e:
+                self.log.warning('Bearer refresh failed: %s', e)
+            if fresh:
+                self.log.info('Access token expired - refreshed, '
+                              'retrying %s once.', desc)
+                self._bearer_token = fresh
+                headers = dict(kwargs.get('headers') or {})
+                headers['Authorization'] = f'Bearer {fresh}'
+                kwargs['headers'] = headers
+                try:
+                    r = self.session.request(method, url, **kwargs)
+                except requests.exceptions.RequestException as e:
+                    self.log.error('✗ Network error during %s (retry): %s',
+                                   desc, e, exc_info=True)
+                    raise Exception(
+                        f'Network error during {desc}: {e}') from e
+
         self.log.debug('← [%s] HTTP %s, %s bytes',
                        desc, r.status_code, len(r.content or b''))
         return r
+
+    @staticmethod
+    def _bearer_looks_expired(r):
+        """Whether this response says the access token no longer works.
+
+        Two shapes occur: HTTP 401 from the REST layer, and an HTTP 200
+        action-API answer whose error code starts with
+        mwoauth-invalid-authorization (that is how the OAuth extension's
+        session provider reports a dead token).
+        """
+        if r.status_code == 401:
+            return True
+        if r.status_code == 200:
+            try:
+                err = (r.json().get('error') or {}).get('code', '')
+            except ValueError:
+                return False
+            return str(err).startswith('mwoauth-invalid-authorization')
+        return False
 
     def _json(self, r, desc):
         """Parse the response as JSON; otherwise raise a meaningful exception."""
@@ -273,7 +333,7 @@ class MediaWikiApi:
         # OAuth path: there is no login handshake and no session cookie - the
         # Authorization header on every request authenticates us. Just confirm
         # the server sees a real (non-anonymous) user before we start writing.
-        if self._use_oauth:
+        if self._use_oauth or self._use_bearer:
             self.log.info('Authenticating via OAuth (no login call needed) …')
             self._verify_session()
             return True

@@ -30,6 +30,7 @@ from .workers import *
 from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
+from .widgets import stored_oauth2_tokens, store_oauth2_tokens
 from .editors import *
 from . import mw_oauth
 from . import channels
@@ -93,6 +94,10 @@ class MWFilesMixin:
         backwards from 0.12.7.
         """
         if mw_oauth.is_configured():
+            access, refresh = stored_oauth2_tokens()
+            if access and not force:
+                self._login_with_stored_oauth2(access)
+                return
             token, secret = stored_oauth_tokens()
             if token and secret and not force:
                 self._login_with_stored_oauth(token, secret)
@@ -107,14 +112,44 @@ class MWFilesMixin:
             # Authorizing is not the same as being signed in: without this
             # the user would have to press Login again after the browser
             # round-trip.
-            token, secret = stored_oauth_tokens()
-            if token and secret:
-                self._login_with_stored_oauth(token, secret)
+            access, refresh = stored_oauth2_tokens()
+            if access:
+                self._login_with_stored_oauth2(access)
+            else:
+                token, secret = stored_oauth_tokens()
+                if token and secret:
+                    self._login_with_stored_oauth(token, secret)
             if hasattr(self, '_refresh_oauth_status'):
                 self._refresh_oauth_status()
             return
         # No consumer in this build: the bot password IS the way in.
         self._login_with_botpassword()
+
+    def _login_with_stored_oauth2(self, access):
+        """Sign in with the stored OAuth 2.0 access token (0.17.0).
+
+        The refresher hands api.py a fresh token when the four-hour expiry
+        strikes mid-session: it renews via the CURRENT stored refresh
+        token and persists the ROTATED pair the server answers with -
+        keeping the old one would kill the sign-in on the second renewal.
+        """
+        def _refresher():
+            from . import mw_oauth2
+            _cur, cur_refresh = stored_oauth2_tokens()
+            if not cur_refresh:
+                return None
+            payload = mw_oauth2.refresh_tokens(cur_refresh)
+            store_oauth2_tokens(payload['access_token'],
+                                payload.get('refresh_token', cur_refresh))
+            return payload['access_token']
+
+        s = QSettings(APP_NAME, 'Login')
+        api_url = (s.value('api_url', '')
+                   or 'https://commons.wikimedia.org/w/api.php')
+        username = s.value('oauth_username', '') or 'OAuth'
+        self._start_login_worker(api_url, username, '',
+                                 bearer_token=access,
+                                 bearer_refresher=_refresher)
 
     def _login_with_stored_oauth(self, token, secret):
         s = QSettings(APP_NAME, 'Login')
@@ -151,13 +186,15 @@ class MWFilesMixin:
                 + tr('Not logged in – sign in') + '</a>')
 
     def _start_login_worker(self, api_url, username, password,
-                            oauth_token=None, oauth_secret=None):
+                            oauth_token=None, oauth_secret=None,
+                            bearer_token=None, bearer_refresher=None):
         self.login_btn.setEnabled(False)
         self._set_login_state('busy')
 
         self._login_worker = LoginWorker(
             api_url, username, password, self._get_timeout(), self.logger,
-            oauth_token=oauth_token, oauth_secret=oauth_secret)
+            oauth_token=oauth_token, oauth_secret=oauth_secret,
+            bearer_token=bearer_token, bearer_refresher=bearer_refresher)
         self._login_worker.success.connect(
             lambda api: self._on_login_success(api, username))
         self._login_worker.failure.connect(self._on_login_failure)
@@ -231,17 +268,23 @@ class MWFilesMixin:
         of two.
         """
         try:
-            entries = sorted(os.listdir(folder))
+            with os.scandir(folder) as it:
+                entries = sorted(it, key=lambda e: e.name)
+                out = []
+                for entry in entries:
+                    # scandir answers is_file() from the directory read on
+                    # most systems - no extra stat per name, which is what
+                    # made the listdir version slow on large folders.
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    if os.path.splitext(entry.name)[1].lower() in IMAGE_EXTS:
+                        out.append(entry.path)
+                return out
         except OSError:
             return []
-        out = []
-        for name in entries:
-            path = os.path.join(folder, name)
-            if not os.path.isfile(path):
-                continue
-            if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
-                out.append(path)
-        return out
 
     def open_directory(self):
         """Load a whole folder into the table, skipping the culling module.
@@ -269,7 +312,7 @@ class MWFilesMixin:
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if answer != QMessageBox.Yes:
                 return
-        self.logger.info('Opening folder %r with %d file(s).',
+        self.logger.info('Opening directory %r with %d file(s).',
                          folder, len(paths))
         self._add_paths_with_progress(paths)
 

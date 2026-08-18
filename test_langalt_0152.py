@@ -158,8 +158,14 @@ notes = 'notes_' + __version__.replace('.', '') + '.md'
 check('and points at notes that exist',
       f'NOTES_FILE="{notes}"' in rel_sh
       and os.path.exists(os.path.join(root, notes)), notes)
-check('this release is a working version', updates.is_stable(__version__),
-      __version__)
+# 0.17.0: the release may be EITHER kind - what must hold is that
+# is_stable() agrees with the version rule (minor parity), not that every
+# release is stable. The old check froze the 0.16 state and would fail on
+# every deliberate test series.
+_minor_even = int(__version__.split('.')[1]) % 2 == 0
+check('is_stable() agrees with the minor-parity rule for this release',
+      updates.is_stable(__version__) == _minor_even,
+      f'{__version__} minor_even={_minor_even}')
 
 # ── the four corrections from Harald's review (0.15.2) ───────────────────────
 from cammello.editors import StructuredDescriptionEditor

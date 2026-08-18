@@ -401,6 +401,41 @@ def verifier_from_input(text):
 # fall back to QSettings 'Login' - same trust level as the old plaintext
 # BotPassword, so the app keeps working everywhere.
 
+def store_oauth2_tokens(access, refresh):
+    """OAuth 2.0: write the CURRENT pair as one keyring entry. -> bool.
+
+    Called after every refresh too - the server rotates the refresh token,
+    so persisting the response pair is what keeps the sign-in alive."""
+    blob = json.dumps({'access': access, 'refresh': refresh})
+    if credentials.store(credentials.mw_oauth2_slot(), blob):
+        return True
+    s = QSettings(APP_NAME, 'Login')
+    s.setValue('oauth2_tokens', blob)          # no-backend fallback
+    return False
+
+
+def stored_oauth2_tokens():
+    """-> (access, refresh), ('', '') when not authorized."""
+    blob = credentials.load(credentials.mw_oauth2_slot())
+    if not blob:
+        blob = QSettings(APP_NAME, 'Login').value('oauth2_tokens', '')
+    if blob:
+        try:
+            data = json.loads(blob)
+            return data.get('access', '') or '', data.get('refresh', '') or ''
+        except ValueError:
+            pass
+    return '', ''
+
+
+def clear_stored_oauth2():
+    credentials.delete(credentials.mw_oauth2_slot())
+    credentials.clear_cache()
+    s = QSettings(APP_NAME, 'Login')
+    s.remove('oauth2_tokens')
+    s.sync()
+
+
 def store_oauth_tokens(token, secret):
     """Write both halves as ONE keyring entry. -> bool success."""
     blob = json.dumps({'token': token, 'secret': secret})
@@ -494,6 +529,15 @@ class OAuthLoginDialog(QDialog):
         intro.setWordWrap(True)
         v.addWidget(intro)
 
+        # 0.17.0: OAuth 2.0 (PKCE) is the DEFAULT way in for this test
+        # series; this box switches back to the proven 1.0a signing path.
+        # Deliberately not persisted - an exception switch like the two
+        # below (the 0.12.8 lesson).
+        self.oauth1_cb = QCheckBox(
+            tr('Use the classic authorization (OAuth 1.0a)'))
+        self.oauth1_cb.setChecked(False)
+        v.addWidget(self.oauth1_cb)
+
         self.show_only_cb = QCheckBox(
             tr('Show the link only - do not open the default browser'))
         # 0.12.8 (Harald): BOTH boxes start unchecked, every time. They
@@ -546,10 +590,10 @@ class OAuthLoginDialog(QDialog):
             'instead jumps to a 127.0.0.1 address - even one that fails to '
             'load - copy that entire address from the address bar and paste '
             'it here; Cammello reads the confirmation out of it.'))
-        self.verifier_edit.returnPressed.connect(self._finish_oob)
+        self.verifier_edit.returnPressed.connect(self._finish_paste)
         vr.addWidget(self.verifier_edit, 1)
         self.finish_btn = QPushButton(tr('Finish'))
-        self.finish_btn.clicked.connect(self._finish_oob)
+        self.finish_btn.clicked.connect(self._finish_paste)
         vr.addWidget(self.finish_btn)
         self.verifier_row.setVisible(False)
         v.addWidget(self.verifier_row)
@@ -596,6 +640,9 @@ class OAuthLoginDialog(QDialog):
                        'automatically: %s).',
                        'manual' if self.oob_cb.isChecked() else 'loopback',
                        'no' if self.show_only_cb.isChecked() else 'yes')
+        if not self.oauth1_cb.isChecked():
+            self._start_oauth2()
+            return
         if self.oob_cb.isChecked():
             self._start_oob()
             return
@@ -608,6 +655,45 @@ class OAuthLoginDialog(QDialog):
         self._worker.succeeded.connect(self._on_success)
         self._worker.failed.connect(self._on_failure)
         self._worker.start()
+
+    # ── OAuth 2.0 (PKCE) flow ────────────────────────────────────────────
+
+    def _start_oauth2(self):
+        from . import mw_oauth2
+        self._set_status(tr('Waiting for authorization in the browser…'),
+                         'orange')
+        self._worker = mw_oauth2.OAuth2AuthorizeWorker(parent=self)
+        self._worker.ready.connect(self._on_oauth2_url)
+        self._worker.succeeded.connect(self._on_oauth2_success)
+        self._worker.failed.connect(self._on_failure)
+        self._worker.start()
+
+    def _on_oauth2_url(self, url):
+        self._on_url(url)
+        if not self.show_only_cb.isChecked():
+            QDesktopServices.openUrl(QUrl(url))
+        # The paste field of the manual flow doubles as the fallback here:
+        # if the loopback catch fails, the code sits in the address bar and
+        # pasting the whole URL works (code_from_input).
+        self.verifier_row.setVisible(True)
+        self.verifier_edit.setPlaceholderText(
+            tr('If nothing happens: paste the address bar line here'))
+
+    def _finish_oauth2_paste(self):
+        worker = self._worker
+        if worker is not None and hasattr(worker, 'finish_with_code'):
+            if not worker.finish_with_code(self.verifier_edit.text()):
+                self._set_status(tr('No authorization code found in the '
+                                    'pasted text.'), 'red')
+
+    def _on_oauth2_success(self, access, refresh, username):
+        self._log.info('OAuth 2.0: authorization completed for user '
+                       '"%s".', username)
+        store_oauth2_tokens(access, refresh)
+        self.settings.setValue('oauth_username', username)
+        self.settings.sync()
+        self.username = username
+        self.accept()
 
     # ── oob (manual code) flow ───────────────────────────────────────────
 
@@ -658,6 +744,13 @@ class OAuthLoginDialog(QDialog):
         # may be halfway through pasting. Log it and stay open.
         self._log.info('OAuth manual: automatic return did not happen (%s); '
                        'the manual entry stays available.', message)
+
+    def _finish_paste(self):
+        """Route the pasted text to whichever flow is running."""
+        if not self.oauth1_cb.isChecked():
+            self._finish_oauth2_paste()
+        else:
+            self._finish_oob()
 
     def _finish_oob(self):
         if self._oob_tokens is None:

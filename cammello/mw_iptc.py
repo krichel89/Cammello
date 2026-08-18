@@ -24,6 +24,7 @@ from PyQt5.QtCore import (Qt, QSize, QItemSelection,
 from .constants import *
 from . import iptc
 from . import channels
+from . import credentials
 from .ftp_workers import (FtpUploadWorker, PROTOCOLS, DEFAULT_PORTS,
                           sftp_available, sftp_unavailable_reason)
 from PyQt5.QtGui import QBrush, QColor, QPalette
@@ -348,8 +349,14 @@ class MWIptcMixin:
             self.ftp_password_edit = QLineEdit()
             self.ftp_password_edit.setEchoMode(QLineEdit.Password)
             fv.addRow(tr('Password:'), self.ftp_password_edit)
-            self.ftp_store_pw_cb = QCheckBox(
-                tr('Store password in settings (PLAIN TEXT - unsafe)'))
+            # 0.16.1: neutral label - whether the keyring or plaintext
+            # applies is only known by ASKING the keyring, and the window
+            # build must never touch it (macOS prompts on every access;
+            # test_keyring_01212 defends that). The tooltip tells the rule.
+            self.ftp_store_pw_cb = QCheckBox(tr('Store password'))
+            self.ftp_store_pw_cb.setToolTip(
+                tr('Kept in the system keyring when one is available; '
+                   'otherwise in the settings as plain text.'))
             fv.addRow('', self.ftp_store_pw_cb)
             self.ftp_dir_edit = QLineEdit()
             self.ftp_dir_edit.setPlaceholderText(tr('e.g.') + ' /upload')
@@ -956,7 +963,7 @@ class MWIptcMixin:
         if not self.ftp_host_edit.text().strip():
             QMessageBox.warning(self, 'FTP', tr('Host is missing.'))
             return False
-        if not self.ftp_password_edit.text():
+        if not self._ftp_effective_password():
             QMessageBox.warning(self, 'FTP', tr('Password is missing (it is asked '
                                 'per session unless you chose to store it).'))
             return False
@@ -1007,7 +1014,7 @@ class MWIptcMixin:
             protocol, self.ftp_host_edit.text().strip(),
             self.ftp_port_edit.text().strip(),
             self.ftp_user_edit.text().strip(),
-            self.ftp_password_edit.text(),
+            self._ftp_effective_password(),
             self.ftp_dir_edit.text().strip(), files, self.logger)
         self.ftp_worker.file_started.connect(self._ftp_dlg.set_current)
         self.ftp_worker.progress.connect(self._iptc_on_ftp_progress)
@@ -1042,6 +1049,27 @@ class MWIptcMixin:
         for attr, key, _l, _c in self._CONSTANT_UI:
             s.setValue('iptc_const_' + key, getattr(self, attr).text())
 
+    def _ftp_effective_password(self):
+        """The FTP password, loading it from the keyring on first use.
+
+        The edit is authoritative while it holds text. Empty edit + the
+        store checkbox on = the password may live in the keyring (or still
+        as plaintext from an older version): migrate_qsettings_value
+        fetches it, moves plaintext over, and the edit is filled so the
+        user sees what will be sent. This is the ONLY place the keyring is
+        read for FTP - never during the window build.
+        """
+        text = self.ftp_password_edit.text()
+        if text or not self.ftp_store_pw_cb.isChecked():
+            return text
+        slot = credentials.ftp_slot(self.ftp_user_edit.text().strip(),
+                                    self.ftp_host_edit.text().strip())
+        stored = credentials.migrate_qsettings_value(
+            self.settings, 'ftp_password', slot)
+        if stored:
+            self.ftp_password_edit.setText(stored)
+        return stored
+
     def _ftp_save_settings(self):
         s = self.settings
         s.setValue('ftp_protocol', self.ftp_protocol_combo.currentText())
@@ -1050,9 +1078,23 @@ class MWIptcMixin:
         s.setValue('ftp_user', self.ftp_user_edit.text())
         s.setValue('ftp_dir', self.ftp_dir_edit.text())
         s.setValue('ftp_store_pw', self.ftp_store_pw_cb.isChecked())
+        # 0.16.1: the password goes into the OS keyring when one is there -
+        # the same store the MediaWiki login has used since 0.11. QSettings
+        # plaintext remains the fallback so a machine without a keyring
+        # backend keeps working exactly as before.
+        slot = credentials.ftp_slot(self.ftp_user_edit.text().strip(),
+                                    self.ftp_host_edit.text().strip())
         if self.ftp_store_pw_cb.isChecked():
-            s.setValue('ftp_password', self.ftp_password_edit.text())
+            # An EMPTY edit with the box on means "keep what is stored" -
+            # the field starts empty on purpose (lazy load), so writing the
+            # empty string would wipe the stored password on every quit.
+            if self.ftp_password_edit.text():
+                if credentials.store(slot, self.ftp_password_edit.text()):
+                    s.remove('ftp_password')
+                else:
+                    s.setValue('ftp_password', self.ftp_password_edit.text())
         else:
+            credentials.delete(slot)
             s.remove('ftp_password')
 
     def _iptc_load_settings(self):
@@ -1077,4 +1119,8 @@ class MWIptcMixin:
         self.ftp_dir_edit.setText(s.value('ftp_dir', ''))
         self.ftp_store_pw_cb.setChecked(s.value('ftp_store_pw', False, type=bool))
         if self.ftp_store_pw_cb.isChecked():
+            # 0.16.1: at build time only the plaintext value is read - the
+            # keyring is deliberately not touched here (macOS prompts on
+            # every access). _ftp_effective_password() migrates and loads
+            # lazily the moment the password is actually needed.
             self.ftp_password_edit.setText(s.value('ftp_password', ''))

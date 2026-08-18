@@ -2654,12 +2654,6 @@ TRANSLATIONS = {
         'fr': 'Afficher :',
         'it': 'Mostra:',
     },
-    'all': {
-        'de': 'alle',
-        'es': 'todas',
-        'fr': 'toutes',
-        'it': 'tutte',
-    },
     'incl. rejects': {
         'de': 'inkl. Ausschuss',
         'es': 'incl. rechazadas',
@@ -3910,12 +3904,6 @@ TRANSLATIONS = {
         'fr': 'Ne signaler que les versions de travail',
         'it': 'Segnala solo le versioni di lavoro',
     },
-    'How many of the trailing digits {c} keeps. "all" takes the whole\nnumber: IMG_4711 becomes 4711. With 3 it becomes 711.': {
-        'de': 'Wie viele der Endziffern {c} übernimmt. „alle" nimmt die ganze\nNummer: aus IMG_4711 wird 4711. Mit 3 wird daraus 711.',
-        'es': 'Cuántas de las cifras finales conserva {c}. «todas» toma el número\nentero: IMG_4711 se convierte en 4711. Con 3 queda 711.',
-        'fr': 'Combien des chiffres finaux {c} conserve. « toutes » prend le nombre\nentier : IMG_4711 devient 4711. Avec 3, cela donne 711.',
-        'it': 'Quante delle cifre finali {c} mantiene. «tutte» prende il numero\nintero: IMG_4711 diventa 4711. Con 3 resta 711.',
-    },
     '(no source names available)': {
         'de': '(keine Quellnamen verfügbar)',
         'es': '(no hay nombres de origen disponibles)',
@@ -3945,12 +3933,6 @@ TRANSLATIONS = {
         'es': 'Ejemplo:',
         'fr': 'Exemple :',
         'it': 'Esempio:',
-    },
-    'Digits of the original number:': {
-        'de': 'Ziffern der Originalnummer:',
-        'es': 'Cifras del número original:',
-        'fr': 'Chiffres du numéro d’origine :',
-        'it': 'Cifre del numero originale:',
     },
     'Custom name - original file number': {
         'de': 'Benutzerdefinierter Name – Originaldateinummer',
@@ -3999,12 +3981,6 @@ TRANSLATIONS = {
         'es': 'Plantilla propia…',
         'fr': 'Modèle personnalisé…',
         'it': 'Modello personalizzato…',
-    },
-    'How many of the trailing digits of the original file name are kept.\n"all" takes the whole number: IMG_4711 becomes 4711. With 3 it becomes 711.': {
-        'de': 'Wie viele der Endziffern des Originaldateinamens übernommen werden.\n„alle" nimmt die ganze Nummer: aus IMG_4711 wird 4711. Mit 3 wird daraus 711.',
-        'es': 'Cuántas de las cifras finales del nombre original se conservan.\n«todas» toma el número entero: IMG_4711 se convierte en 4711. Con 3 queda 711.',
-        'fr': 'Combien des chiffres finaux du nom d’origine sont conservés.\n« toutes » prend le nombre entier : IMG_4711 devient 4711. Avec 3, cela donne 711.',
-        'it': 'Quante delle cifre finali del nome originale vengono mantenute.\n«tutte» prende il numero intero: IMG_4711 diventa 4711. Con 3 resta 711.',
     },
     'Free template. {n} running number, {c} original file number, {name}\noriginal file name, {text} the custom text above, {date} the capture date.': {
         'de': 'Freie Vorlage. {n} laufende Nummer, {c} Originaldateinummer, {name}\nOriginaldateiname, {text} der Text oben, {date} das Aufnahmedatum.',
@@ -4323,5 +4299,101 @@ TRANSLATIONS = {
         'es': 'El archivo está en una unidad de red o extraíble. Cópialo a una carpeta local e inténtalo de nuevo.',
         'fr': 'Le fichier se trouve sur un lecteur réseau ou amovible. Copiez-le dans un dossier local et réessayez.',
         'it': 'Il file si trova su un’unità di rete o rimovibile. Copialo in una cartella locale e riprova.',
+    },
+    'Store password (in the system keyring)': {
+        'de': 'Passwort speichern (im System-Schlüsselbund)',
+        'es': 'Guardar la contraseña (en el llavero del sistema)',
+        'fr': 'Enregistrer le mot de passe (dans le trousseau du système)',
+        'it': 'Salva la password (nel portachiavi di sistema)',
+    },
+    'Store password': {
+        'de': 'Passwort speichern',
+        'es': 'Guardar la contraseña',
+        'fr': 'Enregistrer le mot de passe',
+        'it': 'Salva la password',
+    },
+    'Kept in the system keyring when one is available; otherwise in the settings as plain text.': {
+        'de': 'Liegt im System-Schlüsselbund, wenn einer verfügbar ist; sonst im Klartext in den Einstellungen.',
+        'es': 'Se guarda en el llavero del sistema si hay uno disponible; si no, en texto plano en la configuración.',
+        'fr': 'Conservé dans le trousseau du système s’il y en a un ; sinon en clair dans les réglages.',
+        'it': 'Conservata nel portachiavi di sistema se disponibile; altrimenti in chiaro nelle impostazioni.',
+    },
+    'Use the classic authorization (OAuth 1.0a)': {
+        'de': 'Klassische Autorisierung verwenden (OAuth 1.0a)',
+        'es': 'Usar la autorización clásica (OAuth 1.0a)',
+        'fr': 'Utiliser l’autorisation classique (OAuth 1.0a)',
+        'it': 'Usa l’autorizzazione classica (OAuth 1.0a)',
+    },
+    'If nothing happens: paste the address bar line here': {
+        'de': 'Wenn nichts passiert: die Zeile aus der Adressleiste hier einfügen',
+        'es': 'Si no pasa nada: pega aquí la línea de la barra de direcciones',
+        'fr': 'Si rien ne se passe : collez ici la ligne de la barre d’adresse',
+        'it': 'Se non succede nulla: incolla qui la riga della barra degli indirizzi',
+    },
+    'No authorization code found in the pasted text.': {
+        'de': 'Im eingefügten Text wurde kein Bestätigungscode gefunden.',
+        'es': 'No se encontró ningún código de autorización en el texto pegado.',
+        'fr': 'Aucun code d’autorisation trouvé dans le texte collé.',
+        'it': 'Nessun codice di autorizzazione trovato nel testo incollato.',
+    },
+    'Network error during the token exchange: {error}': {
+        'de': 'Netzwerkfehler beim Token-Tausch: {error}',
+        'es': 'Error de red durante el intercambio de tokens: {error}',
+        'fr': 'Erreur réseau pendant l’échange de jetons : {error}',
+        'it': 'Errore di rete durante lo scambio dei token: {error}',
+    },
+    'The token exchange failed: {error}': {
+        'de': 'Der Token-Tausch ist fehlgeschlagen: {error}',
+        'es': 'El intercambio de tokens falló: {error}',
+        'fr': 'L’échange de jetons a échoué : {error}',
+        'it': 'Lo scambio dei token non è riuscito: {error}',
+    },
+    'Network error during the sign-in check: {error}': {
+        'de': 'Netzwerkfehler bei der Anmeldeprüfung: {error}',
+        'es': 'Error de red durante la comprobación de inicio de sesión: {error}',
+        'fr': 'Erreur réseau pendant la vérification de connexion : {error}',
+        'it': 'Errore di rete durante la verifica dell’accesso: {error}',
+    },
+    'The sign-in check returned no usable answer.': {
+        'de': 'Die Anmeldeprüfung lieferte keine verwertbare Antwort.',
+        'es': 'La comprobación de inicio de sesión no devolvió una respuesta utilizable.',
+        'fr': 'La vérification de connexion n’a renvoyé aucune réponse exploitable.',
+        'it': 'La verifica dell’accesso non ha restituito una risposta utilizzabile.',
+    },
+    'The server did not recognise the sign-in.': {
+        'de': 'Der Server hat die Anmeldung nicht erkannt.',
+        'es': 'El servidor no reconoció el inicio de sesión.',
+        'fr': 'Le serveur n’a pas reconnu la connexion.',
+        'it': 'Il server non ha riconosciuto l’accesso.',
+    },
+    'Cammello is authorized. You can close this window.': {
+        'de': 'Cammello ist autorisiert. Du kannst dieses Fenster schließen.',
+        'es': 'Cammello está autorizado. Puedes cerrar esta ventana.',
+        'fr': 'Cammello est autorisé. Vous pouvez fermer cette fenêtre.',
+        'it': 'Cammello è autorizzato. Puoi chiudere questa finestra.',
+    },
+    'This authorization answer does not belong to the running Cammello session and was ignored.': {
+        'de': 'Diese Autorisierungsantwort gehört nicht zur laufenden Cammello-Sitzung und wurde verworfen.',
+        'es': 'Esta respuesta de autorización no pertenece a la sesión de Cammello en curso y se ignoró.',
+        'fr': 'Cette réponse d’autorisation n’appartient pas à la session Cammello en cours et a été ignorée.',
+        'it': 'Questa risposta di autorizzazione non appartiene alla sessione Cammello in corso ed è stata ignorata.',
+    },
+    'Waiting for the authorization…': {
+        'de': 'Warte auf die Autorisierung…',
+        'es': 'Esperando la autorización…',
+        'fr': 'En attente de l’autorisation…',
+        'it': 'In attesa dell’autorizzazione…',
+    },
+    'Port {port} is already in use, so the sign-in answer cannot be received. Close the other program or paste the code manually.': {
+        'de': 'Port {port} ist bereits belegt, die Anmeldeantwort kann nicht empfangen werden. Schließe das andere Programm oder füge den Code von Hand ein.',
+        'es': 'El puerto {port} ya está en uso, así que no se puede recibir la respuesta de inicio de sesión. Cierra el otro programa o pega el código manualmente.',
+        'fr': 'Le port {port} est déjà utilisé : la réponse de connexion ne peut pas être reçue. Fermez l’autre programme ou collez le code manuellement.',
+        'it': 'La porta {port} è già in uso, quindi la risposta di accesso non può essere ricevuta. Chiudi l’altro programma o incolla il codice manualmente.',
+    },
+    'The authorization timed out. Start it again when you are ready.': {
+        'de': 'Die Autorisierung ist abgelaufen. Starte sie neu, wenn du bereit bist.',
+        'es': 'La autorización caducó. Iníciala de nuevo cuando estés listo.',
+        'fr': 'L’autorisation a expiré. Relancez-la quand vous êtes prêt.',
+        'it': 'L’autorizzazione è scaduta. Avviala di nuovo quando sei pronto.',
     },
 }

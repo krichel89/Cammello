@@ -499,7 +499,8 @@ class LoginWorker(QThread):
     failure = pyqtSignal(str)
 
     def __init__(self, api_url, username, password, timeout, logger,
-                 oauth_token=None, oauth_secret=None):
+                 oauth_token=None, oauth_secret=None,
+                 bearer_token=None, bearer_refresher=None):
         super().__init__()
         self.api_url = api_url
         self.username = username
@@ -508,13 +509,17 @@ class LoginWorker(QThread):
         self.logger = logger
         self.oauth_token = oauth_token
         self.oauth_secret = oauth_secret
+        self.bearer_token = bearer_token
+        self.bearer_refresher = bearer_refresher
 
     def run(self):
         try:
             api = MediaWikiApi(self.api_url, self.username, self.password,
                                timeout=self.timeout, logger=self.logger,
                                oauth_token=self.oauth_token,
-                               oauth_secret=self.oauth_secret)
+                               oauth_secret=self.oauth_secret,
+                               bearer_token=self.bearer_token,
+                               bearer_refresher=self.bearer_refresher)
             if api.login():
                 self.success.emit(api)
             else:

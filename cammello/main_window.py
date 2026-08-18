@@ -27,6 +27,7 @@ from .workers import *
 from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
+from .widgets import stored_oauth2_tokens, clear_stored_oauth2
 from .editors import *
 from .mw_settings import MWSettingsMixin
 from .mw_files import MWFilesMixin
@@ -159,10 +160,22 @@ class MainWindow(FlickrMixin,
         avail = iptc_mod.available()
         self._feat_culling = avail and self.settings.value(
             'feature_culling', True, type=bool)
+        # 0.16.1 (f): rawpy is reported here too. It used to be missing
+        # from the start-up line entirely and only surfaced once a RAW-only
+        # folder was opened - undiagnosable from a distance, the same
+        # lesson the splash taught in 0.14.3.
+        try:
+            import importlib
+            importlib.import_module('rawpy')
+            _rawpy_state = 'available'
+        except Exception as _rawpy_err:
+            _rawpy_state = f'UNAVAILABLE ({_rawpy_err.__class__.__name__})'
         self.logger.info(
-            'Features: pyexiv2 %s | culling=%s iptc=%s ftp=%s flickr=%s',
+            'Features: pyexiv2 %s | rawpy %s | culling=%s iptc=%s ftp=%s '
+            'flickr=%s',
             f'available (via {iptc_mod.GATE_MODE})' if avail else
             f'UNAVAILABLE ({iptc_mod.unavailable_reason()})',
+            _rawpy_state,
             self._feat_culling if avail else False,
             self.settings.value('feature_iptc', False, type=bool) and avail,
             self.settings.value('feature_ftp', True, type=bool) and avail,
@@ -837,6 +850,15 @@ class MainWindow(FlickrMixin,
         box.exec()
         if box.clickedButton() is open_btn:
             target = url or updates.RELEASES_PAGE
+            # The URL comes from the GitHub API response. Trust it only as
+            # far as it looks like a web address: anything but https falls
+            # back to the releases page. QUrl would happily open file:// or
+            # other schemes, and a browser is the only thing this button
+            # should ever start.
+            if not str(target).startswith('https://'):
+                self.logger.warning('Download URL %r is not https - opening '
+                                    'the releases page instead.', target)
+                target = updates.RELEASES_PAGE
             QDesktopServices.openUrl(QUrl(target))
             self.logger.info('Opened the download page: %s', target)
 
@@ -1806,8 +1828,9 @@ class MainWindow(FlickrMixin,
         # so it has to tolerate their absence instead of raising.
         if not hasattr(self, 'oauth_status_label'):
             return
+        access, _refresh = stored_oauth2_tokens()
         token, secret = stored_oauth_tokens()
-        if token and secret:
+        if access or (token and secret):
             user = self._login_settings.value('oauth_username', '') or '?'
             self.oauth_status_label.setText(
                 tr('Authorized as {username}.').format(username=user))
@@ -1825,6 +1848,7 @@ class MainWindow(FlickrMixin,
 
     def _on_oauth_remove(self):
         clear_stored_oauth()
+        clear_stored_oauth2()    # 0.17.0: both authorizations go
         self._refresh_oauth_status()
         self.status_bar.showMessage(tr('Authorization removed. To revoke it '
                                        'on the server side, visit '

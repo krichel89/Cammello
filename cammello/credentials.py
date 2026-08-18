@@ -67,6 +67,14 @@ def mw_oauth_slot(kind):
     return f'mw-oauth:{kind}'
 
 
+def mw_oauth2_slot():
+    """OAuth 2.0 token pair (access + rotated refresh) as ONE entry.
+
+    One combined slot from the start - the 1.0a path had to migrate to
+    that layout in 0.14 because two entries meant two keyring prompts."""
+    return 'mw-oauth2:tokens'
+
+
 def ftp_slot(user, host):
     """FTP/FTPS/SFTP password for user@host."""
     return f'ftp:{user.strip()}@{host.strip()}'

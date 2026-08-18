@@ -14,11 +14,13 @@ emits what the user asked for. All edits live in edits.py.
 from PyQt5.QtWidgets import (QApplication, QFrame, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QToolButton, QSizePolicy,
                              QAbstractButton)
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QPointF
+from PyQt5.QtCore import (Qt, pyqtSignal, QSize, QPointF,
+                          QSettings)
 from PyQt5.QtGui import (QIcon, QPixmap, QPainter, QPen, QColor,
                          QPolygonF, QCursor)
 
 from .i18n import tr
+from .constants import APP_NAME
 from . import edits
 
 
@@ -210,7 +212,13 @@ class EditPanel(QFrame):
 
         # Drag state (0.14.2). _rel_pos is None while the panel sits at its
         # default corner; a drag turns it into a (x, y) fraction of the view.
-        self._rel_pos = None
+        # 0.16.1: the dragged position survives a restart - stored in the
+        # app's QSettings as the same view fraction place() works with, so
+        # a different window size next time keeps the panel in the same
+        # relative spot. Written on every drag release; double-click (back
+        # to default) removes it.
+        self._settings = QSettings(APP_NAME, 'Main')
+        self._rel_pos = self._load_stored_position()
         self._drag_offset = None
         self.setCursor(Qt.OpenHandCursor)
 
@@ -295,11 +303,35 @@ class EditPanel(QFrame):
     def reset_position(self):
         """Back to the top-right default."""
         self._rel_pos = None
+        self._settings.remove('edit_panel_rel_pos')
         self.place()
+
+    def _load_stored_position(self):
+        """The persisted view fraction, or None for the default corner.
+
+        A corrupt or hand-edited value must not strand the panel: anything
+        that does not parse as two fractions in [0, 1] means default.
+        """
+        stored = self._settings.value('edit_panel_rel_pos', None)
+        if not stored:
+            return None
+        try:
+            fx, fy = (float(v) for v in stored)
+        except (TypeError, ValueError):
+            return None
+        if 0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0:
+            return (fx, fy)
+        return None
 
     def _remember_position(self):
         vw, vh = max(1, self._view.width()), max(1, self._view.height())
         self._rel_pos = (self.x() / vw, self.y() / vh)
+        # Persisted as strings - QSettings round-trips floats reliably that
+        # way on every backend (the INI one would otherwise hand back
+        # strings on some platforms and floats on others).
+        self._settings.setValue('edit_panel_rel_pos',
+                                [f'{self._rel_pos[0]:.6f}',
+                                 f'{self._rel_pos[1]:.6f}'])
 
     # -- dragging ---------------------------------------------------------
     def _in_drag_zone(self, pos):

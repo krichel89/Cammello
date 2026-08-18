@@ -4,6 +4,40 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.17.0 - 2026-08-06 (test series)
+
+### Added
+- Sign-in via OAuth 2.0 with PKCE as the default path (new module
+  mw_oauth2.py, non-confidential client - NO client secret ships with the
+  app any more, only the public client id). Bearer authentication in
+  api.py with automatic refresh: an expired access token (they die after
+  four hours) is renewed once via the refresh token and the failed
+  request retried; the server rotates the refresh token on every renewal
+  and the stored pair follows. The classic OAuth 1.0a path and the bot
+  password remain selectable in the sign-in dialog; existing 1.0a
+  authorizations keep working.
+- The loopback catcher validates the OAuth state, so a stray or forged
+  redirect cannot inject a foreign authorization code. Pasting the
+  address-bar line remains the manual fallback.
+
+## 0.16.2 - 2026-08-05
+
+### Changed
+- The FTP password and the Flickr secrets (API secret, OAuth token pair)
+  now live in the OS keyring where one is available - the same store the
+  MediaWiki login has used since 0.11. Existing plaintext values migrate
+  automatically on first use; without a keyring backend everything works
+  as before. The FTP checkbox keeps a neutral label; its tooltip
+  explains the rule (asking the keyring just to label a checkbox would
+  cost a macOS prompt at every start).
+- The edit panel's dragged position survives a restart (stored as a view
+  fraction, so a different window size keeps it in the same relative
+  spot). Double-click still returns it home and clears the stored value.
+- Start-up log: the Features line reports rawpy alongside pyexiv2; the
+  update dialog only opens https URLs (anything else falls back to the
+  releases page); folder scanning uses scandir; four orphaned
+  translation keys removed; the log says "directory" like the UI does.
+
 ## [0.16.1]
 
 ### Added

@@ -19,6 +19,7 @@ from .constants import *
 from .i18n import tr
 from . import flickr
 from . import channels
+from . import credentials
 from .widgets import (UploadProgressDialog, apply_form_ratio,
                       CollapsibleGroupBox, NoWheelComboBox)
 
@@ -125,24 +126,35 @@ class FlickrMixin:
 
     def _flickr_credentials_ok(self, need_token=False):
         if not (self.flickr_api_key_edit.text().strip()
-                and self.flickr_api_secret_edit.text().strip()):
+                and (self.flickr_api_secret_edit.text().strip()
+                     or self._flickr_secret('api_secret'))):
             QMessageBox.warning(self, 'Flickr',
                                 tr('API key and secret are missing (create '
                                    'them at flickr.com/services/apps/create).'))
             return False
-        if need_token and not self.settings.value('flickr_token', ''):
+        if need_token and not self._flickr_secret('token'):
             QMessageBox.warning(self, 'Flickr',
                                tr('Not authorized yet - run the two '
                                   'authorization steps first.'))
             return False
         return True
 
+    def _flickr_secret(self, kind):
+        """One Flickr secret (token / token_secret / api_secret), keyring
+        first, QSettings plaintext as the no-backend fallback (0.16.1)."""
+        return credentials.migrate_qsettings_value(
+            self.settings, 'flickr_' + kind, credentials.flickr_slot(kind))
+
     def _flickr_client(self):
+        api_secret = (self.flickr_api_secret_edit.text().strip()
+                      or self._flickr_secret('api_secret'))
+        if api_secret and not self.flickr_api_secret_edit.text().strip():
+            self.flickr_api_secret_edit.setText(api_secret)
         return flickr.FlickrClient(
             self.flickr_api_key_edit.text().strip(),
-            self.flickr_api_secret_edit.text().strip(),
-            self.settings.value('flickr_token', ''),
-            self.settings.value('flickr_token_secret', ''),
+            api_secret,
+            self._flickr_secret('token'),
+            self._flickr_secret('token_secret'),
             logger=self.logger)
 
     def _flickr_auth_step1(self):
@@ -177,8 +189,20 @@ class FlickrMixin:
         except Exception as e:
             QMessageBox.critical(self, 'Flickr', str(e))
             return
-        self.settings.setValue('flickr_token', atoken)
-        self.settings.setValue('flickr_token_secret', asecret)
+        # 0.16.1: the OAuth token pair identifies the account and signs
+        # every request - keyring material, not settings material. Plaintext
+        # only when no backend is there.
+        if not (credentials.store(credentials.flickr_slot('token'), atoken)
+                and credentials.store(credentials.flickr_slot('token_secret'),
+                                      asecret)):
+            self.settings.setValue('flickr_token', atoken)
+            self.settings.setValue('flickr_token_secret', asecret)
+        else:
+            self.settings.remove('flickr_token')
+            self.settings.remove('flickr_token_secret')
+        # Non-secret marker so the status line can say "authorized" without
+        # reading the keyring during the window build.
+        self.settings.setValue('flickr_authorized', True)
         self.settings.setValue('flickr_username', username)
         self.settings.sync()
         self._flickr_request = None
@@ -189,7 +213,8 @@ class FlickrMixin:
 
     def _flickr_show_auth_state(self):
         username = self.settings.value('flickr_username', '')
-        if self.settings.value('flickr_token', ''):
+        if (self.settings.value('flickr_authorized', False, type=bool)
+                or self.settings.value('flickr_token', '')):
             self.flickr_auth_lbl.setText(
                 tr('Authorized as {username}.').format(
                     username=username or '?'))
@@ -260,14 +285,21 @@ class FlickrMixin:
     def _flickr_save_settings(self):
         s = self.settings
         s.setValue('flickr_api_key', self.flickr_api_key_edit.text().strip())
-        s.setValue('flickr_api_secret',
-                   self.flickr_api_secret_edit.text().strip())
+        secret_text = self.flickr_api_secret_edit.text().strip()
+        if secret_text:
+            if credentials.store(credentials.flickr_slot('api_secret'),
+                                 secret_text):
+                s.remove('flickr_api_secret')
+            else:
+                s.setValue('flickr_api_secret', secret_text)
         s.setValue('flickr_license',
                    self.flickr_license_combo.currentData() or '')
 
     def _flickr_load_settings(self):
         s = self.settings
         self.flickr_api_key_edit.setText(s.value('flickr_api_key', ''))
+        # Build time: plaintext only - _flickr_secret() (keyring) runs
+        # lazily at first USE, never while the window is being built.
         self.flickr_api_secret_edit.setText(s.value('flickr_api_secret', ''))
         saved_lic = s.value('flickr_license', '') or None
         idx = self.flickr_license_combo.findData(saved_lic)
