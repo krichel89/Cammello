@@ -65,7 +65,7 @@ def by_key(key):
     # Only reachable if the file yielded nothing at all, which load()
     # already guards against - but a caller must never get None.
     return {'key': DEFAULT_KEY, 'label': DEFAULT_KEY, 'hide': [],
-            'preset': {}, 'example': {}}
+            'show': [], 'preset': {}, 'example': {}}
 
 
 def label_of(key):
@@ -75,14 +75,40 @@ def label_of(key):
     return by_key(key)['label']
 
 
+def shown_fields(key):
+    """The default-off registry fields this workflow switches ON.
+
+    0.18.0. `felder_aus` alone could not carry the music fields: it is an
+    exclusion list, so thirteen new names would have appeared in every
+    workflows.toml written before they existed - including Harald's own.
+    """
+    return list(by_key(key).get('show', []))
+
+
 def hidden_fields(key):
-    """The registry names of the fields this workflow hides."""
-    return list(by_key(key)['hide'])
+    """The registry names of the fields this workflow hides.
+
+    Includes the default-off fields it does not switch on, so callers see
+    one list and do not have to know which mechanism kept a field away.
+    """
+    entry = by_key(key)
+    hide = list(entry['hide'])
+    show = set(entry.get('show', []))
+    for name in workflow_config.DEFAULT_OFF:
+        if name not in show and name not in hide:
+            hide.append(name)
+    return hide
 
 
 def is_hidden(key, field):
-    """Whether `field` is hidden in this workflow."""
-    return field in by_key(key)['hide']
+    """Whether `field` is hidden in this workflow.
+
+    Goes through hidden_fields() rather than reading the raw list: a
+    default-off field is kept away by NOT being switched on, which is not
+    the same list. Asking the entry directly answered "not hidden" for a
+    field the UI had just hidden - caught by test_workflows_0161.
+    """
+    return field in hidden_fields(key)
 
 
 def presets_of(key):

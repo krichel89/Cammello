@@ -17,7 +17,7 @@ from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator, QPalette, QColor)
 from .constants import *
 from datetime import date
-from .constants import __version__
+from .constants import __version__, MUSIC_FIELDS
 from .logging_setup import *
 from .sdc import *
 from .sdc import _strip_sd_lines
@@ -58,6 +58,27 @@ from .i18n import (tr, UI_LANGUAGES, set_language,
 
 _SYSTEM_APPEARANCE = None    # (palette, style name) captured at first use
 _APPLIED_SCHEME = ['system']  # the app starts in the system scheme
+
+
+def _apply_app_stylesheet():
+    """Set the application stylesheet ONLY when it actually changes (0.17.1).
+
+    QApplication.setStyleSheet() makes QStyleSheetStyle repolish every
+    widget it has ever seen. If any of them has been destroyed since,
+    that walk dereferences a dangling pointer and the process dies with
+    SIGSEGV inside updateObjects() - reproduced under gdb, and the reason
+    the CI test job started crashing.
+
+    Re-setting the SAME sheet buys nothing, so the cheapest and safest
+    fix is not to: a second window (or a scheme switch that resolves to
+    the same sheet) now leaves the style alone.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return
+    sheet = app_style()
+    if app.styleSheet() != sheet:
+        app.setStyleSheet(sheet)
 
 
 class MainWindow(FlickrMixin,
@@ -106,7 +127,7 @@ class MainWindow(FlickrMixin,
         # About page; see constants.app_style) - per-widget stylesheets on
         # the collapsible groups kept producing wrongly rendered child
         # fields on macOS.
-        QApplication.instance().setStyleSheet(app_style())
+        _apply_app_stylesheet()
         self.api = None
         self.settings = QSettings(APP_NAME, 'Main')
         # Channel marks (0.12.1): Commons/CC vs. commercial, persisted across
@@ -595,6 +616,57 @@ class MainWindow(FlickrMixin,
             _w.textChanged.connect(self._refresh_required_marks)
         self._mw_settings_group = settings_group
 
+        # ── Music workflow (0.18.0) ──────────────────────────────────────
+        # Audio uploads of OTHER people's recordings. These controls are
+        # off in every other workflow (workflow_config.DEFAULT_OFF), so a
+        # photographer never sees them. Batch-level like author and
+        # licence above: a batch is normally one recording session or one
+        # source, and per-file variation still goes through the
+        # description editor.
+        music_group = CollapsibleGroupBox(tr('Music and audio'))
+        music_group.setToolTip(tr(
+            'For recordings by other people: who composed it, who '
+            'recorded it, and\nunder which two licences it stands.'))
+        music_form = QFormLayout(music_group.content)
+        self.music_edits = {}
+        for _name, _label, _hint in MUSIC_FIELDS:
+            _edit = QLineEdit()
+            if _hint:
+                _edit.setPlaceholderText(tr('e.g.') + ' ' + _hint)
+            self.music_edits[_name] = _edit
+            music_form.addRow(tr(_label), _edit)
+        self.music_edits['komponist'].setToolTip(tr(
+            'The composer as wikitext, normally an interwiki link with a '
+            'leading colon:\n\n  [[:en:Felix Mendelssohn|Felix Mendelssohn '
+            'Bartoldy]]\n\nGoes into the author line as the "composition" '
+            'role. The LINK TARGET is\nalso what the generated categories '
+            'are built from.'))
+        self.music_edits['aufnehmender'].setToolTip(tr(
+            'Who made the recording - the second role of the author line, '
+            'and the\nperson the "recorded by" categories name. Not the '
+            'uploader.'))
+        self.music_edits['lizenz_komposition'].setToolTip(tr(
+            'The licence of the WORK, e.g. {{PD-old-auto-expired}}. If '
+            '"Composer died"\nis filled and the template says nothing '
+            'about a death year, '
+            '|deathyear=\nis added automatically.'))
+        self.music_edits['lizenz_aufnahme'].setToolTip(tr(
+            'The licence of the RECORDING, which is a separate right from '
+            'the work.\nOften a permission template of the person who '
+            'recorded it.'))
+        self.music_edits['werk'].setToolTip(tr(
+            'A category name for the work itself, e.g. Six organ sonatas '
+            '(Mendelssohn).\nUsed as written; like every generated '
+            'category it is dropped if Commons\ndoes not have it.'))
+        for _w in self.music_edits.values():
+            _lbl = music_form.labelForField(_w)
+            if _lbl is not None and _w.toolTip():
+                _lbl.setToolTip(_w.toolTip())
+        apply_form_ratio(music_form)
+        music_group.setChecked(False)
+        self._music_group = music_group
+        right_layout.addWidget(music_group)
+
         # Mode toggle: expert mode shows the raw description_all text; when it is
         # off (the default), the structured fields are shown.
         self.expert_cb = QCheckBox(tr('Expert mode (raw description_all text)'))
@@ -1045,6 +1117,13 @@ class MainWindow(FlickrMixin,
         btn = getattr(self, 'iptc_event_btn', None)
         if btn is not None:
             btn.setVisible('entstanden_waehrend' not in hidden)
+        # 0.18.0: the music box as a whole follows its fields. Hiding the
+        # thirteen rows but leaving the heading would be the same half
+        # state the "Created during" button was in.
+        group = getattr(self, '_music_group', None)
+        if group is not None:
+            group.setVisible(any(n not in hidden
+                                 for n in self.music_edits))
 
     def _open_workflow_file(self):
         """Open workflows.toml in whatever the system uses for .toml.
@@ -1153,6 +1232,11 @@ class MainWindow(FlickrMixin,
             'zusatz_wikitext': [getattr(base, 'extra', None),
                                 getattr(per_file, 'extra', None)],
         }
+        # 0.18.0: the music fields live in a dict rather than in thirteen
+        # attributes - the registry name IS the key, so a field added to
+        # MUSIC_FIELDS needs no second entry here.
+        for _name, _edit in getattr(self, 'music_edits', {}).items():
+            table[_name] = [_edit]
         return [w for w in table.get(name, []) if w is not None]
 
     def _extra_labels(self):
@@ -2215,7 +2299,7 @@ class MainWindow(FlickrMixin,
         set_current_input_style(dark)
         if hasattr(self, '_cull_delegate'):
             self._cull_apply_bg(dark)      # 0.15.0: surround follows the scheme
-        QApplication.instance().setStyleSheet(app_style())
+        _apply_app_stylesheet()
         refresh_wd_fields()   # WD fields carry their own (border) stylesheet
         # A style/palette change does not repolish existing widgets; without
         # this pass, parts of the UI kept the previous scheme ("switching is

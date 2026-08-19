@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.17.0'
+__version__ = '0.18.0'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -125,6 +125,33 @@ SD_KEYS = [
 #   Q18199165  Creative Commons Attribution-ShareAlike 4.0 International
 #   Q20007257  Creative Commons Attribution 4.0 International
 #   Q6938433   Creative Commons CC0 License
+# ── Music workflow (0.18.0) ──────────────────────────────────────────────
+# (registry name, UI label / tr() key, placeholder example). The order is
+# the order of the form; the names must match workflow_config.FIELDS and
+# music.FIELDS, which test_music_0180 checks.
+MUSIC_FIELDS = [
+    ('komponist',           'Composer:',
+     '[[:en:Felix Mendelssohn|Felix Mendelssohn Bartoldy]]'),
+    ('todesjahr_komponist', 'Composer died:',              '1847'),
+    ('kompositionsjahr',    'Year of composition:',        '1845'),
+    ('aufnehmender',        'Recorded by:',
+     '[[:de:Wolfram Syré|Wolfram Syré]]'),
+    ('aufnahmetechnik',     'Recording technique:',
+     'using a [[:en:Hauptwerk|Hauptwerk]] digital organ'),
+    ('quellvorlage',        'Source template:',
+     '{{Organ Repertory Wolfram Syré}}'),
+    ('lizenz_komposition',  'Licence of the composition:',
+     '{{PD-old-auto-expired}}'),
+    ('lizenz_aufnahme',     'Licence of the recording:',
+     '{{Wolfram Syré-permission}}'),
+    ('instrument',          'Instrument:',                 'organ'),
+    ('epoche',              'Period:',    'German and Austrian Romantic'),
+    ('werk',                'Work (category name):',
+     'Six organ sonatas (Mendelssohn)'),
+    ('land',                'Country:',                    'Germany'),
+    ('andere_versionen',    'Other versions:',             ''),
+]
+
 LICENSE_PRESETS = [
     # (label, wikitext template, P275 item)
     ('CC0 1.0',       '{{Cc-zero}}',       'Q6938433'),

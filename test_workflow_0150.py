@@ -39,7 +39,11 @@ def check(name, cond, detail=''):
 
 
 # ── the data module ──────────────────────────────────────────────────────────
-check('two workflows are defined', len(workflows.all_workflows()) == 2,
+# 0.18.0: three built-in workflows - the music one joined the two of
+# 0.15.0. Checked by name rather than by count so that adding a fourth is
+# a decision, not a test failure to be silenced.
+check('the built-in workflows are there',
+      workflows.keys() == ['portraits', 'buildings', 'music'],
       str(workflows.keys()))
 check('the default key resolves',
       workflows.by_key(workflows.DEFAULT_KEY)['key'] == workflows.DEFAULT_KEY)
@@ -60,8 +64,10 @@ check('portraits offers no camera location either',
       not workflows.offers_camera_location('portraits'))
 check('buildings offers the camera location',
       workflows.offers_camera_location('buildings'))
+# 'show' joined in 0.18.0: the fields a workflow switches ON, needed
+# because felder_aus alone could not carry fields that are off by default.
 check('every entry carries the full set of fields',
-      all(set(wf) == {'key', 'label', 'hide', 'preset', 'example'}
+      all(set(wf) == {'key', 'label', 'hide', 'show', 'preset', 'example'}
           for wf in workflows.all_workflows()),
       str([sorted(wf) for wf in workflows.all_workflows()][:1]))
 check('the keys are unique',

@@ -98,10 +98,19 @@ check('a workflow without a name falls back to its schluessel',
 
 # ── Die Ausschlussliste ist eine Ausschlussliste ─────────────────────────
 _e = write('[[workflow]]\nschluessel = "leer"\nname = "Leer"\n')
-check('a workflow that hides nothing shows everything',
-      workflows.hidden_fields('leer') == [])
+# 0.18.0: "everything" now means every field that is ON BY DEFAULT. The
+# music fields are off unless a workflow asks for them with felder_an -
+# otherwise the thirteen of them would have appeared in every
+# workflows.toml written before they existed, Harald's included.
+check('a workflow that hides nothing shows every default field',
+      workflows.hidden_fields('leer') == list(wc.DEFAULT_OFF),
+      str(workflows.hidden_fields('leer')))
+_default_on = [n for n in wc.FIELD_NAMES if n not in wc.DEFAULT_OFF]
 check('so a field added later is visible without editing the file',
-      not workflows.is_hidden('leer', wc.FIELD_NAMES[-1]))
+      not workflows.is_hidden('leer', _default_on[-1]))
+check('but a default-off field stays away until it is asked for',
+      workflows.is_hidden('leer', wc.DEFAULT_OFF[-1])
+      if wc.DEFAULT_OFF else True)
 
 # ── Wirkung in der Oberflaeche ───────────────────────────────────────────
 i18n.set_language('de')

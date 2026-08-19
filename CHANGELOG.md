@@ -4,6 +4,56 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.0 - 2026-08-19
+
+### Added
+- Music workflow for audio uploads of other people's recordings. New
+  module music.py builds the file page: an author line with ROLES
+  (composition / recording) instead of a single author, a licence section
+  with one bullet per rights layer, and audio categories generated from
+  the fields. Thirteen new fields (composer, year of composition,
+  composer's year of death, recorded by, recording technique, source
+  template, both licences, instrument, period, work, country, other
+  versions) in a "Music and audio" box that only the music workflow
+  shows. Harald's Mendelssohn file description (organ sonata op. 65 no. 5,
+  recorded by Wolfram Syre) is the specification and is reproduced
+  character for character by test_music_0180.py.
+- Generated categories are CHECKED against Commons before they are used
+  (new api.existing_pages, one query for the whole batch); a name Commons
+  does not have is skipped rather than becoming a red link on every file.
+  A failed check adds nothing and never fails the upload.
+- workflows.toml understands `felder_an`, the counterpart of
+  `felder_aus`, for fields that are off by default. Without it the
+  thirteen music fields would have appeared in every workflows.toml
+  written before they existed, since `felder_aus` is an exclusion list.
+
+### Changed
+- The music workflow writes a layout of its own, deliberately different
+  from the photograph one and only there: a `{{int:filedesc}}` heading,
+  `{{int:license-header}}` without surrounding spaces, |source= before
+  |author=, empty |permission= and |other versions= kept rather than
+  dropped, and |other versions= instead of |other fields=. The photograph
+  path is untouched and produces byte-for-byte what 0.17.1 produced.
+- workflows.is_hidden() now answers through hidden_fields() instead of
+  reading the raw exclusion list, so a field kept away by NOT being
+  switched on counts as hidden - it did not before, and the UI and the
+  query disagreed.
+
+## 0.17.1 - 2026-08-18 (test series)
+
+### Fixed
+- Crash (SIGSEGV) when a second window is created or the colour scheme is
+  switched. Every MainWindow re-applied the application-wide stylesheet,
+  even when it was unchanged; QApplication.setStyleSheet() makes
+  QStyleSheetStyle repolish every widget it has ever seen, and a widget
+  destroyed in the meantime turns that walk into a dangling-pointer
+  dereference. Confirmed under gdb in updateObjects(). The sheet is now
+  only set when it actually differs. This is what made the CI test job
+  abort with exit 139 from v0.17.0 on, so no binaries were built.
+- release.sh survives a half-finished run: with everything already
+  committed, `git commit` no longer aborts the script under `set -e`
+  before it gets to tagging.
+
 ## 0.17.0 - 2026-08-06 (test series)
 
 ### Added

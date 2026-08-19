@@ -15,6 +15,7 @@ from .exif import (parse_coordinates, read_capture_settings,
 from . import camera_map
 from . import edits as edits_mod
 from . import upload_journal as journal_mod
+from . import music
 
 
 class UploadWorker(QThread):
@@ -55,6 +56,41 @@ class UploadWorker(QThread):
         # HTTP request already in flight is always finished, never torn down
         # halfway, so no half-uploaded file is left on Commons.
         self._cancelled = False
+
+    def _music_categories(self, row, seen):
+        """Generated audio categories that Commons actually has.
+
+        The candidates are computed without the network (music.py); this
+        method is the half that asks. Every unknown name is dropped, the
+        same "no sitelink means no link" rule LrMediaWiki2 follows - a
+        category is built from a link TARGET and a guess about English
+        naming, so getting one wrong is normal and a red link on every
+        upload is not acceptable.
+
+        A failing check is not a failing upload: if Commons cannot be
+        asked, nothing is added and the file goes up with the categories
+        the description already carried.
+        """
+        candidates = [c for c in music.category_candidates(row)
+                      if f'[[Category:{c}]]' not in seen]
+        if not candidates:
+            return []
+        try:
+            existing = self.api.existing_pages(
+                [f'Category:{c}' for c in candidates])
+        except Exception as e:
+            self.log.warning('Categories could not be checked (%s); none '
+                             'were added automatically.', e)
+            return []
+        out = []
+        for c in candidates:
+            if f'Category:{c}' in existing:
+                out.append(f'[[Category:{c}]]')
+                seen.add(f'[[Category:{c}]]')
+            else:
+                self.log.info('Category "%s" does not exist on Commons '
+                              'and was skipped.', c)
+        return out
 
     def _journal_mark(self, row, status, **kw):
         """Write one status change through to disk. A journal failure must
@@ -192,50 +228,60 @@ class UploadWorker(QThread):
                     self.log.info('Depicts override "%s": %s added.',
                                   sd.get('depicts_override'), mnt)
 
-                # {{Information}} block
-                info = f"{{{{{row.get('template', 'Information')}\n"
-                info += f"|description={clean_desc}\n"
-                if row.get('date'):
-                    info += f"|date={row['date']}\n"
-                if row.get('author'):
-                    info += f"|author={row['author']}\n"
-                if row.get('source'):
-                    info += f"|source={row['source']}\n"
-                if row.get('permission'):
-                    info += f"|permission={row['permission']}\n"
-                if row.get('other_fields'):
-                    info += f"|other fields={row['other_fields']}\n"
-                info += '}}'
+                # 0.18.0: the music workflow builds its file page from a
+                # different layout - roles in the author line, two licence
+                # blocks, see music.py for the full list of differences.
+                # The photograph path below is untouched and still
+                # produces byte-for-byte what 0.16.1 produced.
+                if row.get('music'):
+                    cats += self._music_categories(row, cats_seen)
+                    wikitext = music.build_wikitext(
+                        row, clean_desc, cats, other_templates)
+                else:
+                    # {{Information}} block
+                    info = f"{{{{{row.get('template', 'Information')}\n"
+                    info += f"|description={clean_desc}\n"
+                    if row.get('date'):
+                        info += f"|date={row['date']}\n"
+                    if row.get('author'):
+                        info += f"|author={row['author']}\n"
+                    if row.get('source'):
+                        info += f"|source={row['source']}\n"
+                    if row.get('permission'):
+                        info += f"|permission={row['permission']}\n"
+                    if row.get('other_fields'):
+                        info += f"|other fields={row['other_fields']}\n"
+                    info += '}}'
 
-                cats_str = '\n'.join(cats)
+                    cats_str = '\n'.join(cats)
 
-                parts = [info]
-                # 0.12.15: camera position. {{Location dec}} takes decimal
-                # degrees and is the wikitext half; the P1259 claim below is
-                # the structured half of the same fact.
-                coords = parse_coordinates(sd.get('coordinates', ''))
-                if coords:
-                    parts.append('{{Location dec|%.6f|%.6f}}' % coords)
-                elif sd.get('coordinates', '').strip():
-                    self.log.warning('Coordinates for "%s" are unusable and '
-                                     'were skipped: %r',
-                                     fname, sd.get('coordinates'))
-                # 0.15.0: position of the depicted object - a DIFFERENT
-                # template from the camera position above, on purpose.
-                obj = parse_coordinates(sd.get('object_coordinates', ''))
-                if obj:
-                    parts.append('{{Object location dec|%.6f|%.6f}}' % obj)
-                elif sd.get('object_coordinates', '').strip():
-                    self.log.warning('Object coordinates for "%s" are '
-                                     'unusable and were skipped: %r',
-                                     fname, sd.get('object_coordinates'))
-                if other_templates:
-                    parts.append(other_templates)
-                if license_text:
-                    parts.append(f'== {{{{int:license-header}}}} ==\n{license_text}')
-                if cats_str:
-                    parts.append(cats_str)
-                wikitext = '\n'.join(parts)
+                    parts = [info]
+                    # 0.12.15: camera position. {{Location dec}} takes decimal
+                    # degrees and is the wikitext half; the P1259 claim below is
+                    # the structured half of the same fact.
+                    coords = parse_coordinates(sd.get('coordinates', ''))
+                    if coords:
+                        parts.append('{{Location dec|%.6f|%.6f}}' % coords)
+                    elif sd.get('coordinates', '').strip():
+                        self.log.warning('Coordinates for "%s" are unusable and '
+                                         'were skipped: %r',
+                                         fname, sd.get('coordinates'))
+                    # 0.15.0: position of the depicted object - a DIFFERENT
+                    # template from the camera position above, on purpose.
+                    obj = parse_coordinates(sd.get('object_coordinates', ''))
+                    if obj:
+                        parts.append('{{Object location dec|%.6f|%.6f}}' % obj)
+                    elif sd.get('object_coordinates', '').strip():
+                        self.log.warning('Object coordinates for "%s" are '
+                                         'unusable and were skipped: %r',
+                                         fname, sd.get('object_coordinates'))
+                    if other_templates:
+                        parts.append(other_templates)
+                    if license_text:
+                        parts.append(f'== {{{{int:license-header}}}} ==\n{license_text}')
+                    if cats_str:
+                        parts.append(cats_str)
+                    wikitext = '\n'.join(parts)
 
                 # Upload. The journal is marked BEFORE the request goes
                 # out: if the process dies while the file is in flight, the

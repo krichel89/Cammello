@@ -53,27 +53,49 @@ DEFAULT_KEY = 'portraits'
 #               running Cammello labels it
 # text          whether the field takes text, i.e. whether `vorbelegung`
 #               and `beispiel` mean anything for it
+# default_on   whether the field is visible in a workflow that says
+#              nothing about it. FALSE is for the fields of one special
+#              workflow (the music fields): `felder_aus` is an exclusion
+#              list, so a newly added field would otherwise appear in
+#              EVERY existing workflows.toml, including the ones written
+#              before it existed. A default-off field has to be switched
+#              on with `felder_an` instead.
 FIELDS = [
-    ('vorlagen',             'Other templates:',                    True),
-    ('basisbeschreibung',    'Base description:',                   True),
-    ('autor',                'Author:',                             True),
-    ('ersteller',            'Creator (Q-number):',                 True),
-    ('quelle',               'Source:',                             True),
-    ('genehmigung',          'Permission:',                         True),
-    ('lizenz',               'Licence:',                            True),
-    ('zeigt',                'Depicts (P180):',                     True),
-    ('falls_kein_depicts',   'If no depicts:',                      False),
-    ('kategorien',           'Categories:',                         True),
-    ('entstanden_waehrend',  'Created during (P10408):',            True),
-    ('kamerastandort',       'Camera position (wikitext + SDC):',   False),
-    ('objektstandort',       'Object position (wikitext + SDC):',   False),
-    ('galerieseite',         'Gallery page:',                       True),
-    ('zusatz_wikitext',      'Extra wikitext / comments:',          True),
+    ('vorlagen',             'Other templates:',                    True,  True),
+    ('basisbeschreibung',    'Base description:',                   True,  True),
+    ('autor',                'Author:',                             True,  True),
+    ('ersteller',            'Creator (Q-number):',                 True,  True),
+    ('quelle',               'Source:',                             True,  True),
+    ('genehmigung',          'Permission:',                         True,  True),
+    ('lizenz',               'Licence:',                            True,  True),
+    ('zeigt',                'Depicts (P180):',                     True,  True),
+    ('falls_kein_depicts',   'If no depicts:',                      False, True),
+    ('kategorien',           'Categories:',                         True,  True),
+    ('entstanden_waehrend',  'Created during (P10408):',            True,  True),
+    ('kamerastandort',       'Camera position (wikitext + SDC):',   False, True),
+    ('objektstandort',       'Object position (wikitext + SDC):',   False, True),
+    ('galerieseite',         'Gallery page:',                       True,  True),
+    ('zusatz_wikitext',      'Extra wikitext / comments:',          True,  True),
+    # Music workflow (audio uploads). Off unless a workflow asks for them.
+    ('kompositionsjahr',     'Year of composition:',                True,  False),
+    ('quellvorlage',         'Source template:',                    True,  False),
+    ('komponist',            'Composer:',                           True,  False),
+    ('aufnehmender',         'Recorded by:',                        True,  False),
+    ('aufnahmetechnik',      'Recording technique:',                True,  False),
+    ('todesjahr_komponist',  'Composer died:',                      True,  False),
+    ('lizenz_komposition',   'Licence of the composition:',         True,  False),
+    ('lizenz_aufnahme',      'Licence of the recording:',           True,  False),
+    ('andere_versionen',     'Other versions:',                     True,  False),
+    ('instrument',           'Instrument:',                         True,  False),
+    ('epoche',               'Period:',                             True,  False),
+    ('werk',                 'Work (category name):',               True,  False),
+    ('land',                 'Country:',                            True,  False),
 ]
 
-FIELD_NAMES = [name for name, _label, _text in FIELDS]
-TEXT_FIELDS = [name for name, _label, text in FIELDS if text]
-_FIELD_LABEL = {name: label for name, label, _t in FIELDS}
+FIELD_NAMES = [name for name, _label, _text, _on in FIELDS]
+TEXT_FIELDS = [name for name, _label, text, _on in FIELDS if text]
+DEFAULT_OFF = [name for name, _label, _text, on in FIELDS if not on]
+_FIELD_LABEL = {name: label for name, label, _t, _on in FIELDS}
 
 
 def label_key_of_field(name):
@@ -91,6 +113,7 @@ BUILTIN = [
         'key': 'portraits',
         'label': 'Events/Portraits',
         'hide': ['kamerastandort', 'objektstandort'],
+        'show': [],
         'preset': {},
         'example': {},
     },
@@ -98,8 +121,29 @@ BUILTIN = [
         'key': 'buildings',
         'label': 'Buildings and Landscapes',
         'hide': ['entstanden_waehrend'],
+        'show': [],
         'preset': {},
         'example': {},
+    },
+    # 0.18.0: audio uploads. This is the only workflow that switches the
+    # music fields ON; everything a photograph needs and a recording does
+    # not is hidden. `{{own}}` in the source field would be wrong here by
+    # definition - these are other people's recordings - so the preset
+    # empties it.
+    {
+        'key': 'music',
+        'label': 'Music and audio',
+        'hide': ['entstanden_waehrend', 'kamerastandort', 'objektstandort',
+                 'zeigt', 'galerieseite'],
+        'show': list(DEFAULT_OFF),
+        'preset': {'quelle': ''},
+        'example': {
+            'komponist': '[[:en:Felix Mendelssohn|Felix Mendelssohn]]',
+            'lizenz_komposition': '{{PD-old-auto-expired}}',
+            'todesjahr_komponist': '1847',
+            'instrument': 'organ',
+            'land': 'Germany',
+        },
     },
 ]
 
@@ -161,6 +205,7 @@ def template_text(translate=None):
         f'#   schluessel  {tr("internal, never shown, do not change it later")}',
         f'#   name        {tr("what the dropdown shows")}',
         f'#   felder_aus  {tr("fields to HIDE - anything not listed stays visible")}',
+        f'#   felder_an   {tr("fields to SHOW that are off by default (marked below)")}',
         '#',
         f'# {tr("Two optional sections per workflow:")}',
         f'#   [workflow.vorbelegung]  {tr("fills the field if it is still empty")}',
@@ -169,9 +214,11 @@ def template_text(translate=None):
         f'# {tr("Available field names:")}',
     ]
     width = max(len(n) for n in FIELD_NAMES)
-    for name, label, takes_text in FIELDS:
+    for name, label, takes_text, _on in FIELDS:
         shown = tr(label).rstrip(':')
         note = '' if takes_text else f'  ({tr("hide only")})'
+        if not _on:
+            note += f'  ({tr("off by default")})'
         lines.append(f'#   {name.ljust(width)}  {shown}{note}')
     lines += [
         '#',
@@ -182,11 +229,13 @@ def template_text(translate=None):
     ]
     for wf in BUILTIN:
         hide = ', '.join(_quote(h) for h in wf['hide'])
+        show = ', '.join(_quote(h) for h in wf.get('show', []))
         lines += [
             '[[workflow]]',
             f'schluessel = {_quote(wf["key"])}',
             f'name       = {_quote(wf["label"])}',
             f'felder_aus = [{hide}]',
+            f'felder_an  = [{show}]',
             '',
             '  # [workflow.vorbelegung]',
             '  # vorlagen = "{{Wikiportraits}}"',
@@ -278,11 +327,25 @@ def _parse(data, warnings):
                         f'{where}: felder_aus {name!r} is not a field name')
         else:
             warnings.append(f'{where}: felder_aus is not a list')
+        show = []
+        raw_show = raw.get('felder_an', [])
+        if isinstance(raw_show, str):        # a single name without brackets
+            raw_show = [raw_show]
+        if isinstance(raw_show, list):
+            for name in raw_show:
+                if name in FIELD_NAMES:
+                    show.append(name)
+                else:
+                    warnings.append(
+                        f'{where}: felder_an {name!r} is not a field name')
+        else:
+            warnings.append(f'{where}: felder_an is not a list')
         seen.add(key)
         out.append({
             'key': key,
             'label': label.strip(),
             'hide': hide,
+            'show': show,
             'preset': _clean_map(raw.get('vorbelegung'),
                                  f'{where} vorbelegung', warnings),
             'example': _clean_map(raw.get('beispiel'),
@@ -315,7 +378,7 @@ def load(translate=None):
         except (OSError, ValueError) as e:
             LAST_ERROR = f'{FILENAME}: {e}'
     if entries is None:
-        entries = [dict(w, hide=list(w['hide']),
+        entries = [dict(w, hide=list(w['hide']), show=list(w.get('show', [])),
                         preset=dict(w['preset']), example=dict(w['example']))
                    for w in BUILTIN]
     LAST_WARNINGS = warnings

@@ -518,6 +518,38 @@ class MediaWikiApi:
         self.log.debug('pageid for "%s" = %s', filename, pid)
         return pid
 
+    def existing_pages(self, titles):
+        """Which of `titles` exist - a set of the ones that do.
+
+        0.18.0, for the generated audio categories. One query for the
+        whole batch: the API takes up to 50 titles at a time, and asking
+        per category would put seven round trips in front of every single
+        upload.
+
+        Titles the API normalises (underscores, first letter) come back
+        under their normalised name; the mapping is applied so the caller
+        can look up what it asked for.
+        """
+        titles = [t for t in titles if t]
+        found = set()
+        for start in range(0, len(titles), 50):
+            chunk = titles[start:start + 50]
+            r = self._request('GET', 'page-exists', params={
+                'action': 'query', 'titles': '|'.join(chunk),
+                'format': 'json'
+            })
+            query = self._json(r, 'page-exists').get('query', {})
+            back = {}
+            for norm in query.get('normalized', []):
+                back[norm.get('to')] = norm.get('from')
+            for page in query.get('pages', {}).values():
+                if 'missing' in page:
+                    continue
+                title = page.get('title')
+                found.add(back.get(title, title))
+                found.add(title)
+        return found
+
     def set_structured_data(self, page_id, labels, claims):
         """Set labels and claims in a single wbeditentity call."""
         labels_data = {lang: {'language': lang, 'value': val}

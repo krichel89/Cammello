@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.17.0"
-NOTES_FILE="notes_0170.md"
+VERSION="0.18.0"
+NOTES_FILE="notes_0180.md"
 REPO_DIR="/Users/h/Documents/Python/Cammello"
 REPO_URL="https://github.com/krichel89/Cammello"
 
 cd "$REPO_DIR"
 
 git add -A
-git commit -m "Release v${VERSION}"
+# 0.17.1: nach einem halb durchgelaufenen Versuch ist schon alles
+# committet; ohne dieses "oder" bricht set -e hier ab und das Skript
+# kommt nie zum Taggen.
+git commit -m "Release v${VERSION}" || echo "Nichts zu committen - weiter."
 git tag -a "v${VERSION}" -m "v${VERSION}"
 git push origin main
 git push origin "v${VERSION}"

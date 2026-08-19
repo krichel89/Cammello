@@ -34,6 +34,7 @@ from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
 from .editors import *
+from . import workflows
 
 
 class MWUploadMixin:
@@ -203,6 +204,13 @@ class MWUploadMixin:
         self.api.timeout = self._get_timeout()
 
         rows = []
+        # 0.18.0: the music fields, read once for the whole batch - they
+        # are batch-level controls like author and licence.
+        music_row = {}
+        if workflows.shown_fields(self.current_workflow()):
+            music_row = {'music': True}
+            for _name, _edit in getattr(self, 'music_edits', {}).items():
+                music_row[_name] = _edit.text()
         # Maps a worker index (0..n-1) back to its table row, which is not the
         # same thing as soon as only a selection is uploaded.
         self.upload_row_map = list(upload_rows)
@@ -240,6 +248,14 @@ class MWUploadMixin:
                 'other_fields': self.other_fields_edit.text(),
                 'template': 'Information',
             })
+            # 0.18.0: the music workflow builds its file page from a
+            # different layout (roles in the author line, two licence
+            # blocks). The flag rides in the row rather than being asked
+            # of the UI in the worker: the journal carries the rows, so a
+            # resume after a crash rebuilds the same wikitext even if the
+            # workflow has been switched in the meantime.
+            if music_row:
+                rows[-1].update(music_row)
 
         # Uploading to Commons IS the channel decision (0.12.4): mark these
         # files as the CC/Commons channel so they are greyed out and skipped
