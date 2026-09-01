@@ -247,6 +247,83 @@ def template_text(translate=None):
     return '\n'.join(lines)
 
 
+def render_block(wf):
+    """One [[workflow]] block with its real vorbelegung and beispiel.
+
+    0.18.0, for adding a built-in workflow to a file that predates it.
+    Deliberately NOT shared with template_text(): the template writes the
+    two sections as commented-out hints, because a fresh file is there to
+    be read and learned from. Here they carry actual values.
+
+    Dotted keys (vorbelegung.quelle = "") rather than [workflow.vorbelegung]
+    sub-tables, so the whole block is self-contained and can be appended
+    after any other block without landing inside the wrong table.
+    """
+    hide = ', '.join(_quote(h) for h in wf['hide'])
+    show = ', '.join(_quote(x) for x in wf.get('show', []))
+    lines = [
+        '[[workflow]]',
+        f'schluessel = {_quote(wf["key"])}',
+        f'name       = {_quote(wf["label"])}',
+        f'felder_aus = [{hide}]',
+        f'felder_an  = [{show}]',
+    ]
+    for name, value in wf.get('preset', {}).items():
+        lines.append(f'vorbelegung.{name} = {_quote(value)}')
+    for name, value in wf.get('example', {}).items():
+        lines.append(f'beispiel.{name} = {_quote(value)}')
+    return '\n'.join(lines) + '\n'
+
+
+def missing_builtins(translate=None):
+    """Built-in workflows the user's file does not have, in built-in order.
+
+    Empty when there is no file, when it could not be read, or when it
+    could not be parsed - in all three cases load() is already serving the
+    built-ins and nothing is missing.
+    """
+    if LAST_ERROR:
+        return []
+    target = path()
+    if not os.path.exists(target):
+        return []
+    have = {w['key'] for w in load(translate)}
+    return [w for w in BUILTIN if w['key'] not in have]
+
+
+def append_builtins(keys, translate=None):
+    """Append the named built-in workflows to the user's file.
+
+    APPEND ONLY, and a copy of the file is put beside it as
+    workflows.toml.bak first. The file belongs to Harald: nothing already
+    in it is rewritten, reordered or reformatted, and if this goes wrong
+    the previous state is one rename away.
+
+    Returns (path, error). On success error is None; on failure path is
+    None and the file has not been touched.
+    """
+    wanted = [w for w in BUILTIN if w['key'] in set(keys)]
+    if not wanted:
+        return None, 'nothing to add'
+    target = path()
+    if not os.path.exists(target):
+        return None, 'no workflow file'
+    try:
+        with open(target, 'r', encoding='utf-8') as fh:
+            before = fh.read()
+        with open(target + '.bak', 'w', encoding='utf-8') as fh:
+            fh.write(before)
+        blocks = '\n'.join(render_block(w) for w in wanted)
+        sep = '' if before.endswith('\n\n') else \
+              ('\n' if before.endswith('\n') else '\n\n')
+        with open(target, 'a', encoding='utf-8') as fh:
+            fh.write(sep + blocks)
+    except OSError as e:
+        return None, str(e)
+    reload(translate)
+    return target, None
+
+
 def ensure_file(translate=None):
     """Create the file from the template if it is not there yet.
 

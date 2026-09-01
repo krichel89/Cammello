@@ -204,8 +204,12 @@ class MWUploadMixin:
         self.api.timeout = self._get_timeout()
 
         rows = []
-        # 0.18.0: the music fields, read once for the whole batch - they
-        # are batch-level controls like author and licence.
+        # 0.18.0: the music fields of the WHOLE delivery, read once - they
+        # are batch-level controls like author and licence. The other five
+        # (composer, work, year, death year, licence of the composition)
+        # belong to the selection and travel in the description cell as
+        # SD_KEYS, so the worker picks them out of `sd` per file; see
+        # constants.MUSIC_SEL_FIELDS.
         music_row = {}
         if workflows.shown_fields(self.current_workflow()):
             music_row = {'music': True}

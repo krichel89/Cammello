@@ -7,7 +7,8 @@ Keyboard model (the whole point of the tab - one hand, no dialogs):
   X            reject (rating -1) + advance
   6-9          red/yellow/green/blue directly (Lightroom's own key layout;
                purple has no key in LR either)
-  Z            toggle 100% zoom, F fullscreen (double-click does too)
+  Z            toggle 100% zoom, F fullscreen (double-click does too; in
+               the grid a double-click opens that picture fullscreen)
   Home/End     jump to the first / last image
   I            toggle the EXIF info overlay
 Number keys auto-advance (checkbox to turn that off).
@@ -18,12 +19,15 @@ queue; the UI never waits for disk.
 """
 import os
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QComboBox, QCheckBox, QFileDialog, QMessageBox, QSplitter,
     QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
-    QToolButton, QInputDialog, QShortcut)
+    QToolButton, QInputDialog, QShortcut, QDialog, QDialogButtonBox,
+    QLineEdit, QRadioButton)
 from PyQt5.QtGui import (QIcon, QPixmap, QColor, QPen, QPainter,
                          QKeySequence)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
@@ -31,8 +35,11 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 
 from .constants import *
+# Explicit alongside the star import: the dialog added in 0.18.5 uses it,
+# and a star-import name is one pyflakes cannot verify.
+from .constants import current_input_style
 from . import culling
-from . import channels, previews, edits
+from . import channels, previews, edits, camera
 from .edit_panel import EditPanel
 from .culling_view import CullImageView
 from .widgets import (UploadProgressDialog, toolbar_separator,
@@ -208,6 +215,115 @@ class _CullStrip(QListWidget):
                     for p in self._owner._cull_paths_for_rows(rows)])
         return md
 
+    def mouseDoubleClickEvent(self, event):
+        """0.18.4: double-click in the grid opens that picture fullscreen.
+
+        The single image view has done this since 0.9 (double-click toggles
+        fullscreen); in the grid a double-click did nothing, which reads as
+        broken. Leaving fullscreen returns to the grid it came from.
+        """
+        item = self.itemAt(event.pos())
+        if item is not None and self._owner._cull_grid:
+            self._owner._cull_fullscreen_from_row(self.row(item))
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def resizeEvent(self, event):
+        """A resize changes which rows are on screen, and since 0.18.4 rows
+        are decorated lazily, the newly exposed ones must be filled in."""
+        super().resizeEvent(event)
+        owner = self._owner
+        if hasattr(owner, '_cull_request_visible_thumbs'):
+            owner._cull_request_visible_thumbs()
+
+
+class _TransferDialog(QDialog):
+    """Target folder, operation and scope in ONE dialog (0.18.5).
+
+    Harald's two notes: the move path should be able to copy as well, and
+    there should be an option to take only RAW + sidecar instead of the
+    whole group. His wording for the first was that it must not become a
+    third button - so it is a choice inside the dialog that "Move to…"
+    already opens, and the plain folder picker is replaced by this.
+
+    The scope choice is what makes it interesting: 0.18.2 FORCED the whole
+    group because half a moved pair is worthless. That reasoning does not
+    survive the user asking for the other half to stay behind on purpose,
+    so the whole group stays the DEFAULT and the narrow scope is a
+    deliberate, visible choice - never a silent one.
+    """
+
+    def __init__(self, parent, start_dir=''):
+        super().__init__(parent)
+        self.setWindowTitle(tr('Move or copy to folder') + f' - {APP_NAME}')
+        self.setMinimumWidth(520)
+        self.setStyleSheet(current_input_style())
+
+        layout = QVBoxLayout(self)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel(tr('Destination folder:')))
+        self.dest_edit = QLineEdit(start_dir or '')
+        row.addWidget(self.dest_edit, 1)
+        browse = QPushButton(tr('Browse…'))
+        browse.clicked.connect(self._browse)
+        row.addWidget(browse)
+        layout.addLayout(row)
+
+        op_box = QGroupBox(tr('Operation'))
+        op_lay = QVBoxLayout(op_box)
+        self.move_rb = QRadioButton(tr('Move (the files leave this folder)'))
+        self.copy_rb = QRadioButton(tr('Copy (the files stay here as well)'))
+        self.move_rb.setChecked(True)
+        op_lay.addWidget(self.move_rb)
+        op_lay.addWidget(self.copy_rb)
+        layout.addWidget(op_box)
+
+        scope_box = QGroupBox(tr('Which files'))
+        scope_lay = QVBoxLayout(scope_box)
+        self.group_rb = QRadioButton(
+            tr('The whole group: RAW, JPEG and .xmp sidecar'))
+        self.raw_rb = QRadioButton(tr('RAW and .xmp sidecar only'))
+        self.group_rb.setChecked(True)
+        self.raw_rb.setToolTip(tr(
+            'The JPEG of a pair stays behind. An entry without a RAW file '
+            'still travels - there is no partner to leave.'))
+        scope_lay.addWidget(self.group_rb)
+        scope_lay.addWidget(self.raw_rb)
+        layout.addWidget(scope_box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok
+                                   | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._ok_btn = buttons.button(QDialogButtonBox.Ok)
+
+    def _browse(self):
+        start = self.dest_edit.text().strip()
+        chosen = QFileDialog.getExistingDirectory(
+            self, tr('Move or copy to folder'), start)
+        if chosen:
+            self.dest_edit.setText(chosen)
+
+    def _accept_if_valid(self):
+        """An OK with a folder that is not there would fail one file at a
+        time in the worker; refuse it here instead."""
+        dest = self.dest_edit.text().strip()
+        if not dest or not os.path.isdir(dest):
+            QMessageBox.warning(self, tr('Move or copy to folder'), tr(
+                'Pick a folder that exists.'))
+            return
+        self.accept()
+
+    def result_values(self):
+        """(dest, move, scope) - only meaningful after accept()."""
+        return (self.dest_edit.text().strip(),
+                self.move_rb.isChecked(),
+                culling.SCOPE_RAW if self.raw_rb.isChecked()
+                else culling.SCOPE_GROUP)
+
 
 class _TabBarDropSwitcher(QObject):
     """Event filter for the tab bar: hovering a tab during a drag switches to
@@ -236,10 +352,30 @@ class _TabBarDropSwitcher(QObject):
 
 
 class _MetadataReader(QThread):
-    """Reads rating/label of all items in the background after a folder scan
-    (3000 pyexiv2 reads must not block the UI)."""
-    item_ready = pyqtSignal(int)      # index into the item list
+    """Reads rating/label of all items in the background after a folder scan.
+
+    0.18.4, both changes measured rather than guessed:
+
+    * The reads run in a small thread pool. Every read is file I/O (the head
+      of a sidecar or JPEG), so the GIL is released and threads actually
+      overlap. On a warm local SSD the gain is modest; on a card reader,
+      where per-file latency dominates the transfer, it is the point.
+    * Results are emitted in BATCHES. One signal per item meant one queued
+      cross-thread event and one row decoration per file; measured on 800
+      rows that path cost 0.52 s of GUI thread against 0.002 s for the same
+      work done in one pass. Over a 3000-image card it was seconds of
+      stutter for rows that are mostly off screen anyway.
+    """
+    items_ready = pyqtSignal(list)    # indices into the item list
     done = pyqtSignal(int)            # count
+
+    #: how many results are collected before the GUI hears about them, and
+    #: how long a partial batch may wait. The first screenful must appear
+    #: immediately, so the very first batch is deliberately small.
+    BATCH = 64
+    FIRST_BATCH = 12
+    MAX_WAIT = 0.15                   # seconds
+    WORKERS = 8
 
     def __init__(self, items):
         super().__init__()
@@ -249,17 +385,39 @@ class _MetadataReader(QThread):
     def stop(self):
         self._stop = True
 
+    def _read(self, pair):
+        i, item = pair
+        if self._stop:
+            return None
+        try:
+            culling.read_item_metadata(item)
+        except Exception:
+            pass                       # unreadable file: keep defaults
+        return i
+
     def run(self):
         n = 0
-        for i, item in enumerate(self.items):
-            if self._stop:
-                break
-            try:
-                culling.read_item_metadata(item)
-            except Exception:
-                pass                   # unreadable file: keep defaults
-            n += 1
-            self.item_ready.emit(i)
+        pending = []
+        last = time.monotonic()
+        limit = self.FIRST_BATCH
+        # chunksize=1 on purpose: the pool must not hand one worker a
+        # contiguous block, or the first screenful waits for the last file
+        # in that block.
+        with ThreadPoolExecutor(max_workers=self.WORKERS) as pool:
+            for i in pool.map(self._read, enumerate(self.items),
+                              chunksize=1):
+                if i is None:          # stop() was seen
+                    continue
+                n += 1
+                pending.append(i)
+                now = time.monotonic()
+                if len(pending) >= limit or now - last >= self.MAX_WAIT:
+                    self.items_ready.emit(pending)
+                    pending = []
+                    last = now
+                    limit = self.BATCH
+        if pending:
+            self.items_ready.emit(pending)
         self.done.emit(n)
 
 
@@ -275,11 +433,18 @@ class _FolderCopyWorker(QThread):
     done = pyqtSignal(str)                 # summary (QThread.finished stays
     #                                        untouched under its own name)
 
-    def __init__(self, paths, dest_dir, logger, edit_map=None):
+    def __init__(self, paths, dest_dir, logger, edit_map=None, move=False):
         super().__init__()
         self.paths = paths
         self.dest_dir = dest_dir
         self.log = logger
+        # 0.18.2: the same worker MOVES when asked to. Deliberately not a
+        # second class - progress, cancel and the summary are identical and
+        # would have drifted apart. Two differences, both in run():
+        # shutil.move instead of copy2, and no rendered "_edit.jpg" export,
+        # because moving must not turn Harald's original into a rendering.
+        self.move = move
+        self.moved = []
         # 0.13: {source_path: record}. A file with an edit is exported as a
         # rendered "<stem>_edit.jpg" copy (Harald's choice); everything else
         # is a plain copy2. Sidecars are never edited.
@@ -293,8 +458,8 @@ class _FolderCopyWorker(QThread):
 
     def run(self):
         total = len(self.paths)
-        self.log.info('=== Copy to "%s" started: %d file(s) ===',
-                      self.dest_dir, total)
+        self.log.info('=== %s to "%s" started: %d file(s) ===',
+                      'Move' if self.move else 'Copy', self.dest_dir, total)
         ok = skipped = failed = 0
         cancelled_at = None
         for i, path in enumerate(self.paths):
@@ -304,7 +469,7 @@ class _FolderCopyWorker(QThread):
                 break
             name = os.path.basename(path)
             self.file_started.emit(i, name)
-            record = self.edit_map.get(path)
+            record = None if self.move else self.edit_map.get(path)
             if record:
                 name = edits.export_name(path)
             target = os.path.join(self.dest_dir, name)
@@ -321,29 +486,129 @@ class _FolderCopyWorker(QThread):
                         # original rather than exporting nothing.
                         shutil.copy2(path, os.path.join(
                             self.dest_dir, os.path.basename(path)))
+                elif self.move:
+                    shutil.move(path, target)
+                    self.moved.append(path)
                 else:
                     shutil.copy2(path, target)
             except Exception as e:
                 failed += 1
-                self.log.error('✗ Copy failed for "%s": %s', name, e,
+                self.log.error('✗ %s failed for "%s": %s',
+                               'Move' if self.move else 'Copy', name, e,
                                exc_info=True)
                 self.error.emit(i, f'{name}: {e}')
                 self.progress.emit(i, '✗ ' + tr('Error'))
                 continue
             ok += 1
-            self.progress.emit(i, '✓ ' + tr('Copied'))
+            self.progress.emit(
+                i, '✓ ' + (tr('Moved') if self.move else tr('Copied')))
         if cancelled_at is not None:
-            summary = tr('Cancelled: {ok}/{total} file(s) copied, '
-                         '{n} not started.').format(
+            summary = (tr('Cancelled: {ok}/{total} file(s) moved, '
+                          '{n} not started.') if self.move else
+                       tr('Cancelled: {ok}/{total} file(s) copied, '
+                          '{n} not started.')).format(
                 ok=ok, total=total, n=total - cancelled_at)
         else:
-            summary = (tr('Done: {ok}/{total} file(s) copied').format(
+            summary = ((tr('Done: {ok}/{total} file(s) moved') if self.move
+                        else tr('Done: {ok}/{total} file(s) copied')).format(
                            ok=ok, total=total)
                        + (', ' + tr('{n} skipped (already there)').format(
                               n=skipped) if skipped else '')
                        + (', ' + tr('{n} failed').format(n=failed)
                           if failed else '') + '.')
-        self.log.info('=== Copy finished: %s ===', summary)
+        self.log.info('=== %s finished: %s ===',
+                      'Move' if self.move else 'Copy', summary)
+        self.done.emit(summary)
+
+
+
+class _CameraImportWorker(QThread):
+    """Copies files off a PTP camera into a local folder, off the GUI thread.
+
+    Same signal shape as _FolderCopyWorker so the existing progress dialog
+    can drive it unchanged. The listing step is in here too: walking the
+    card's folders costs a round trip per file for the size, which is far
+    too slow for the GUI thread.
+    """
+    listing = pyqtSignal(int)              # files seen while walking the card
+    ready = pyqtSignal(int)                # how many will actually be copied
+    file_started = pyqtSignal(int, str)    # index, filename
+    progress = pyqtSignal(int, str)        # index, status text
+    fatal = pyqtSignal(str)                # nothing could be done
+    done = pyqtSignal(str)                 # summary
+
+    def __init__(self, device, dest_dir, logger):
+        super().__init__()
+        self.device = device
+        self.dest_dir = dest_dir
+        self.log = logger
+        self.copied = 0
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+        self.log.info('Camera import cancel requested: stopping after the '
+                      'current file.')
+
+    def run(self):
+        backend = None
+        try:
+            backend = camera.make_backend()
+            backend.connect(self.device)
+            files = backend.list_files(progress=self.listing.emit)
+            existing = camera.scan_dest(self.dest_dir)
+            todo, skipped, conflicts = camera.plan_import(files, existing)
+            self.log.info(
+                '=== Camera import from "%s" to "%s": %d file(s) on the '
+                'card, %d to copy, %d already there, %d name clash(es) ===',
+                self.device.name if self.device else '?', self.dest_dir,
+                len(files), len(todo), len(skipped), len(conflicts))
+            for name in [f.name for f in conflicts][:12]:
+                self.log.warning('Name clash, left alone: %s', name)
+            self.ready.emit(len(todo))
+        except camera.CameraError as exc:
+            self.fatal.emit(str(exc))
+            self.done.emit('')
+            if backend is not None:
+                backend.close()
+            return
+        except Exception as exc:                      # pragma: no cover
+            self.log.error('Camera import failed before copying: %s', exc,
+                           exc_info=True)
+            self.fatal.emit(str(exc))
+            self.done.emit('')
+            if backend is not None:
+                backend.close()
+            return
+
+        failed = 0
+        cancelled_at = None
+        try:
+            for i, cfile in enumerate(todo):
+                if self._cancelled:
+                    cancelled_at = i
+                    self.progress.emit(i, tr('Cancelled'))
+                    break
+                self.file_started.emit(i, cfile.name)
+                target = os.path.join(self.dest_dir, cfile.name)
+                try:
+                    backend.download(cfile, target)
+                except Exception as exc:
+                    failed += 1
+                    self.log.error('Camera import failed for "%s": %s',
+                                   cfile.name, exc, exc_info=True)
+                    self.progress.emit(i, '\u2717 ' + str(exc))
+                    continue
+                self.copied += 1
+                self.progress.emit(i, '\u2713 ' + camera.format_size(
+                    cfile.size))
+        finally:
+            backend.close()
+
+        summary = camera.summary_text(self.copied, len(skipped), failed,
+                                      len(conflicts),
+                                      cancelled=cancelled_at is not None)
+        self.log.info('=== Camera import finished: %s ===', summary)
         self.done.emit(summary)
 
 
@@ -370,6 +635,8 @@ class MWCullingMixin:
         self._cull_direction = 1
         self._cull_number_mode = 'rating'      # or 'color'
         self._cull_grid = False
+        # 0.18.4: set when fullscreen was entered from the grid.
+        self._cull_fs_from_grid = False
         self._cull_fs = None
         self._cull_show_exif = False   # i key: EXIF overlay on/off
         self._cull_row_by_path = {}
@@ -432,6 +699,17 @@ class MWCullingMixin:
         self.cull_reload_btn.setToolTip(tr('Read the current folder again from disk.'))
         self.cull_reload_btn.clicked.connect(self._cull_reload_folder)
         bar.addWidget(self.cull_reload_btn)
+        # 0.18.3: Canon bodies speak PTP, so the card never becomes a volume
+        # and "Open…" has nothing to point at. This is the backup path for a
+        # missing card reader: copy off the camera, then open the copy.
+        cam_btn = QPushButton(tr('From camera…'))
+        cam_btn.setToolTip(tr(
+            'Copy pictures straight off a connected camera into a folder and '
+            'open that folder.\nMeant as the backup when no card reader is '
+            'at hand - a reader is considerably faster.'))
+        cam_btn.clicked.connect(self._cull_import_from_camera)
+        bar.addWidget(cam_btn)
+        self.cull_camera_btn = cam_btn
         self.cull_mode_lbl = QLabel()
         self.cull_mode_lbl.setToolTip(tr('Number keys 1-5 set stars or colors; '
                                       'M toggles the mode.'))
@@ -507,7 +785,7 @@ class MWCullingMixin:
         bar.addStretch(1)      # second half of the centring pair
         # "Apply" (Übernehmen) hands the selection (or all filtered images) to
         # the MediaWiki tab AND the IPTC tab AND the FTP tab's list at once (the
-        # three share one file list; nothing is uploaded yet). "Save to…"
+        # three share one file list; nothing is uploaded yet). "Export…"
         # (folder export) stays a separate action.
         apply_btn = QPushButton(tr('Add to tabs'))
         apply_btn.setToolTip(tr('Adds the selected images (or all filtered '
@@ -516,13 +794,23 @@ class MWCullingMixin:
                                 'uploaded yet.'))
         apply_btn.clicked.connect(self._cull_apply)
         bar.addWidget(apply_btn)
-        to_folder_btn = QPushButton(tr('Save to…'))
+        # 0.18.5: back to "Export" (Harald's own note) - "Save to…" read as
+        # if it saved the app's state, which it never did.
+        to_folder_btn = QPushButton(tr('Export…'))
         to_folder_btn.setToolTip(
             tr('Copies the selected images into a local folder. RAW files bring '
             'their .xmp sidecar along; existing files in the target folder '
             'are never overwritten.'))
         to_folder_btn.clicked.connect(self._cull_to_folder)
         bar.addWidget(to_folder_btn)
+        move_btn = QPushButton(tr('Move to…'))
+        move_btn.setToolTip(tr(
+            'Moves or copies the selected images into a local folder. The '
+            'dialog asks\nwhich of the two, and whether to take the whole '
+            'group (RAW, JPEG and\n.xmp sidecar) or RAW + sidecar only. '
+            'Nothing in the target folder is\never overwritten.'))
+        move_btn.clicked.connect(self._cull_move_to_folder)
+        bar.addWidget(move_btn)
         slim_toolbar(bar)
         outer.addLayout(bar)
 
@@ -670,6 +958,7 @@ class MWCullingMixin:
         self._cull_flush_edits()
         self._cull_loader.new_generation()
 
+        t0 = time.monotonic()
         report = {}
         self._cull_items = culling.scan_folder(folder, report)
         self._cull_folder = folder
@@ -687,27 +976,68 @@ class MWCullingMixin:
         self.logger.info('Culling: opened "%s", %d image(s).',
                          folder, len(self._cull_items))
 
-        # Ratings/labels arrive in the background.
+        # Ratings/labels arrive in the background, in batches (0.18.4).
+        self._cull_meta_t0 = time.monotonic()
         self._cull_reader = _MetadataReader(self._cull_items)
-        self._cull_reader.item_ready.connect(self._cull_meta_arrived)
-        self._cull_reader.done.connect(
-            lambda n: self._cull_set_status())
+        self._cull_reader.items_ready.connect(self._cull_meta_arrived)
+        self._cull_reader.done.connect(self._cull_meta_done)
         self._cull_reader.start()
 
         self._cull_apply_filter()
+        # 0.18.4: three numbers in the log, so "reading the card takes too
+        # long" can be answered instead of guessed - the rows, the metadata
+        # pass, and the moment the first screenful of thumbnails is actually
+        # there. They are the three candidates, and only a real card can say
+        # which one dominates.
+        self.logger.info('Culling: folder ready in %.2f s (scan + rows).',
+                         time.monotonic() - t0)
+        first, last = self._cull_visible_range()
+        if first is not None:
+            self._cull_screenful_t0 = t0
+            self._cull_screenful = {
+                self._cull_visible[i].display_path
+                for i in range(first, last + 1)}
+        else:
+            self._cull_screenful = set()
 
-    def _cull_meta_arrived(self, index):
-        item = self._cull_items[index]
-        vis_idx = self._cull_row_by_item.get(id(item))
-        if vis_idx is not None:
-            self._cull_decorate_row(vis_idx)
+    def _cull_meta_done(self, count):
+        self._cull_set_status()
+        t0 = getattr(self, '_cull_meta_t0', None)
+        if t0 is not None:
+            self.logger.info(
+                'Culling: ratings/labels for %d entry/entries read in '
+                '%.2f s.', count, time.monotonic() - t0)
 
-    def _cull_request_visible_thumbs(self, margin=24):
-        """Request thumbs for the on-screen filmstrip/grid range plus a
-        margin - never for the whole folder at once."""
+    def _cull_meta_arrived(self, indices):
+        """A batch of items got their rating/label. Only rows on screen are
+        redrawn now; the rest are marked dirty and decorated when they
+        scroll into view - decorating 3000 invisible rows was pure cost."""
+        decorated = getattr(self, '_cull_decorated', None)
+        if decorated is None:
+            return
+        rows = []
+        for index in indices:
+            item = self._cull_items[index]
+            vis_idx = self._cull_row_by_item.get(id(item))
+            if vis_idx is not None:
+                decorated.discard(vis_idx)
+                rows.append(vis_idx)
+        if not rows:
+            return
+        first, last = self._cull_visible_range()
+        if first is None:
+            return
+        for vis_idx in rows:
+            if first <= vis_idx <= last:
+                self._cull_decorate_row(vis_idx)
+
+    def _cull_visible_range(self):
+        """(first, last) row currently intersecting the viewport, or
+        (None, None). Split out in 0.18.4 because two callers need it now:
+        the thumbnail request and the lazy row decoration."""
         n = self.cull_strip.count()
         if not n:
-            return
+            return None, None
         vp = self.cull_strip.viewport().rect()
         first = last = None
         for i in range(n):
@@ -719,7 +1049,40 @@ class MWCullingMixin:
             elif first is not None:
                 break
         if first is None:
+            return None, None
+        return first, last
+
+    def _cull_decorate_visible(self, margin=24):
+        """Decorate the rows on screen (plus a margin) that are not
+        decorated yet.
+
+        0.18.4: opening a folder used to decorate EVERY row up front -
+        3000 rows of stars, labels, badges and tooltips built on the GUI
+        thread before the window came back. Measured at roughly 0.65 ms a
+        row, that is the visible part of "reading the card takes too long",
+        and nearly all of it was spent on rows nobody was looking at.
+        """
+        first, last = self._cull_visible_range()
+        if first is None:
             return
+        n = self.cull_strip.count()
+        done = getattr(self, '_cull_decorated', None)
+        if done is None:
+            done = self._cull_decorated = set()
+        for i in range(max(0, first - margin), min(n, last + 1 + margin)):
+            if i not in done:
+                self._cull_decorate_row(i)
+
+    def _cull_request_visible_thumbs(self, margin=24):
+        """Request thumbs for the on-screen filmstrip/grid range plus a
+        margin - never for the whole folder at once."""
+        first, last = self._cull_visible_range()
+        if first is None:
+            return
+        n = self.cull_strip.count()
+        # Rows scrolled into view need their stars as much as their thumb,
+        # and both callers fire from the same scroll signal.
+        self._cull_decorate_visible(margin)
         for i in range(max(0, first - margin), min(n, last + 1 + margin)):
             self._cull_loader.request(self._cull_visible[i].display_path,
                                       'thumb',
@@ -776,8 +1139,10 @@ class MWCullingMixin:
         # list.index() per event was O(n^2) over a 3000-image folder).
         self._cull_row_by_path = {}
         self._cull_row_by_item = {}
+        # 0.18.4: the maps are built for every row (cheap, dict writes), the
+        # DECORATION is not - see _cull_decorate_visible().
+        self._cull_decorated = set()
         for i, item in enumerate(self._cull_visible):
-            self._cull_decorate_row(i)
             self._cull_row_by_path.setdefault(item.display_path, i)
             self._cull_row_by_item[id(item)] = i
         self._cull_request_visible_thumbs()
@@ -795,6 +1160,13 @@ class MWCullingMixin:
     def _cull_decorate_row(self, vis_idx):
         if not (0 <= vis_idx < self.cull_strip.count()):
             return
+        # Bookkeeping lives HERE, not at the call sites: every path that
+        # decorates a row (rating change, thumb arrival, scrolling) must
+        # mark it, and a second hand-kept list would drift apart - the
+        # sdc._ASSIGN_RE lesson.
+        if not hasattr(self, '_cull_decorated'):
+            self._cull_decorated = set()
+        self._cull_decorated.add(vis_idx)
         item = self._cull_visible[vis_idx]
         li = self.cull_strip.item(vis_idx)
         pair = ' [P]' if item.is_pair else ''
@@ -909,6 +1281,14 @@ class MWCullingMixin:
             i = self._cull_row_by_path.get(key)
             if i is not None:
                 self._cull_decorate_row(i)
+            pending = getattr(self, '_cull_screenful', None)
+            if pending:
+                pending.discard(key)
+                if not pending:
+                    self.logger.info(
+                        'Culling: first screenful of thumbnails complete '
+                        '%.2f s after opening.',
+                        time.monotonic() - self._cull_screenful_t0)
 
     def _cull_apply_bg(self, dark):
         """Surround colour for image view and strip (0.15.0). One call site
@@ -1202,6 +1582,9 @@ class MWCullingMixin:
         """Loupe view (E, Lightroom-style): leave fullscreen and grid, show
         the single image fitted to the window."""
         if self._cull_fs is not None:
+            # E/G name the mode they want, so the 0.18.4 "return to the grid
+            # you came from" must not overrule them.
+            self._cull_fs_from_grid = False
             self._cull_toggle_fullscreen()
         if self._cull_grid:
             self._cull_set_grid(False)
@@ -1211,8 +1594,21 @@ class MWCullingMixin:
         """Grid view (G): thumbnails instead of the large image. From
         fullscreen this leaves fullscreen first."""
         if self._cull_fs is not None:
+            self._cull_fs_from_grid = False      # see _cull_loupe_view
             self._cull_toggle_fullscreen()
         self._cull_set_grid(not self._cull_grid)
+
+    def _cull_fullscreen_from_row(self, row):
+        """Double-click in the grid (0.18.4): show THAT picture fullscreen.
+
+        The row is made current first, so fullscreen shows the picture that
+        was double-clicked and not whatever was selected before.
+        """
+        if not (0 <= row < len(self._cull_visible)):
+            return
+        self._cull_show_index(row)
+        if self._cull_fs is None:
+            self._cull_toggle_fullscreen()
 
     def _cull_toggle_fullscreen(self):
         """Image-only fullscreen: the view is reparented into a borderless
@@ -1220,7 +1616,10 @@ class MWCullingMixin:
         F or Esc leaves."""
         if self._cull_fs is None:
             # From the grid, F used to do nothing (looked broken): leave the
-            # grid first, then go fullscreen.
+            # grid first, then go fullscreen. 0.18.4 remembers that it came
+            # from the grid and puts it back on the way out - otherwise a
+            # double-click into fullscreen quietly changes the view mode.
+            self._cull_fs_from_grid = bool(self._cull_grid)
             if self._cull_grid:
                 self._cull_set_grid(False)
             fs = _CullTab(self)
@@ -1244,6 +1643,9 @@ class MWCullingMixin:
             self._cull_tab_widget.setFocus()
             if self.cull_view.is_fit:
                 self.cull_view.fit()
+            if getattr(self, '_cull_fs_from_grid', False):
+                self._cull_fs_from_grid = False
+                self._cull_set_grid(True)
             # Coming back: the strip may have scrolled/emptied meanwhile.
             if 0 <= self._cull_index < self.cull_strip.count():
                 self.cull_strip.scrollToItem(
@@ -1891,6 +2293,101 @@ class MWCullingMixin:
         self._cull_copy_dlg.show()
         self._cull_copy_worker.start()
 
+    def _cull_move_to_folder(self):
+        """Target 4 (0.18.2, reworked in 0.18.5): move OR copy into a local
+        folder.
+
+        Harald: "Beim Culling möchte ich das ganze RAW/JPG Paar mit sidecar
+        verschieben können." So unlike "Export" this ignores the pair
+        selector: moving the JPEG alone would leave a RAW behind with an
+        .xmp describing a file that is no longer next to it.
+
+        0.18.5 puts both of his follow-ups into the one dialog rather than
+        onto new buttons: the operation (move or copy) and the scope (whole
+        group, or RAW + sidecar only). The whole group stays the default -
+        leaving half a pair behind is now possible, but never by accident.
+
+        Guards before anything is touched: the folder that is currently
+        open is refused outright, and for a MOVE a name that already exists
+        in the target stops the whole run.
+        """
+        rows = self._cull_send_rows()
+        if rows is None:
+            return
+        dlg = _TransferDialog(self, remembered_dir(self.settings))
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        dest, move, scope = dlg.result_values()
+        remember_dir(self.settings, dest)
+        group = []
+        for r in rows:
+            if not (0 <= r < len(self._cull_visible)):
+                continue
+            for path in culling.group_paths(self._cull_visible[r], scope):
+                if os.path.exists(path) and path not in group:
+                    group.append(path)
+        if not group:
+            return
+        title = tr('Move to folder') if move else tr('Copy to folder')
+        here = getattr(self, '_cull_folder', None)
+        if here and os.path.normpath(dest) == os.path.normpath(here):
+            QMessageBox.information(self, title, tr(
+                'That is the folder that is open - there is nothing to '
+                'move.'))
+            return
+        # The collision guard belongs to MOVING only. A move that overwrote
+        # something would destroy the target AND the last copy of the
+        # source, so it stops the whole run; a copy leaves the source in
+        # place, so an existing name is simply skipped, exactly as "Export"
+        # has always done.
+        if move:
+            clash = culling.move_collisions(group, dest)
+            if clash:
+                QMessageBox.warning(self, title, tr(
+                    'These files are already in the target folder, so '
+                    'nothing was moved:\n\n{names}').format(
+                        names='\n'.join(clash[:12])
+                        + ('\n…' if len(clash) > 12 else '')))
+                return
+        # Pending XMP writes must land before the sidecars travel.
+        self._cull_wb.flush(10)
+        self.logger.info('%s %d file(s) from %d entry/entries to "%s" '
+                         '(scope: %s).',
+                         'Moving' if move else 'Copying', len(group),
+                         len(rows), dest, scope)
+        self._cull_copy_dlg = UploadProgressDialog(
+            len(group), self, verb=tr('Moving') if move else tr('Copying'),
+            title=(tr('Move') if move else tr('Copy')) + f' - {APP_NAME}')
+        self._cull_copy_done = 0
+        self._cull_copy_worker = _FolderCopyWorker(group, dest, self.logger,
+                                                   move=move)
+        self._cull_copy_worker.file_started.connect(
+            self._cull_copy_dlg.set_current)
+        self._cull_copy_worker.progress.connect(self._cull_on_copy_progress)
+        self._cull_copy_worker.done.connect(
+            self._cull_on_move_finished if move
+            else self._cull_on_copy_finished)
+        self._cull_copy_dlg.cancel_requested.connect(
+            self._cull_copy_worker.cancel)
+        self._cull_copy_dlg.show()
+        self._cull_copy_worker.start()
+
+    def _cull_on_move_finished(self, summary):
+        """After a move the files are gone from the open folder, so the
+        strip, the preview cache and the path-keyed records would all point
+        at nothing. Re-reading the folder rebuilds every one of them, and
+        the crop/channel records travel to the new location first."""
+        self._cull_copy_dlg.force_close()
+        moved = list(getattr(self._cull_copy_worker, 'moved', []))
+        for old in moved:
+            new = os.path.join(self._cull_copy_worker.dest_dir,
+                               os.path.basename(old))
+            self._cull_migrate_paths(old, new)
+        self.cull_status.setText(f'Folder: {summary}')
+        QMessageBox.information(self, tr('Move to folder'), summary)
+        if moved:
+            self._cull_reload_folder()
+
     def _cull_on_copy_progress(self, _index, status):
         if status.startswith(('✓', '✗', '•')):
             self._cull_copy_done += 1
@@ -1900,6 +2397,90 @@ class MWCullingMixin:
         self._cull_copy_dlg.force_close()
         self.cull_status.setText(f'Folder: {summary}')
         QMessageBox.information(self, tr('Copy to folder'), summary)
+
+    # ── Import from a camera (0.18.3) ────────────────────────────────────────
+
+    def _cull_import_from_camera(self):
+        """Canon bodies present the card over PTP, not as a volume, so there
+        is no folder to open. Copy first, then open the copy - everything
+        downstream (pyexiv2, rawpy, edits, sidecars, F2) needs real local
+        paths."""
+        problem = camera.backend_problem()
+        if problem:
+            QMessageBox.information(self, tr('Import from camera'),
+                                    tr(problem))
+            return
+        try:
+            devices = camera.make_backend().list_devices()
+        except camera.CameraError as exc:
+            QMessageBox.warning(self, tr('Import from camera'), tr(str(exc)))
+            return
+        except Exception as exc:
+            self.logger.error('Camera detection failed: %s', exc,
+                              exc_info=True)
+            QMessageBox.warning(self, tr('Import from camera'), str(exc))
+            return
+        if not devices:
+            QMessageBox.information(self, tr('Import from camera'), tr(
+                'No camera answered. Switch it on, connect the USB cable, '
+                'and close any other program that may be holding the '
+                'camera.'))
+            return
+        device = devices[0]
+        if len(devices) > 1:
+            names = [f'{d.name} ({d.addr})' for d in devices]
+            pick, ok = QInputDialog.getItem(
+                self, tr('Import from camera'), tr('Which camera?'),
+                names, 0, False)
+            if not ok:
+                return
+            device = devices[names.index(pick)]
+        dest = QFileDialog.getExistingDirectory(
+            self, tr('Import from camera into folder'),
+            remembered_dir(self.settings))
+        if not dest:
+            return
+        remember_dir(self.settings, dest)
+        self.logger.info('Camera import: "%s" -> "%s".', device.name, dest)
+        self._cull_camera_dest = dest
+        self._cull_copy_dlg = UploadProgressDialog(
+            0, self, verb=tr('Importing'),
+            title=tr('Import from camera') + f' - {APP_NAME}')
+        self._cull_copy_done = 0
+        self._cull_camera_worker = _CameraImportWorker(device, dest,
+                                                       self.logger)
+        w = self._cull_camera_worker
+        w.listing.connect(self._cull_on_camera_listing)
+        w.ready.connect(self._cull_on_camera_ready)
+        w.file_started.connect(self._cull_copy_dlg.set_current)
+        w.progress.connect(self._cull_on_copy_progress)
+        w.fatal.connect(self._cull_on_camera_fatal)
+        w.done.connect(self._cull_on_camera_finished)
+        self._cull_copy_dlg.cancel_requested.connect(w.cancel)
+        self._cull_copy_dlg.show()
+        w.start()
+
+    def _cull_on_camera_listing(self, count):
+        self._cull_copy_dlg.set_detail(
+            tr('Reading the card: {n} file(s) so far…').format(n=count))
+
+    def _cull_on_camera_ready(self, count):
+        self._cull_copy_dlg.set_total(count)
+
+    def _cull_on_camera_fatal(self, message):
+        self._cull_camera_fatal = message
+
+    def _cull_on_camera_finished(self, summary):
+        self._cull_copy_dlg.force_close()
+        fatal = getattr(self, '_cull_camera_fatal', None)
+        self._cull_camera_fatal = None
+        if fatal:
+            QMessageBox.warning(self, tr('Import from camera'), tr(fatal))
+            return
+        self.cull_status.setText(f'Camera: {summary}')
+        QMessageBox.information(self, tr('Import from camera'), summary)
+        if getattr(self._cull_camera_worker, 'copied', 0):
+            self._cull_open_folder(self._cull_camera_dest)
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
 

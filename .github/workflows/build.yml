@@ -137,7 +137,13 @@ jobs:
             # rawpy herausfiltern und die Intel-Version explizit setzen.
             # Folge: der Intel-Build traegt ein aelteres LibRaw (relevant
             # nur fuer sehr neue Kameramodelle); arm64 bleibt aktuell.
-            grep -v '^rawpy' requirements.txt > requirements_intel.txt
+            # 0.18.3: gphoto2 ebenfalls herausfiltern. Das x86_64-Wheel
+            # ist macosx_15_0 - es wuerde das Mindest-macOS des Intel-Builds
+            # von 13 (Ventura, diktiert vom pyexiv2-Wheel) auf 15 anheben.
+            # Preis: kein Kamera-Import im Intel-Build; dort bleibt der
+            # Kartenleser der Weg.
+            grep -v '^rawpy' requirements.txt \
+              | grep -v '^gphoto2' > requirements_intel.txt
             pip install -r requirements_intel.txt 'rawpy==0.25.1'
           else
             pip install -r requirements.txt
@@ -203,6 +209,16 @@ jobs:
 
       - name: Build App
         run: |
+          # 0.18.3: gphoto2 steckt nur im arm64-Build (siehe Intel-Filter
+          # oben). --collect-all ist Pflicht, nicht Kosmetik: das Paket
+          # setzt CAMLIBS/IOLIBS relativ zu seinem eigenen Verzeichnis,
+          # und ohne die mitgelieferten camlibs/ptp2.so findet libgphoto2
+          # gar keine Kamera.
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            GPHOTO_FLAG=""
+          else
+            GPHOTO_FLAG="--collect-all gphoto2"
+          fi
           # --onedir statt --onefile: onefile+windowed ist auf macOS
           # deprecated (ab PyInstaller 7.0 ein Fehler); das .app-Bundle
           # entsteht bei --onedir genauso und wird gezippt.
@@ -214,7 +230,8 @@ jobs:
             --add-data "cammello/assets:cammello/assets" \
             --hidden-import paramiko \
             --collect-all keyring --hidden-import keyring.backends.macOS \
-            --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
+            --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy \
+            $GPHOTO_FLAG Cammello.py
 
       # ── Code signing + notarization ───────────────────────────────────
       # These steps stay DORMANT until the signing secrets exist: each
@@ -391,7 +408,7 @@ jobs:
         run: |
           # --onefile ergibt ein einzelnes ausfuehrbares Binary; PyQt5 ist
           # darin enthalten, der Nutzer braucht es nicht separat zu installieren.
-          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.SecretService --hidden-import secretstorage --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
+          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.SecretService --hidden-import secretstorage --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy --collect-all gphoto2 Cammello.py
           cd dist
           tar -czf Cammello_Linux.tar.gz Cammello
 

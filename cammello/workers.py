@@ -16,6 +16,7 @@ from . import camera_map
 from . import edits as edits_mod
 from . import upload_journal as journal_mod
 from . import music
+from .constants import MUSIC_SEL_NAMES
 
 
 class UploadWorker(QThread):
@@ -234,9 +235,17 @@ class UploadWorker(QThread):
                 # The photograph path below is untouched and still
                 # produces byte-for-byte what 0.16.1 produced.
                 if row.get('music'):
-                    cats += self._music_categories(row, cats_seen)
+                    # 0.18.1: the selection half comes from the description
+                    # cell of THIS file and wins over the batch value - the
+                    # same "last one wins" rule extract_structured_data
+                    # already applies between base and per-file.
+                    values = dict(row)
+                    for key in MUSIC_SEL_NAMES:
+                        if sd.get(key):
+                            values[key] = sd[key]
+                    cats += self._music_categories(values, cats_seen)
                     wikitext = music.build_wikitext(
-                        row, clean_desc, cats, other_templates)
+                        values, clean_desc, cats, other_templates)
                 else:
                     # {{Information}} block
                     info = f"{{{{{row.get('template', 'Information')}\n"

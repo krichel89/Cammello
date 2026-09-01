@@ -4,6 +4,110 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.5 - 2026-08-27
+
+### Changed
+- The culling export button is called "Export…" again instead of
+  "Save to…"; the action itself is unchanged.
+- "Move to…" now opens a dialog with the target folder, the operation
+  (move or copy) and the scope (whole group, or RAW + .xmp sidecar only)
+  instead of a bare folder picker. It opens on move + whole group, which is
+  exactly what 0.18.2 did, so the narrow scope is always a visible choice.
+- The collision rule follows the operation, not the button: a move is
+  refused as a whole if any name is already in the target, while a copy
+  skips those names and goes on - the source stays where it is either way.
+- culling.group_paths() takes a scope argument (SCOPE_GROUP, SCOPE_RAW).
+  Without one it behaves exactly as before. An entry with no RAW file still
+  yields its one file under SCOPE_RAW; there is no partner to leave behind.
+
+## 0.18.4 - 2026-08-27
+
+### Added
+- Double-click in the culling grid opens that picture fullscreen. The image
+  view has done this since 0.9; in the grid a double-click did nothing,
+  which reads as broken. Leaving fullscreen returns to the grid it came
+  from, while E and G still name their own mode.
+
+### Changed
+- The background reader for ratings and colour labels now reads in a small
+  thread pool and reports in batches instead of one signal per file.
+  Measured here: 800 rows updated one at a time cost 0.52 s of GUI thread
+  against 0.002 s for the same work in one pass; cold-cache reads of 800
+  pairs went from 0.42 s serial to 0.23 s threaded on a local SSD. The gain
+  should be larger on a card reader, where per-file latency dominates.
+- Rows in the filmstrip and grid are decorated when they come into view
+  instead of all of them when the folder opens.
+- Three timings are logged when a folder is opened: rows ready, metadata
+  pass finished, first screenful of thumbnails complete.
+
+## 0.18.3 - 2026-08-27
+
+### Added
+- "From camera…" in the culling module: copies pictures straight off a
+  connected camera into a folder and opens that folder. Canon bodies speak
+  PTP over USB, so the card is never mounted as a volume or a drive letter
+  and "Open…" has nothing to point at. Meant as the backup when no card
+  reader is at hand - a reader is considerably faster.
+- Nothing in the target folder is ever overwritten. A name that is already
+  there with the same size counts as already imported and is skipped, which
+  makes an interrupted import resumable without a journal; a name that is
+  there with a different size is reported as a clash and left alone.
+- Every file is fetched to "<name>.part" and renamed on success, so a
+  cancelled transfer cannot leave a short file that the next run would
+  mistake for a finished one. The camera's timestamp is kept.
+- New module cammello/camera.py (Qt-free) with the platform backends and
+  the planning logic; new test suite test_camera_0183.py.
+- The progress dialog can learn its total after it has opened
+  (UploadProgressDialog.set_total/set_detail) - the number of files is only
+  known once the card has been walked.
+
+### Notes
+- macOS (Apple Silicon) and Linux only for now. libgphoto2 has never been
+  ported to Windows, where the way in is the Windows Portable Devices API;
+  that backend is written in a later version against real probe output
+  rather than guessed COM signatures, and the button says so meanwhile.
+- The Intel macOS build is deliberately built without gphoto2: the x86_64
+  wheel is macosx_15_0 and would raise that build's minimum macOS from 13
+  to 15.
+
+## 0.18.2 - 2026-08-20
+
+### Added
+- "Move to…" in the culling module, next to "Save to…". Moves the
+  selected entries into a local folder and always takes the WHOLE group -
+  RAW, JPEG and .xmp sidecar together, ignoring the pair selector. A copy
+  may take half a pair because the original stays put; a move may not.
+- Nothing in the target folder is ever overwritten: if any name is
+  already there the move is refused as a whole and the names are listed,
+  because a half-moved group is worse than one that did not move.
+  Moving into the folder that is currently open is refused as well.
+- Unlike "Save to…", a move never exports a rendered "<stem>_edit.jpg" -
+  the original travels, so a RAW does not lose its partner.
+
+## 0.18.1 - 2026-08-19
+
+### Changed
+- The music fields are split between the whole set and the selection.
+  Recorded by, recording technique, source template, licence of the
+  recording, instrument, period, country and other versions stay with the
+  delivery; composer, year of death, year of composition, work and the
+  licence of the composition move to the per-file description editor. One
+  delivery is normally one performer on one instrument from one source,
+  but the pieces on it have different composers.
+- The five selection fields are SD_KEYS, so they get the per-file
+  machinery that depicts already had: stored in the description cell,
+  editable for several selected files at once, and the per-file value
+  wins over the base value. An EMPTY selection field does not erase the
+  batch value.
+
+### Fixed
+- sdc._ASSIGN_RE, which decides which lines are NOT free text, listed its
+  keys by hand and had drifted: coordinates and object_coordinates were
+  missing, so those lines were read as structured data AND left behind as
+  free text, and every round trip through the editor duplicated them. It
+  is built from SD_KEYS now and cannot drift again. Found because the
+  music fields inherited the fault the moment they became SD_KEYS.
+
 ## 0.18.0 - 2026-08-19
 
 ### Added
@@ -22,6 +126,13 @@ adheres to [Semantic Versioning](https://semver.org/).
   (new api.existing_pages, one query for the whole batch); a name Commons
   does not have is skipped rather than becoming a red link on every file.
   A failed check adds nothing and never fails the upload.
+- Missing built-in workflows are offered at startup. load() reads the
+  user's file OR the built-ins and never merges them, so a workflow file
+  written before a built-in existed never learned about it - which is why
+  the music workflow did not appear for anyone who already had a file.
+  Cammello now asks once, appends the missing entries (existing text
+  untouched, a copy kept as workflows.toml.bak) and remembers a "never
+  ask again" per workflow.
 - workflows.toml understands `felder_an`, the counterpart of
   `felder_aus`, for fields that are off by default. Without it the
   thirteen music fields would have appeared in every workflows.toml

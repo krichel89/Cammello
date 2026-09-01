@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QWidget, QLabel, QLineEd
                              QFormLayout)
 from PyQt5.QtCore import pyqtSignal
 from .constants import *
-from .constants import _caption_extra_langs
+from .constants import _caption_extra_langs, MUSIC_SEL_FIELDS
 from .sdc import *
 from .i18n import tr
 from . import langcodes
@@ -512,6 +512,21 @@ class StructuredDescriptionEditor(QWidget):
         else:
             self.override_combo = None
 
+        # 0.18.1: the music fields that belong to the SELECTION. One
+        # delivery is normally one performer on one instrument from one
+        # source - but the pieces have different composers, so composer,
+        # year, work and the licence of the WORK sit here while the
+        # recording side stays with the whole set. They are SD_KEYS, so
+        # they are stored, merged and overridden like depicts is; nothing
+        # about the per-file machinery had to be taught about music.
+        self.music = {}
+        if not self.is_base:
+            for _name, _label, _hint, _side in MUSIC_SEL_FIELDS:
+                _edit = QLineEdit()
+                if _hint:
+                    _edit.setPlaceholderText(tr('e.g.') + ' ' + _hint)
+                self.music[_name] = _edit
+
         # Categories — plain text (not a Wikidata field).
         if not self.is_base:
             # 0.12.15: camera position. Per FILE, never in the base block -
@@ -640,11 +655,19 @@ class StructuredDescriptionEditor(QWidget):
         for w in watched:
             w.textChanged.connect(lambda *_: self.changed.emit())
             w.editingFinished.connect(self.committed)
+        for w in self.music.values():
+            w.textChanged.connect(lambda *_: self.changed.emit())
+            w.editingFinished.connect(self.committed)
 
         # Rows.
         if not self.is_base:
             form.addRow(tr('Depicts (P180):'), self.depicts)
             form.addRow(tr('If no depicts:'), self.override_combo)
+            # 0.18.1: the music side of the selection. Hidden in every
+            # workflow that does not switch the music fields on, so a
+            # photographer never sees these rows.
+            for _name, _label, _hint, _side in MUSIC_SEL_FIELDS:
+                form.addRow(tr(_label), self.music[_name])
         if self.is_base:
             # Plain row: the button that fills a category FROM this field sits
             # on the Categories row below, where its result lands (0.12.5).
@@ -735,6 +758,8 @@ class StructuredDescriptionEditor(QWidget):
             self.depicts.setText(sd.get('depicts', ''))
             self._set_override_value(
                 (sd.get('depicts_override') or '').strip().lower())
+        for _name, _edit in self.music.items():
+            _edit.setText(sd.get(_name, ''))
         if self.coordinates is not None:
             self.coordinates.setText(sd.get('coordinates', ''))
         if self.object_coordinates is not None:
@@ -776,6 +801,10 @@ class StructuredDescriptionEditor(QWidget):
             override = self._override_value()
             if override:
                 lines.append(f'depicts_override={override}')
+        for _name, _edit in self.music.items():
+            _val = _edit.text().strip()
+            if _val:
+                lines.append(f'{_name}={_val}')
         if self.coordinates is not None:
             coords = self.coordinates.text().strip()
             if coords:

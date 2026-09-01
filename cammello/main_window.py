@@ -17,7 +17,7 @@ from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator, QPalette, QColor)
 from .constants import *
 from datetime import date
-from .constants import __version__, MUSIC_FIELDS
+from .constants import __version__, MUSIC_SET_FIELDS, MUSIC_SEL_NAMES
 from .logging_setup import *
 from .sdc import *
 from .sdc import _strip_sd_lines
@@ -625,39 +625,26 @@ class MainWindow(FlickrMixin,
         # description editor.
         music_group = CollapsibleGroupBox(tr('Music and audio'))
         music_group.setToolTip(tr(
-            'For recordings by other people: who composed it, who '
-            'recorded it, and\nunder which two licences it stands.'))
+            'The part of a recording that holds for the WHOLE delivery: '
+            'who recorded\nit, on what, from which source and under which '
+            'licence. The piece itself\n- composer, work, year - belongs '
+            'to the selection, in the description\neditor on the right.'))
         music_form = QFormLayout(music_group.content)
         self.music_edits = {}
-        for _name, _label, _hint in MUSIC_FIELDS:
+        for _name, _label, _hint, _side in MUSIC_SET_FIELDS:
             _edit = QLineEdit()
             if _hint:
                 _edit.setPlaceholderText(tr('e.g.') + ' ' + _hint)
             self.music_edits[_name] = _edit
             music_form.addRow(tr(_label), _edit)
-        self.music_edits['komponist'].setToolTip(tr(
-            'The composer as wikitext, normally an interwiki link with a '
-            'leading colon:\n\n  [[:en:Felix Mendelssohn|Felix Mendelssohn '
-            'Bartoldy]]\n\nGoes into the author line as the "composition" '
-            'role. The LINK TARGET is\nalso what the generated categories '
-            'are built from.'))
         self.music_edits['aufnehmender'].setToolTip(tr(
             'Who made the recording - the second role of the author line, '
             'and the\nperson the "recorded by" categories name. Not the '
             'uploader.'))
-        self.music_edits['lizenz_komposition'].setToolTip(tr(
-            'The licence of the WORK, e.g. {{PD-old-auto-expired}}. If '
-            '"Composer died"\nis filled and the template says nothing '
-            'about a death year, '
-            '|deathyear=\nis added automatically.'))
         self.music_edits['lizenz_aufnahme'].setToolTip(tr(
             'The licence of the RECORDING, which is a separate right from '
             'the work.\nOften a permission template of the person who '
             'recorded it.'))
-        self.music_edits['werk'].setToolTip(tr(
-            'A category name for the work itself, e.g. Six organ sonatas '
-            '(Mendelssohn).\nUsed as written; like every generated '
-            'category it is dropped if Commons\ndoes not have it.'))
         for _w in self.music_edits.values():
             _lbl = music_form.labelForField(_w)
             if _lbl is not None and _w.toolTip():
@@ -1087,6 +1074,58 @@ class MainWindow(FlickrMixin,
                          len(affected))
         self._load_selected_desc()
 
+    def offer_missing_workflows(self):
+        """Called once after the window is up: offer to add built-in
+        workflows the user's file does not have.
+
+        Asks, never writes on its own, and remembers a "no" per workflow
+        so the question does not come back at every start. Appends only,
+        with a .bak beside the file - see workflow_config.append_builtins.
+        """
+        try:
+            missing = workflow_config.missing_builtins(tr)
+        except Exception:
+            return
+        if not missing:
+            return
+        declined = set(self.settings.value('workflows/declined', []) or [])
+        missing = [w for w in missing if w['key'] not in declined]
+        if not missing:
+            return
+        names = ', '.join(w['label'] for w in missing)
+        self.logger.info('Workflow file has no entry for: %s.', names)
+        box = QMessageBox(self)
+        box.setWindowTitle(tr('New workflows'))
+        box.setIcon(QMessageBox.Question)
+        box.setText(tr('This version brings workflows your workflow file '
+                       'does not have yet: {names}.').format(names=names))
+        box.setInformativeText(tr(
+            'Add them to the file? Nothing already in it is changed - the '
+            'entries are appended, and a copy is kept as '
+            'workflows.toml.bak.'))
+        add = box.addButton(tr('Add'), QMessageBox.AcceptRole)
+        box.addButton(tr('Not now'), QMessageBox.RejectRole)
+        never = box.addButton(tr('Never ask again'), QMessageBox.DestructiveRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is never:
+            self.settings.setValue(
+                'workflows/declined',
+                sorted(declined | {w['key'] for w in missing}))
+            return
+        if clicked is not add:
+            return
+        target, error = workflow_config.append_builtins(
+            [w['key'] for w in missing], tr)
+        if error:
+            self.logger.warning('Workflows could not be added: %s', error)
+            QMessageBox.warning(self, tr('New workflows'), tr(
+                'The workflow file could not be written: {error}').format(
+                    error=error))
+            return
+        self.logger.info('Added %d workflow(s) to %s.', len(missing), target)
+        self._reload_workflows()
+
     def _apply_workflow_visibility(self, key=None):
         """Show only the controls the selected workflow needs (0.16.1).
 
@@ -1237,6 +1276,18 @@ class MainWindow(FlickrMixin,
         # MUSIC_FIELDS needs no second entry here.
         for _name, _edit in getattr(self, 'music_edits', {}).items():
             table[_name] = [_edit]
+        # 0.18.1: the selection half lives in the per-file description
+        # editor. Listed here so one workflow switch still hides or shows
+        # BOTH halves - a workflow that knows nothing about music must not
+        # leave five stray rows behind in the description editor.
+        for _name in MUSIC_SEL_NAMES:
+            widgets = []
+            for _ed in (per_file, base):
+                _w = (getattr(_ed, 'music', {}) or {}).get(_name)
+                if _w is not None:
+                    widgets.append(_w)
+            if widgets:
+                table[_name] = widgets
         return [w for w in table.get(name, []) if w is not None]
 
     def _extra_labels(self):
@@ -2494,6 +2545,12 @@ def main():
     # it never delays the window appearing, and it only reads a file - no
     # network, no keyring.
     QTimer.singleShot(400, window.offer_resume_on_start)
+    # 0.18.0: a workflow file written before a built-in workflow existed
+    # never learns about it - load() reads the file OR the built-ins, it
+    # does not merge them. So Harald's own file kept showing two workflows
+    # after the music one shipped. Offered here rather than merged
+    # silently: the file is his.
+    QTimer.singleShot(700, window.offer_missing_workflows)
     sys.exit(app.exec())
 
 

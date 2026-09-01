@@ -376,10 +376,15 @@ def split_categories(text):
 
 
 
+# 0.18.1: built FROM SD_KEYS instead of repeating them. The list here had
+# already drifted - coordinates and object_coordinates were missing, so
+# those lines were pulled out as structured data AND left behind as free
+# text, and every round trip through the editor duplicated them. The music
+# fields would have inherited the same fault the moment they became
+# SD_KEYS; test_music_0181 holds the round trip.
 _ASSIGN_RE = re.compile(
-    r'^\s*(?:caption_' + _LANG_CODE + r'|alt_' + _LANG_CODE +
-    r'|creator|copyright|license|depicts|'
-    r'depicts_override|created_during|gallery_suffix)\s*=',
+    r'^\s*(?:caption_' + _LANG_CODE + r'|alt_' + _LANG_CODE + r'|'
+    + '|'.join(re.escape(k) for k in SD_KEYS) + r')\s*=',
     re.IGNORECASE)
 
 

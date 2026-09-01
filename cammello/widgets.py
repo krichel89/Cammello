@@ -1366,6 +1366,20 @@ class UploadProgressDialog(QDialog):
     def set_done(self, count):
         self.bar.setValue(min(count, self.bar.maximum()))
 
+    def set_total(self, total):
+        """0.18.3: the camera import does not know how many files it will
+        copy until it has walked the card, so the dialog opens with 0 and
+        learns the real number here."""
+        self.total = total
+        self.bar.setMaximum(max(1, total))
+        self.headline.setText(tr('{verb} {i} of {total} file(s)…').format(
+            verb=self._verb, i=0, total=total))
+
+    def set_detail(self, text):
+        """Free-text second line, used while a run is still preparing."""
+        if not self._cancelling:
+            self.detail.setText(text)
+
     def force_close(self):
         """Close the window for real. Called by MainWindow.on_finished."""
         self._closable = True

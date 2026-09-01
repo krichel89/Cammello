@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.18.0'
+__version__ = '0.18.5'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -115,7 +115,22 @@ SD_KEYS = [
     # position above. Becomes {{Object location dec}} in the wikitext and a
     # P9149 claim in the structured data.
     'object_coordinates',
+    # 0.18.1: the music fields that belong to the SELECTION rather than to
+    # the whole set - one delivery is normally one performer, one organ and
+    # one source, but the pieces on it have different composers. Being
+    # SD_KEYS gets them the machinery the other per-file values already
+    # have: they are stored in the description cell, the per-file value
+    # wins over the base value, and editing several selected files at once
+    # works without a line of new code.
+    'komponist', 'todesjahr_komponist', 'kompositionsjahr',
+    'lizenz_komposition', 'werk',
 ]
+
+# Which side of the editor a music field lives on (0.18.1).
+#   'set' - the whole delivery: performer, organ, source, recording licence
+#   'sel' - the selected files: the piece being played
+MUSIC_SET = 'set'
+MUSIC_SEL = 'sel'
 
 # Licence presets for the dropdowns (0.12.14). Each row pairs the WIKITEXT
 # template with the Wikidata item for the same licence, so the two halves
@@ -125,32 +140,37 @@ SD_KEYS = [
 #   Q18199165  Creative Commons Attribution-ShareAlike 4.0 International
 #   Q20007257  Creative Commons Attribution 4.0 International
 #   Q6938433   Creative Commons CC0 License
-# ── Music workflow (0.18.0) ──────────────────────────────────────────────
-# (registry name, UI label / tr() key, placeholder example). The order is
+# ── Music workflow (0.18.0, split 0.18.1) ──────────────────────────────────────────────
+# (registry name, UI label / tr() key, placeholder example, side). The order is
 # the order of the form; the names must match workflow_config.FIELDS and
 # music.FIELDS, which test_music_0180 checks.
 MUSIC_FIELDS = [
     ('komponist',           'Composer:',
-     '[[:en:Felix Mendelssohn|Felix Mendelssohn Bartoldy]]'),
-    ('todesjahr_komponist', 'Composer died:',              '1847'),
-    ('kompositionsjahr',    'Year of composition:',        '1845'),
-    ('aufnehmender',        'Recorded by:',
-     '[[:de:Wolfram Syré|Wolfram Syré]]'),
-    ('aufnahmetechnik',     'Recording technique:',
-     'using a [[:en:Hauptwerk|Hauptwerk]] digital organ'),
-    ('quellvorlage',        'Source template:',
-     '{{Organ Repertory Wolfram Syré}}'),
-    ('lizenz_komposition',  'Licence of the composition:',
-     '{{PD-old-auto-expired}}'),
-    ('lizenz_aufnahme',     'Licence of the recording:',
-     '{{Wolfram Syré-permission}}'),
-    ('instrument',          'Instrument:',                 'organ'),
-    ('epoche',              'Period:',    'German and Austrian Romantic'),
+     '[[:en:Felix Mendelssohn|Felix Mendelssohn Bartoldy]]',      MUSIC_SEL),
+    ('todesjahr_komponist', 'Composer died:',              '1847', MUSIC_SEL),
+    ('kompositionsjahr',    'Year of composition:',        '1845', MUSIC_SEL),
     ('werk',                'Work (category name):',
-     'Six organ sonatas (Mendelssohn)'),
-    ('land',                'Country:',                    'Germany'),
-    ('andere_versionen',    'Other versions:',             ''),
+     'Six organ sonatas (Mendelssohn)',                            MUSIC_SEL),
+    ('lizenz_komposition',  'Licence of the composition:',
+     '{{PD-old-auto-expired}}',                                    MUSIC_SEL),
+    ('aufnehmender',        'Recorded by:',
+     '[[:de:Wolfram Syré|Wolfram Syré]]',                          MUSIC_SET),
+    ('aufnahmetechnik',     'Recording technique:',
+     'using a [[:en:Hauptwerk|Hauptwerk]] digital organ',          MUSIC_SET),
+    ('quellvorlage',        'Source template:',
+     '{{Organ Repertory Wolfram Syré}}',                           MUSIC_SET),
+    ('lizenz_aufnahme',     'Licence of the recording:',
+     '{{Wolfram Syré-permission}}',                                MUSIC_SET),
+    ('instrument',          'Instrument:',                'organ', MUSIC_SET),
+    ('epoche',              'Period:',
+     'German and Austrian Romantic',                               MUSIC_SET),
+    ('land',                'Country:',                 'Germany', MUSIC_SET),
+    ('andere_versionen',    'Other versions:',               '',   MUSIC_SET),
 ]
+
+MUSIC_SET_FIELDS = [f for f in MUSIC_FIELDS if f[3] == MUSIC_SET]
+MUSIC_SEL_FIELDS = [f for f in MUSIC_FIELDS if f[3] == MUSIC_SEL]
+MUSIC_SEL_NAMES = [f[0] for f in MUSIC_SEL_FIELDS]
 
 LICENSE_PRESETS = [
     # (label, wikitext template, P275 item)

@@ -64,3 +64,27 @@ vergleicht zeichengenau.
 * Die Felder sind stapelweit (wie Autor und Lizenz), nicht je Datei. Für
   ein Album mit verschiedenen Werken je Datei bräuchte es eine
   Erweiterung.
+
+---
+
+## Nachtrag: fehlende Workflows werden beim Start angeboten
+
+Dein Log zeigte `Workflows: 2 from /Users/h/Cammello/workflows.toml` — der
+Musik-Workflow fehlte. Ursache: Cammello liest **entweder** deine Datei
+**oder** die eingebaute Vorgabe, es führt beides nie zusammen. Eine Datei,
+die vor einem neuen eingebauten Workflow entstanden ist, erfährt also nie
+von ihm.
+
+**Jetzt:** kurz nach dem Start fragt Cammello einmal, wenn etwas fehlt.
+Drei Knöpfe — *Aufnehmen*, *Jetzt nicht*, *Nicht mehr fragen*. Letzteres
+wird pro Workflow gemerkt.
+
+Beim Aufnehmen wird **nur angehängt**. Nichts Vorhandenes wird umgeschrieben,
+umsortiert oder neu formatiert; deine Kommentare und Handänderungen bleiben
+Byte für Byte stehen. Vorher legt Cammello `workflows.toml.bak` daneben.
+
+Geht das Schreiben schief, bleibt die Datei unangetastet und der Grund
+steht im Dialog und im Log.
+
+Für dich heißt das: den Block aus der letzten Antwort brauchst du nicht
+mehr von Hand anzuhängen — starten, „Aufnehmen" drücken, fertig.

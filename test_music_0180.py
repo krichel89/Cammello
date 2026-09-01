@@ -22,7 +22,8 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import Cammello        # the shim; also puts the package on the path
 from cammello import music
 from cammello import workflow_config, workflows
-from cammello.constants import MUSIC_FIELDS
+from cammello.constants import (MUSIC_FIELDS, MUSIC_SET_FIELDS,
+                                MUSIC_SEL_FIELDS)
 
 fails = []
 
@@ -158,13 +159,21 @@ check('missing recordist drops every "recorded by" pattern',
 
 # ── The three field lists agree ──────────────────────────────────────────
 check('MUSIC_FIELDS, music.FIELDS and DEFAULT_OFF name the same fields',
-      sorted(n for n, _l, _h in MUSIC_FIELDS) == sorted(music.FIELDS)
+      sorted(n for n, _l, _h, _s in MUSIC_FIELDS) == sorted(music.FIELDS)
       == sorted(workflow_config.DEFAULT_OFF),
       f'{len(music.FIELDS)} fields')
 check('every music field is a registry field',
       all(n in workflow_config.FIELD_NAMES for n in music.FIELDS))
 check('every music field takes text (so vorbelegung works)',
       all(n in workflow_config.TEXT_FIELDS for n in music.FIELDS))
+# 0.18.1: every field sits on exactly one side, and the two sides together
+# are the whole set - a field that fell out of both lists would simply
+# vanish from the UI without anything failing.
+check('the two sides partition the thirteen fields',
+      len(MUSIC_SET_FIELDS) + len(MUSIC_SEL_FIELDS) == len(MUSIC_FIELDS)
+      and not ({f[0] for f in MUSIC_SET_FIELDS}
+               & {f[0] for f in MUSIC_SEL_FIELDS}),
+      f'{len(MUSIC_SET_FIELDS)} set / {len(MUSIC_SEL_FIELDS)} selection')
 
 # ── Visibility: off everywhere but in the music workflow ─────────────────
 workflow_config._cache = None

@@ -164,6 +164,65 @@ _WINDOWS_RESERVED = {'con', 'prn', 'aux', 'nul',
                      *(f'lpt{i}' for i in range(1, 10))}
 
 
+#: Scopes for group_paths(). SCOPE_GROUP is the 0.18.2 behaviour and stays
+#: the default; SCOPE_RAW is Harald's 0.18.5 request ("Option nur RAW +
+#: Sidecar statt der ganzen Gruppe").
+SCOPE_GROUP = 'group'
+SCOPE_RAW = 'raw'
+
+
+def group_paths(item, scope=SCOPE_GROUP):
+    """Every file that belongs to one strip entry: RAW, JPEG and sidecar.
+
+    0.18.2, for MOVING. Copying may honour the pair selector - taking only
+    the JPEG of a pair leaves the original where it is and nothing is lost.
+    Moving may not: carrying off half a pair leaves a RAW without its JPEG
+    (or the other way round) and an .xmp that describes a file which is no
+    longer beside it. So a move took the whole group, always.
+
+    0.18.5 turns that from a rule into a CHOICE, because Harald asked for
+    "RAW + sidecar only": with scope=SCOPE_RAW the JPEG of a pair stays
+    behind. That is a deliberate half-pair, so it belongs in the dialog and
+    not in the default. An entry with no RAW at all still yields its one
+    file - dropping it silently would lose pictures rather than leave a
+    partner behind, and there is no partner to leave.
+
+    Order is RAW, JPEG, sidecar; missing parts are left out, and each path
+    appears once even when a malformed item names the same file twice.
+    """
+    raw = getattr(item, 'raw_path', None)
+    if scope == SCOPE_RAW:
+        candidates = ((raw, getattr(item, 'sidecar_path', None)) if raw
+                      else (getattr(item, 'display_path', None),
+                            getattr(item, 'jpg_path', None)))
+    else:
+        candidates = (raw,
+                      getattr(item, 'jpg_path', None),
+                      getattr(item, 'display_path', None),
+                      getattr(item, 'sidecar_path', None))
+    out = []
+    for path in candidates:
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
+def move_collisions(paths, dest_dir):
+    """Names in `paths` that already exist in `dest_dir`.
+
+    A move that overwrote something would destroy two files at once - the
+    one in the target folder and the only remaining copy of the source. The
+    caller stops on any collision rather than skipping the file, because a
+    partly moved group is worse than a move that did not happen.
+    """
+    clash = []
+    for path in paths:
+        name = os.path.basename(path)
+        if os.path.exists(os.path.join(dest_dir, name)):
+            clash.append(name)
+    return clash
+
+
 def rename_stem_problem(stem):
     """None if `stem` is a safe cross-platform file stem, else a short
     English reason code: 'reserved' (Windows device name) or 'trailing'
