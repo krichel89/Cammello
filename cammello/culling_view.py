@@ -410,6 +410,16 @@ class CullImageView(QGraphicsView):
         if pm.isNull():
             self._item.setPixmap(QPixmap())
             return
+        # 0.18.6: what the user is looking at, measured BEFORE the swap.
+        # The transform alone does not describe that - the on-screen size is
+        # scale x pixmap width, and the pixmap width is about to change.
+        old = self._item.pixmap()
+        old_w = 0 if old.isNull() else old.width()
+        old_h = 0 if old.isNull() else old.height()
+        rel_center = None
+        if keep_view and old_w and old_h:
+            c = self.mapToScene(self.viewport().rect().center())
+            rel_center = (c.x() / old_w, c.y() / old_h)
         if self._crop_display:
             x, y, w, h = self._crop_display
             rect = QRect(int(round(x * pm.width())),
@@ -423,6 +433,47 @@ class CullImageView(QGraphicsView):
         self._scene.setSceneRect(QRectF(pm.rect()))
         if not keep_view:
             self.fit()
+            return
+        self._keep_apparent_size(old_w, pm.width(), rel_center, pm)
+
+    def _keep_apparent_size(self, old_w, new_w, rel_center, pm):
+        """Hold the picture at the size it had when the pixels underneath it
+        were replaced (0.18.6).
+
+        This is the "Cmd + jumps straight to 100%" bug. Zooming in requests
+        the FULL preview, which arrives a moment later and is several times
+        wider than the screen preview it replaces (2560 px against 8192 for
+        an R5 frame). keep_view kept the transform, and scale x width is what
+        ends up on screen - so the same scale over 3.2x the pixels made the
+        picture jump by 3.2x, one step after the user asked for one step.
+
+        Keeping the transform is therefore the wrong reading of keep_view:
+        what must stay put is what the user sees. The scale is divided by
+        the resolution change, and the viewport is re-centred on the same
+        relative point, because the scene has just changed size underneath
+        it as well.
+
+        Side effect, and a welcome one: the reported zoom becomes honest.
+        50% of a 2560 px preview was never 50% of the picture; after the
+        swap the number means what it says.
+        """
+        if not old_w or not new_w or old_w == new_w:
+            # Same resolution: nothing moved under the view, so do not touch
+            # it. This is the tone/exposure path, which runs on every slider
+            # stop - re-centring there would only add scroll-rounding drift.
+            return
+        if self._fit:
+            # Nothing to hold: fit recomputes itself against the new size.
+            self.fit()
+            return
+        factor = self.transform().m11() * old_w / new_w
+        factor = max(self.MIN_ZOOM, min(self.MAX_ZOOM, factor))
+        self.resetTransform()
+        self.scale(factor, factor)
+        self.zoom_changed.emit(factor)
+        if rel_center is not None:
+            self.centerOn(rel_center[0] * pm.width(),
+                          rel_center[1] * pm.height())
 
     def set_background(self, color):
         """Surround colour; follows the colour scheme (0.15.0)."""
@@ -493,6 +544,46 @@ class CullImageView(QGraphicsView):
         """1:1 pixels, centered on the given scene position (or the middle)."""
         self.set_zoom(1.0, anchor_scene_pos
                       if anchor_scene_pos is not None else None)
+
+    def apparent_width(self):
+        """How wide the picture currently is on screen, in device pixels.
+
+        0.18.8: this, not the scale factor, is what "the same zoom" means
+        across two images. A scale is only meaningful against the pixmap it
+        applies to, and the two preview levels of one picture differ by a
+        factor of three (see _keep_apparent_size). 0 while fitted or empty.
+        """
+        pm = self._item.pixmap()
+        if self._fit or pm.isNull():
+            return 0.0
+        return self.zoom_factor() * pm.width()
+
+    def relative_center(self):
+        """Where the viewport is looking, as a fraction of the picture, or
+        None. Fractions travel between images of different sizes; scene
+        coordinates do not."""
+        pm = self._item.pixmap()
+        if pm.isNull() or not pm.width() or not pm.height():
+            return None
+        c = self.mapToScene(self.viewport().rect().center())
+        return (c.x() / pm.width(), c.y() / pm.height())
+
+    def set_apparent_width(self, width, rel_center=None):
+        """Put the picture back at the on-screen size it had (0.18.8).
+
+        Used when stepping to the next image while zoomed in - the point of
+        the whole thing is comparing the same detail across a series, so the
+        detail must stay the same size. Ignored when there is nothing to
+        show or the caller passes 0.
+        """
+        pm = self._item.pixmap()
+        if not width or pm.isNull() or not pm.width():
+            return
+        factor = max(self.MIN_ZOOM, min(self.MAX_ZOOM, width / pm.width()))
+        self.set_zoom(factor)
+        if rel_center is not None:
+            self.centerOn(rel_center[0] * pm.width(),
+                          rel_center[1] * pm.height())
 
     def toggle_zoom(self, anchor_scene_pos=None):
         if self._fit:

@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem, QComboBox, QCheckBox, QFileDialog, QMessageBox, QSplitter,
     QStyledItemDelegate, QFormLayout, QGroupBox, QStyleOptionViewItem, QStyle,
     QToolButton, QInputDialog, QShortcut, QDialog, QDialogButtonBox,
-    QLineEdit, QRadioButton)
+    QLineEdit, QRadioButton, QApplication)
 from PyQt5.QtGui import (QIcon, QPixmap, QColor, QPen, QPainter,
                          QKeySequence)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
@@ -710,6 +710,47 @@ class MWCullingMixin:
         cam_btn.clicked.connect(self._cull_import_from_camera)
         bar.addWidget(cam_btn)
         self.cull_camera_btn = cam_btn
+        # 0.18.7: both settings sit next to the folder actions they change,
+        # and both are remembered - a card is opened the same way every time
+        # or the automatic opening would be a surprise rather than a help.
+        self.cull_subfolders_cb = QCheckBox(tr('subfolders'))
+        self.cull_subfolders_cb.setToolTip(tr(
+            'Also read the subfolders of the folder that is opened. A full '
+            'card holds\n100EOSR5, 101EOSR5 and so on, so a card needs '
+            'this; a working folder\nusually does not.'))
+        self.cull_subfolders_cb.setChecked(
+            self.settings.value('cull_subfolders', False, type=bool))
+        self.cull_subfolders_cb.stateChanged.connect(
+            lambda _s: self.settings.setValue(
+                'cull_subfolders', self.cull_subfolders_cb.isChecked()))
+        bar.addWidget(self.cull_subfolders_cb)
+        self.cull_autocard_cb = QCheckBox(tr('open cards'))
+        self.cull_autocard_cb.setToolTip(tr(
+            'Opens a memory card by itself as soon as it is plugged in, '
+            'subfolders and all.\nA volume counts as a card when it has a '
+            'DCIM folder. Whatever was open\nbefore is replaced, so turn '
+            'this off while working from a card.'))
+        self.cull_autocard_cb.setChecked(
+            self.settings.value('cull_autocard', True, type=bool))
+        self.cull_autocard_cb.stateChanged.connect(self._cull_autocard_toggled)
+        bar.addWidget(self.cull_autocard_cb)
+        # 0.18.11: sort order. Free, because the file time comes out of the
+        # directory entry the scan reads anyway - see culling.ORDER_TIME.
+        bar.addWidget(QLabel(tr('Order:')))
+        self.cull_order_combo = QComboBox()
+        self.cull_order_combo.addItem(tr('file name'), culling.ORDER_NAME)
+        self.cull_order_combo.addItem(tr('time taken'), culling.ORDER_TIME)
+        self.cull_order_combo.setToolTip(tr(
+            'Time taken is the file time the camera wrote, not the EXIF '
+            'field:\nreading EXIF would mean opening every RAW on the card. '
+            'On a card\nstraight from the camera the two are the same.'))
+        saved = self.settings.value('cull_order', culling.ORDER_NAME,
+                                    type=str)
+        idx = self.cull_order_combo.findData(saved)
+        self.cull_order_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cull_order_combo.currentIndexChanged.connect(
+            lambda _i: self._cull_order_changed())
+        bar.addWidget(self.cull_order_combo)
         self.cull_mode_lbl = QLabel()
         self.cull_mode_lbl.setToolTip(tr('Number keys 1-5 set stars or colors; '
                                       'M toggles the mode.'))
@@ -888,6 +929,7 @@ class MWCullingMixin:
                 child.setFocusPolicy(Qt.NoFocus)
 
         self._cull_update_mode_label()
+        self._cull_start_card_watch()
         return w
 
     def _build_culling_settings_box(self):
@@ -939,7 +981,7 @@ class MWCullingMixin:
 
     # ── Folder handling ───────────────────────────────────────────────────────
 
-    def _cull_open_folder(self, folder=None):
+    def _cull_open_folder(self, folder=None, recursive=None):
         # Defensive: with pyexiv2 missing the culling tab (and its state)
         # was never built - degrade to a no-op instead of an AttributeError
         # (0.14.1; seen when the folder action is reached programmatically).
@@ -960,8 +1002,30 @@ class MWCullingMixin:
 
         t0 = time.monotonic()
         report = {}
-        self._cull_items = culling.scan_folder(folder, report)
+        if recursive is None:
+            recursive = self.cull_subfolders_cb.isChecked()
+            # 0.18.10: a card is one shoot, not three folders. 100EOSR5 and
+            # its successors are the camera's file-numbering housekeeping,
+            # so opening any part of a card opens the whole card. Only when
+            # the caller left the scope open - an explicit scope (reload,
+            # the automatic card open) already knows what it wants.
+            card = camera.card_scope(folder)
+            if card:
+                if os.path.normpath(card) != os.path.normpath(folder):
+                    self.logger.info(
+                        'Culling: "%s" is part of a card, opening the '
+                        'whole card at "%s".', folder, card)
+                    folder = card
+                # Recursion is not optional here, whatever the checkbox
+                # says: DCIM holds no pictures of its own, they are all one
+                # level down in 100EOSR5 and its successors. Opening DCIM
+                # flat found nothing at all (0.18.10, fixed here).
+                recursive = True
+        self._cull_items = culling.scan_folder(folder, report,
+                                               recursive=recursive,
+                                               order=self._cull_order())
         self._cull_folder = folder
+        self._cull_recursive = recursive
         # Always logged, not just on demand: when a folder yields fewer
         # entries than expected, this line says whether files were skipped
         # (unknown extension) or folded into RAW+JPEG pairs.
@@ -973,12 +1037,23 @@ class MWCullingMixin:
                 self.logger.warning(
                     '%d RAW-only file(s) cannot be previewed: %s',
                     raw_only, previews.raw_unavailable_reason())
-        self.logger.info('Culling: opened "%s", %d image(s).',
-                         folder, len(self._cull_items))
+        self._cull_folders = sorted({
+            os.path.dirname(i.display_path) for i in self._cull_items})
+        if len(self._cull_folders) > 1:
+            self.logger.info(
+                'Culling: opened "%s", %d image(s) from %d folder(s): %s.',
+                folder, len(self._cull_items), len(self._cull_folders),
+                ', '.join(os.path.basename(f) for f in self._cull_folders))
+        else:
+            self.logger.info('Culling: opened "%s", %d image(s).',
+                             folder, len(self._cull_items))
 
         # Ratings/labels arrive in the background, in batches (0.18.4).
         self._cull_meta_t0 = time.monotonic()
-        self._cull_reader = _MetadataReader(self._cull_items)
+        # 0.18.11: the reader gets its OWN list. Its results come back as
+        # indices, and re-sorting _cull_items under a running reader would
+        # point every one of them at the wrong picture.
+        self._cull_reader = _MetadataReader(list(self._cull_items))
         self._cull_reader.items_ready.connect(self._cull_meta_arrived)
         self._cull_reader.done.connect(self._cull_meta_done)
         self._cull_reader.start()
@@ -1016,8 +1091,11 @@ class MWCullingMixin:
         if decorated is None:
             return
         rows = []
+        reader_items = self._cull_reader.items if self._cull_reader else []
         for index in indices:
-            item = self._cull_items[index]
+            if index >= len(reader_items):
+                continue
+            item = reader_items[index]
             vis_idx = self._cull_row_by_item.get(id(item))
             if vis_idx is not None:
                 decorated.discard(vis_idx)
@@ -1197,6 +1275,12 @@ class MWCullingMixin:
                    edits.has_edit(self._cull_edits, item.display_path)
                    if hasattr(self, '_cull_edits') else False)
         tips = []
+        # 0.18.10: with several folders in one strip the file name alone no
+        # longer says where a picture is - two DCIM folders can hold the
+        # same number.
+        if len(getattr(self, '_cull_folders', ())) > 1:
+            tips.append(tr('Folder: {name}').format(
+                name=os.path.basename(os.path.dirname(item.display_path))))
         if item.is_pair:
             tips.append(tr('[P] RAW+JPEG pair (one picture, two files)'))
         if item.in_table:
@@ -1231,6 +1315,16 @@ class MWCullingMixin:
             self.cull_strip.scrollToItem(self.cull_strip.item(idx))
         item = self._cull_visible[idx]
         path = item.display_path
+        # 0.18.8: carry the zoom to the next picture. Harald asked for it,
+        # and it is what the zoom is FOR while culling - stepping through a
+        # burst at 100% to see which frame is sharp. Kept as an on-screen
+        # width and a relative centre, not as a scale factor: a factor only
+        # means something against the pixmap it applies to, and the two
+        # preview levels of one picture differ by about three (0.18.6).
+        self._cull_sticky = (
+            None if self.cull_view.is_fit
+            else (self.cull_view.apparent_width(),
+                  self.cull_view.relative_center()))
         # 0.14: show the picture the way the crop leaves it. The full frame
         # comes back the moment crop mode is entered, so the box can be
         # dragged further.
@@ -1242,6 +1336,7 @@ class MWCullingMixin:
         img = self._cull_loader.cache.get('screen', path)
         if img is not None:
             self.cull_view.set_image(img)
+            self._cull_restore_zoom()
         else:
             self.cull_view.clear_image()
             self._cull_loader.request(path, 'screen',
@@ -1257,14 +1352,62 @@ class MWCullingMixin:
         self._cull_update_info_overlay()
         self._cull_update_edit_panel()
 
+    def _cull_order(self):
+        """The sort order the toolbar is set to."""
+        combo = getattr(self, 'cull_order_combo', None)
+        if combo is None:
+            return culling.ORDER_NAME
+        return combo.currentData() or culling.ORDER_NAME
+
+    def _cull_order_changed(self):
+        """Re-sort what is already open - no folder is read again.
+
+        The entries are the same objects, so ratings, labels and everything
+        the reader has already filled in survive; only their order changes.
+        The picture that was on screen stays on screen.
+        """
+        order = self._cull_order()
+        self.settings.setValue('cull_order', order)
+        if not self._cull_items:
+            return
+        current = (self._cull_visible[self._cull_index]
+                   if 0 <= self._cull_index < len(self._cull_visible)
+                   else None)
+        culling.sort_items(self._cull_items, order)
+        self._cull_apply_filter()
+        if current is not None:
+            row = self._cull_row_by_item.get(id(current))
+            if row is not None:
+                self._cull_show_index(row)
+        self.logger.info('Culling: order changed to %s.', order)
+
+    def _cull_restore_zoom(self):
+        """Re-apply the zoom carried over from the previous picture, once.
+
+        Consumed on use: the next image change captures its own state, and
+        leaving it lying around would re-zoom a view the user has since
+        fitted by hand.
+        """
+        sticky = getattr(self, '_cull_sticky', None)
+        if not sticky:
+            return
+        self._cull_sticky = None
+        width, rel_center = sticky
+        self.cull_view.set_apparent_width(width, rel_center)
+
     def _cull_on_loaded(self, key, level):
         if not (0 <= self._cull_index < len(self._cull_visible)):
             return
         current = self._cull_visible[self._cull_index]
         if level == 'screen' and key == current.display_path:
             img = self._cull_loader.cache.get('screen', key)
-            if img is not None and self.cull_view.is_fit:
+            if img is not None and (self.cull_view.is_fit
+                                    or getattr(self, '_cull_sticky', None)):
+                # The sticky case matters: the view is NOT fitted while the
+                # pixels are on their way, so the old is_fit test alone left
+                # a zoomed-in step showing nothing at all.
                 self.cull_view.set_image(img)
+                self._cull_restore_zoom()
                 self._cull_retry_timer.stop()
             elif img is None:
                 # 0.15.0: the signal carries only the path, and the entry can
@@ -1359,7 +1502,13 @@ class MWCullingMixin:
         detail = ''
         if item:
             stars = rating_marks(item.rating)
-            detail = (f' — {os.path.basename(item.display_path)}'
+            # 0.18.10: with a whole card open the file name is ambiguous -
+            # name the subfolder it came from, but only then.
+            sub = ''
+            if len(getattr(self, '_cull_folders', ())) > 1:
+                sub = os.path.basename(
+                    os.path.dirname(item.display_path)) + '/'
+            detail = (f' — {sub}{os.path.basename(item.display_path)}'
                       f'{" [pair]" if item.is_pair else ""} {stars} '
                       f'{item.label}')
         text = (tr('{pos}/{shown} shown ({total} in folder)').format(
@@ -1370,8 +1519,11 @@ class MWCullingMixin:
         # log and would push the picture details off the bar.
         folder = getattr(self, '_cull_folder', '')
         if folder:
-            text = (os.path.basename(os.path.normpath(folder))
-                    + '  ·  ' + text)
+            head = os.path.basename(os.path.normpath(folder))
+            n_folders = len(getattr(self, '_cull_folders', ()))
+            if n_folders > 1:
+                head += ' (' + tr('{n} folders').format(n=n_folders) + ')'
+            text = head + '  ·  ' + text
         n_sel = len(self.cull_strip.selectedItems())
         if n_sel:
             text += '  ·  ' + tr('{n} selected').format(n=n_sel)
@@ -1622,27 +1774,52 @@ class MWCullingMixin:
             self._cull_fs_from_grid = bool(self._cull_grid)
             if self._cull_grid:
                 self._cull_set_grid(False)
+            # 0.18.8: fullscreen does not edit, so a crop in progress is
+            # ended (committing it silently would be worse) and the pipette
+            # is put away before the panel goes.
+            if getattr(self, '_cull_cropping', False):
+                self._cull_crop_cancel()
+            if self.cull_view.pipette_active():
+                self.cull_view.set_pipette(False)
+                self.cull_edit_panel.set_pipette_checked(False)
             fs = _CullTab(self)
             lay = QVBoxLayout(fs)
             lay.setContentsMargins(0, 0, 0, 0)
             lay.addWidget(self.cull_view)
+            # 0.18.9: taking the view out leaves a hole in the splitter. It
+            # is only ever seen when something puts the main window in front
+            # (macOS does, coming back from another program), but a hole is
+            # exactly the "komische Ansicht" - so stand a label in it that
+            # says what is going on and how to get out.
+            self._cull_split.insertWidget(0, self._cull_fs_placeholder())
+            self._cull_fs_ph.show()
             fs.showFullScreen()
             fs.setFocus()
             self._cull_fs = fs
+            self._cull_fs_watch(True)
             self.cull_view.show_overlay(True)
             self._cull_set_status()          # fill the overlay
-            if self.cull_view.is_fit:
-                self.cull_view.fit()
+            self._cull_update_edit_panel()   # 0.18.8: hides it
+            # 0.18.8: a fitted view refits to the new window; a ZOOMED view
+            # keeps the size it had, so switching to fullscreen to look
+            # closer does not throw the detail away.
+            self._cull_keep_zoom_across_resize()
         else:
+            self._cull_fs_watch(False)
             self._cull_fs.layout().removeWidget(self.cull_view)
+            ph = getattr(self, '_cull_fs_ph', None)
+            if ph is not None:
+                ph.setParent(None)
+                ph.deleteLater()
+                self._cull_fs_ph = None
             self._cull_split.insertWidget(0, self.cull_view)
             self._cull_split.setSizes([620, 172])
             self._cull_fs.close()
             self._cull_fs = None
             self.cull_view.show_overlay(False)
             self._cull_tab_widget.setFocus()
-            if self.cull_view.is_fit:
-                self.cull_view.fit()
+            self._cull_keep_zoom_across_resize()
+            self._cull_update_edit_panel()   # 0.18.8: brings it back
             if getattr(self, '_cull_fs_from_grid', False):
                 self._cull_fs_from_grid = False
                 self._cull_set_grid(True)
@@ -1651,6 +1828,82 @@ class MWCullingMixin:
                 self.cull_strip.scrollToItem(
                     self.cull_strip.item(self._cull_index))
             self._cull_request_visible_thumbs()
+
+    def _cull_fs_placeholder(self):
+        """The label that stands in the splitter while the view is away."""
+        ph = QLabel(tr('Fullscreen is open on another window.\n'
+                       'F or Esc there brings the picture back here.'))
+        ph.setAlignment(Qt.AlignCenter)
+        ph.setWordWrap(True)
+        self._cull_fs_ph = ph
+        return ph
+
+    # ── Coming back from another application (0.18.9) ────────────────────────
+
+    def _cull_fs_watch(self, on):
+        """Watch for the app being activated while fullscreen is up.
+
+        Harald, on macOS: switch from fullscreen to another program and
+        back, and the view is a mess. The reason is that the fullscreen
+        window is a SEPARATE, borderless top-level window, while the image
+        view has been reparented into it - so the main window is standing
+        there with a hole where the picture used to be. When macOS brings
+        the application back it raises the main window, not the borderless
+        one, and that hole is what you see.
+
+        So: on every activation, put the fullscreen window back in front.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        if on:
+            if not getattr(self, '_cull_fs_hooked', False):
+                app.applicationStateChanged.connect(self._cull_fs_app_state)
+                self._cull_fs_hooked = True
+        elif getattr(self, '_cull_fs_hooked', False):
+            try:
+                app.applicationStateChanged.disconnect(
+                    self._cull_fs_app_state)
+            except (TypeError, RuntimeError):
+                pass
+            self._cull_fs_hooked = False
+
+    def _cull_fs_app_state(self, state):
+        if state != Qt.ApplicationActive or self._cull_fs is None:
+            return
+        # Deferred by one turn of the event loop: macOS is still ordering
+        # its own windows at this point, and raising into that loses.
+        QTimer.singleShot(0, self._cull_fs_reassert)
+
+    def _cull_fs_reassert(self):
+        """Put the fullscreen window back in front, whole."""
+        fs = self._cull_fs
+        if fs is None:
+            return
+        if not fs.isFullScreen():
+            # It can come back as an ordinary window; showFullScreen() is
+            # what puts it over the menu bar again.
+            fs.showFullScreen()
+        fs.raise_()
+        fs.activateWindow()
+        fs.setFocus()
+        # The view sat in a window that was not being composited; a fitted
+        # picture is refitted in case the screen changed underneath it (an
+        # external monitor unplugged while away is exactly that case).
+        self._cull_keep_zoom_across_resize()
+        self.cull_view.viewport().update()
+
+    def _cull_keep_zoom_across_resize(self):
+        """Entering or leaving fullscreen changes the viewport, not the
+        picture (0.18.8).
+
+        A fitted view has to be refitted - the window is a different size.
+        A zoomed view must NOT be: the scale is still valid, because the
+        pixmap did not change, and re-fitting would undo exactly the look
+        the user went fullscreen for.
+        """
+        if self.cull_view.is_fit:
+            self.cull_view.fit()
 
     def _cull_grid_columns(self):
         """Items per row in the wrapped grid, read off the ACTUAL layout
@@ -1670,6 +1923,31 @@ class MWCullingMixin:
             return
         self._cull_show_index(
             max(0, min(len(self._cull_visible) - 1, self._cull_index + delta)))
+
+    # ── No editing in fullscreen (0.18.8) ────────────────────────────────────
+
+    def _cull_edits_locked(self):
+        """True while the image-only fullscreen is up.
+
+        Harald: "no edit in Full view". Fullscreen shows the picture and
+        nothing else - the edit panel is not on screen, so crop, white
+        balance and exposure would be changed blind, and the keys that do it
+        (C, W, plain +/-) sit right next to the rating keys that fullscreen
+        exists for. Ratings, labels, navigation and zoom keep working; only
+        the things that change PIXELS are off.
+
+        The guard sits in the actions, not in the key handler, so the
+        floating panel cannot reach around it either.
+        """
+        return getattr(self, '_cull_fs', None) is not None
+
+    def _cull_say_locked(self):
+        """Say why nothing happened - a dead key with no explanation is
+        worse than the key being there."""
+        self.cull_view.set_info_overlay(
+            tr('Editing is off in fullscreen \u2014 F or Esc to leave'))
+        self.cull_view.show_info_overlay(True)
+        QTimer.singleShot(2500, self._cull_update_info_overlay)
 
     # -- crop mode (0.13) --------------------------------------------------
     # Aspect presets on the number keys. Each entry is the ratio in its
@@ -1821,6 +2099,9 @@ class MWCullingMixin:
 
     def _cull_set_pipette(self, on):
         """Turn the white-balance pipette on or off (key W or the panel)."""
+        if on and self._cull_edits_locked():
+            self._cull_say_locked()
+            return
         self.cull_view.set_pipette(on)
         self.cull_edit_panel.set_pipette_checked(on)
         if on:
@@ -1855,6 +2136,9 @@ class MWCullingMixin:
 
     def _cull_step_ev(self, direction):
         """Move the exposure by one sixth of a stop."""
+        if self._cull_edits_locked():
+            self._cull_say_locked()
+            return
         item = self._cull_current_item()
         if item is None:
             return
@@ -1886,6 +2170,9 @@ class MWCullingMixin:
         file system by the time it would be undone, which is a different
         problem and needs a different answer.
         """
+        if self._cull_edits_locked():
+            self._cull_say_locked()
+            return
         entry = self._cull_undo.pop()
         if entry is None:
             self.statusBar().showMessage(tr('Nothing left to undo.'), 3000)
@@ -1923,6 +2210,9 @@ class MWCullingMixin:
 
     def _cull_reset_edits(self):
         """Drop every edit on the current image."""
+        if self._cull_edits_locked():
+            self._cull_say_locked()
+            return
         item = self._cull_current_item()
         if item is None:
             return
@@ -1965,6 +2255,11 @@ class MWCullingMixin:
         """Show the current image's edits in the floating panel."""
         if not hasattr(self, 'cull_edit_panel'):
             return
+        if self._cull_edits_locked():
+            # 0.18.8: nothing to edit in fullscreen, so nothing to float
+            # over the picture either.
+            self.cull_edit_panel.hide()
+            return
         item = self._cull_current_item()
         if item is None:
             self.cull_edit_panel.hide()
@@ -1983,6 +2278,9 @@ class MWCullingMixin:
     def _cull_toggle_crop(self):
         """C: turn the crop overlay on for the current image, or commit it
         if it is already on. Esc cancels, Shift+C removes an existing crop."""
+        if self._cull_edits_locked():
+            self._cull_say_locked()
+            return
         if getattr(self, '_cull_cropping', False):
             self._cull_crop_commit()
             return
@@ -2220,7 +2518,10 @@ class MWCullingMixin:
             QMessageBox.information(self, tr('Culling'),
                                     tr('No folder is open yet.'))
             return
-        self._cull_open_folder(folder)
+        # 0.18.7: reload with the scope the folder was opened with, not with
+        # whatever the checkbox says now - a reload must show the same
+        # folder, not a different one.
+        self._cull_open_folder(folder, getattr(self, '_cull_recursive', False))
 
     def _cull_to_table(self):
         """Target 1: the MediaWiki tab's file table."""
@@ -2398,6 +2699,58 @@ class MWCullingMixin:
         self.cull_status.setText(f'Folder: {summary}')
         QMessageBox.information(self, tr('Copy to folder'), summary)
 
+    # ── Watching for a card in the reader (0.18.7) ───────────────────────────
+
+    def _cull_start_card_watch(self):
+        """Notice a memory card being plugged in.
+
+        Polled rather than watched: QFileSystemWatcher would do on macOS
+        (/Volumes is a directory) but there is no such directory on Windows,
+        where volumes are drive letters. One listing of /Volumes every few
+        seconds costs nothing and is the same code on all three systems.
+
+        The volumes present at startup are the BASELINE, so the disk that
+        was already in the reader when Cammello launched is not opened
+        behind the user's back.
+        """
+        self._cull_known_volumes = camera.list_volumes()
+        self._cull_card_timer = QTimer(self)
+        self._cull_card_timer.setInterval(2500)
+        self._cull_card_timer.timeout.connect(self._cull_poll_cards)
+        if self.cull_autocard_cb.isChecked():
+            self._cull_card_timer.start()
+
+    def _cull_autocard_toggled(self, _state):
+        on = self.cull_autocard_cb.isChecked()
+        self.settings.setValue('cull_autocard', on)
+        timer = getattr(self, '_cull_card_timer', None)
+        if timer is None:
+            return
+        if on:
+            # Re-seed: volumes that appeared while the watch was off are not
+            # "new", or switching the box back on would open a stale card.
+            self._cull_known_volumes = camera.list_volumes()
+            timer.start()
+        else:
+            timer.stop()
+
+    def _cull_poll_cards(self):
+        current = camera.list_volumes()
+        known = getattr(self, '_cull_known_volumes', current)
+        cards = camera.new_cards(known, current)
+        self._cull_known_volumes = current
+        if not cards:
+            return
+        folder = cards[0]
+        if len(cards) > 1:
+            self.logger.info('Culling: %d cards appeared at once, opening '
+                             'the first one.', len(cards))
+        self.logger.info('Culling: card detected, opening "%s".', folder)
+        self.cull_status.setText(f'Card: {folder}')
+        # Always recursive: DCIM is a container, the pictures are one level
+        # down in 100EOSR5 and its successors.
+        self._cull_open_folder(folder, True)
+
     # ── Import from a camera (0.18.3) ────────────────────────────────────────
 
     def _cull_import_from_camera(self):
@@ -2485,6 +2838,13 @@ class MWCullingMixin:
     # ── Shutdown ──────────────────────────────────────────────────────────────
 
     def _cull_shutdown(self):
+        # 0.18.9: drop the activation hook before anything is torn down.
+        self._cull_fs_watch(False)
+        # 0.18.7: stop the card poll first - a timer firing during teardown
+        # would open a folder into half-dismantled widgets.
+        timer = getattr(self, '_cull_card_timer', None)
+        if timer is not None:
+            timer.stop()
         self._cull_flush_edits()
         if self._cull_reader is not None:
             self._cull_reader.stop()

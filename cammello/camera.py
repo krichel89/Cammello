@@ -357,3 +357,112 @@ def summary_text(copied, skipped, failed, conflicts, cancelled=False):
     if cancelled:
         bits.append('cancelled')
     return ', '.join(bits) + '.'
+
+
+# ── Removable volumes (0.18.7) ───────────────────────────────────────────────
+#
+# Harald: "hätte ich gerne das neu eingesteckte SD Karte sofort geöffnet
+# wird". This half is about a card in a READER, which the system does mount
+# as a volume - the opposite of the PTP case above, and the reason the two
+# live in the same module: both answer "there is a card, get at it".
+
+#: A card is recognised by this folder, not by its size or its name. Every
+#: camera writes it (DCF standard), and a random USB stick does not.
+DCIM = 'DCIM'
+
+
+def volume_roots():
+    """Directories under which the system mounts removable media."""
+    if sys.platform == 'darwin':
+        return ['/Volumes']
+    if sys.platform.startswith('win'):
+        return []                  # drive letters, handled in list_volumes()
+    roots = ['/media', '/run/media']
+    user = os.environ.get('USER') or ''
+    if user:
+        roots += [f'/media/{user}', f'/run/media/{user}']
+    return roots
+
+
+def list_volumes():
+    """Every mounted volume that could hold a card, as a set of paths.
+
+    Names only - nothing is opened, so this is cheap enough to call on a
+    timer.
+    """
+    out = set()
+    if sys.platform.startswith('win'):
+        for letter in 'DEFGHIJKLMNOPQRSTUVWXYZ':
+            path = f'{letter}:\\'
+            if os.path.isdir(path):
+                out.add(path)
+        return out
+    for root in volume_roots():
+        try:
+            with os.scandir(root) as it:
+                for entry in it:
+                    if entry.is_dir() and not entry.name.startswith('.'):
+                        out.add(entry.path)
+        except OSError:
+            continue
+    return out
+
+
+def card_folder(volume):
+    """The folder to open for a freshly mounted volume, or None.
+
+    A DCIM folder is the whole test. Returning DCIM rather than the volume
+    root keeps the scan away from the card's own bookkeeping folders, and
+    the caller walks it recursively because a full card holds 100EOSR5,
+    101EOSR5 and so on.
+    """
+    try:
+        with os.scandir(volume) as it:
+            for entry in it:
+                if entry.is_dir() and entry.name.upper() == DCIM:
+                    return entry.path
+    except OSError:
+        return None
+    return None
+
+
+def card_scope(folder):
+    """The whole card a folder belongs to, or None (0.18.10).
+
+    Harald: "ich möchte die Ordner einer Karte zusammen angezeigt bekommen."
+    A card splits one shoot across 100EOSR5, 101EOSR5 and so on - that is
+    the camera's file-numbering housekeeping, not the photographer's idea of
+    an order, so opening one of them should bring the others along.
+
+    Returns the DCIM folder when `folder` is DCIM itself, sits inside one,
+    or contains one; None for an ordinary working folder, which must be left
+    exactly as it is.
+    """
+    if not folder:
+        return None
+    inside = card_folder(folder)          # folder IS the card root
+    if inside:
+        return inside
+    path = os.path.abspath(folder)
+    while True:
+        parent, name = os.path.split(path)
+        if not name or parent == path:
+            return None
+        if name.upper() == DCIM:
+            return path
+        path = parent
+
+
+def new_cards(previous, current):
+    """Card folders on volumes that appeared between two polls.
+
+    Sorted, so two cards inserted at once are handled in a defined order,
+    and a volume that was already there when Cammello started is never
+    reported - the caller seeds `previous` at startup.
+    """
+    found = []
+    for volume in sorted(current - previous):
+        folder = card_folder(volume)
+        if folder:
+            found.append(folder)
+    return found

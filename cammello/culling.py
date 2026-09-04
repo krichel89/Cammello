@@ -170,6 +170,21 @@ _WINDOWS_RESERVED = {'con', 'prn', 'aux', 'nul',
 SCOPE_GROUP = 'group'
 SCOPE_RAW = 'raw'
 
+#: Sort orders for scan_folder().
+ORDER_NAME = 'name'
+ORDER_TIME = 'time'
+#: 0.18.11. Harald asked whether sorting by capture time costs anything.
+#: This uses the FILE TIME, not EXIF, and that is the whole point: the file
+#: time comes out of the directory entry that the scan reads anyway, so it
+#: costs a stat per file - measured at 3 ms against 0.6 ms for 1600 files.
+#: Reading DateTimeOriginal would mean opening every CR3 on the card, which
+#: is precisely the cost Harald complained about in 0.18.4.
+#:
+#: On a card the two are the same thing: the camera stamps the file as it
+#: writes it. They part company when a file has been rewritten since - some
+#: copy tools do not carry the time over. Cammello's own copy and move do
+#: (shutil.copy2 / shutil.move).
+
 
 def group_paths(item, scope=SCOPE_GROUP):
     """Every file that belongs to one strip entry: RAW, JPEG and sidecar.
@@ -372,7 +387,7 @@ class CullItem:
     """One picture = a RAW file, a JPEG, or a RAW+JPEG pair (same stem)."""
 
     __slots__ = ('stem', 'raw_path', 'jpg_path', 'rating', 'label',
-                 'in_table')
+                 'in_table', 'taken')
 
     def __init__(self, stem, raw_path=None, jpg_path=None):
         self.stem = stem
@@ -381,6 +396,9 @@ class CullItem:
         self.rating = 0          # 0-5, -1 = reject
         self.label = ''          # raw label text as stored in XMP
         self.in_table = False    # badge: already in the upload table
+        # 0.18.11: file time of the oldest file of this entry, for sorting
+        # by when it was taken. NOT read from EXIF - see ORDER_TIME.
+        self.taken = 0.0
 
     @property
     def display_path(self):
@@ -408,10 +426,54 @@ class CullItem:
                 f'label={self.label!r})')
 
 
-def scan_folder(folder, report=None):
-    """Scan one folder (not recursive - SD card folders are flat) and pair
-    RAW+JPEG by identical stem (case-insensitive). Returns CullItems sorted by
-    stem. Filenames only; no file is opened.
+def is_hidden_name(name):
+    """A leading dot means the file is not meant to be seen (0.18.7).
+
+    Harald: "Cammello findet da immer noch einige versteckte Dateien, die
+    der Finder nicht findet, mit Punkt am Anfang." Those are macOS
+    AppleDouble companions - a card that has been in a Mac carries a
+    "._IMG_0001.CR3" next to every "IMG_0001.CR3", plus .Trashes and
+    .Spotlight-V100. They have picture extensions, so the scan took them,
+    and "._IMG_0001" is a DIFFERENT stem from "IMG_0001", so they arrived
+    as extra entries with unreadable contents rather than merging.
+
+    The test is the name, not the file system attribute: on Windows a dot
+    file carries no hidden flag, and the AppleDouble files are the point.
+    """
+    return name.startswith('.')
+
+
+def sort_items(items, order=ORDER_NAME):
+    """Order a list of CullItems in place. Name is the default.
+
+    The time order breaks ties on the stem, so two frames written in the
+    same second keep the camera's numbering instead of jumping about
+    between two scans.
+    """
+    if order == ORDER_TIME:
+        items.sort(key=lambda i: (i.taken, i.stem.casefold(),
+                                  (i.display_path or '').casefold()))
+    else:
+        items.sort(key=lambda i: (i.stem.casefold(),
+                                  (i.display_path or '').casefold()))
+    return items
+
+
+def scan_folder(folder, report=None, recursive=False, order=ORDER_NAME):
+    """Pair RAW+JPEG by identical stem (case-insensitive) and return
+    CullItems sorted by stem. Filenames only; no file is opened.
+
+    Flat by default. `recursive=True` walks subfolders as well (0.18.7),
+    because a card is only flat inside one DCIM folder: a full card holds
+    100EOSR5, 101EOSR5 and so on, and a card put straight into the reader
+    should show all of them.
+
+    Pairing is keyed by FOLDER AND STEM, not by stem alone. Within one
+    folder the camera never repeats a number, but across two DCIM folders
+    IMG_0001 exists twice, and merging those two would fold four files into
+    one entry and silently hide a picture.
+
+    Files whose name starts with a dot are skipped - see is_hidden_name().
 
     `report`: an optional dict that is FILLED IN with what the scan saw -
     see scan_report_text(). Added because "the folder has 200 pictures but
@@ -425,34 +487,77 @@ def scan_folder(folder, report=None):
     by_ext = {}
     listed = 0
     accepted = 0
+    hidden = 0
+    folders = []
+
+    def entries(path):
+        """(name, is_dir, mtime) for one folder. os.scandir carries the
+        time along with the name, so ordering by when a picture was taken
+        costs a stat and not a file read - 3 ms against 0.6 ms for 1600
+        names, measured."""
+        out = []
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    mtime = entry.stat(follow_symlinks=False).st_mtime
+                except OSError:
+                    mtime = 0.0
+                out.append((entry.name, entry.is_dir(), mtime))
+        return sorted(out)
+
     try:
-        names = sorted(os.listdir(folder))
+        if recursive:
+            stack = [folder]
+            while stack:
+                root = stack.pop()
+                found = entries(root)
+                folders.append((root, found))
+                # Hidden folders are pruned here rather than counted: the
+                # scan must not descend into .Trashes or .Spotlight-V100.
+                stack.extend(os.path.join(root, name)
+                             for name, is_dir, _m in found
+                             if is_dir and not is_hidden_name(name))
+        else:
+            folders.append((folder, entries(folder)))
     except OSError as exc:
         if report is not None:
             report.update({'error': str(exc), 'listed': 0, 'accepted': 0,
-                           'items': 0, 'by_ext': {}})
+                           'items': 0, 'by_ext': {}, 'hidden': 0})
         return []
-    for name in names:
-        listed += 1
-        stem, ext = os.path.splitext(name)
-        ext = ext.lower()
-        by_ext[ext] = by_ext.get(ext, 0) + 1
-        if ext not in RAW_EXTENSIONS and ext not in JPEG_EXTENSIONS:
-            continue
-        accepted += 1
-        path = os.path.join(folder, name)
-        key = stem.casefold()
-        item = items.get(key)
-        if item is None:
-            item = items[key] = CullItem(stem)
-        if ext in RAW_EXTENSIONS:
-            item.raw_path = path
-        else:
-            item.jpg_path = path
-    out = [items[k] for k in sorted(items)]
+    for root, found in folders:
+        for name, is_dir, mtime in found:
+            if is_dir:
+                # Folders are not names the user is missing pictures from,
+                # so they stay out of the counts entirely.
+                continue
+            listed += 1
+            if is_hidden_name(name):
+                hidden += 1
+                continue
+            path = os.path.join(root, name)
+            stem, ext = os.path.splitext(name)
+            ext = ext.lower()
+            by_ext[ext] = by_ext.get(ext, 0) + 1
+            if ext not in RAW_EXTENSIONS and ext not in JPEG_EXTENSIONS:
+                continue
+            accepted += 1
+            key = (root.casefold(), stem.casefold())
+            item = items.get(key)
+            if item is None:
+                item = items[key] = CullItem(stem)
+                item.taken = mtime
+            elif mtime and (not item.taken or mtime < item.taken):
+                # The pair is one picture: the older of the two files is
+                # when it was taken, whatever order they were written in.
+                item.taken = mtime
+            if ext in RAW_EXTENSIONS:
+                item.raw_path = path
+            else:
+                item.jpg_path = path
+    out = sort_items(list(items.values()), order)
     if report is not None:
         report.update({'error': None, 'listed': listed, 'accepted': accepted,
-                       'items': len(out), 'by_ext': by_ext})
+                       'items': len(out), 'by_ext': by_ext, 'hidden': hidden})
     return out
 
 
@@ -469,11 +574,13 @@ def scan_report_text(report):
     hist = ', '.join(f'{e or "(no ext)"}={n}'
                      for e, n in sorted(report.get('by_ext', {}).items(),
                                         key=lambda kv: (-kv[1], kv[0])))
-    dropped = report['listed'] - report['accepted']
+    hidden = report.get('hidden', 0)
+    dropped = report['listed'] - report['accepted'] - hidden
     folded = report['accepted'] - report['items']
-    return (f"{report['listed']} name(s) listed, {report['accepted']} picture "
-            f"file(s), {dropped} skipped (unknown extension), {folded} folded "
-            f"into pairs -> {report['items']} entries; extensions: {hist}")
+    return (f"{report['listed']} name(s) listed, {hidden} hidden (leading "
+            f"dot), {report['accepted']} picture file(s), {dropped} skipped "
+            f"(unknown extension), {folded} folded into pairs -> "
+            f"{report['items']} entries; extensions: {hist}")
 
 
 # ── XMP I/O ──────────────────────────────────────────────────────────────────

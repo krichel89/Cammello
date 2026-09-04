@@ -4,6 +4,114 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.11 - 2026-09-04
+
+### Added
+- "Order" in the culling toolbar: file name (the default, as before) or
+  time taken. Remembered. Switching re-sorts what is already open without
+  reading the folder again, so ratings and labels survive and the current
+  picture stays on screen. The case it is for is a card holding two
+  shoots, where 101EOSR5 can be older than 100EOSR5.
+- The time is the FILE time the camera wrote, not EXIF DateTimeOriginal.
+  It comes out of the directory entry the scan reads anyway - measured at
+  3.3 ms against 0.6 ms for 1600 names - while EXIF would mean opening
+  every RAW on the card. On a card the two are the same; Cammello's own
+  copy and move carry the file time over.
+
+### Fixed
+- Opening the DCIM folder itself found nothing (0.18.10). DCIM holds no
+  pictures of its own, and the card scope only switched recursion on when
+  the folder it found differed from the one being opened. The card scope is
+  always recursive now, whatever the subfolders checkbox says.
+- The metadata reader keeps its own copy of the item list; its results come
+  back as indices, and re-sorting under a running reader would have pointed
+  every one of them at the wrong picture.
+
+## 0.18.10 - 2026-09-04
+
+### Changed
+- Opening any part of a memory card opens the whole card: the volume, its
+  DCIM folder or one of the numbered 1xxEOSR5 folders all end up showing
+  every picture on the card in one strip. Those folders are the camera's
+  file-numbering housekeeping, not an order the photographer chose. An
+  ordinary working folder is still read flat, and MISC and the card's other
+  bookkeeping folders stay out. An explicitly given scope - a reload, the
+  automatic card open - is never widened.
+- With more than one folder in the strip, the status line names the folder
+  count and puts the subfolder in front of the file name, the row tooltip
+  names the folder, and the log lists them. Nothing of this appears for a
+  single folder.
+
+## 0.18.9 - 2026-09-04
+
+### Fixed
+- Switching from the culling fullscreen to another program and back left a
+  strange-looking window on macOS. The fullscreen is a separate borderless
+  top-level window with the image view reparented into it, so the main
+  window is left with a hole in its splitter; macOS raises the MAIN window
+  when the application comes back, and that hole is what shows. The
+  fullscreen window is now put back in front, and back into fullscreen,
+  on every application activation, deferred by one event loop turn so it
+  does not fight the window manager. A fitted picture is refitted, which
+  also covers a screen that changed while the app was away.
+- The hole itself is filled with a label saying where the picture went and
+  that F or Esc brings it back, so a glimpse of the main window makes
+  sense. The activation hook is released when fullscreen ends and on
+  shutdown.
+
+## 0.18.8 - 2026-09-03
+
+### Changed
+- No editing in fullscreen: crop (C), the white balance pipette (W),
+  exposure (plain +/-), undo and reset are refused while the image-only
+  fullscreen is up, and the floating edit panel stays hidden. The edit
+  panel is not on screen there, so those keys changed pixels blind, and
+  they sit right beside the rating keys fullscreen exists for. Ratings,
+  labels, navigation, zoom and the view modes are unaffected. A crop in
+  progress is cancelled rather than committed when fullscreen starts.
+- The zoom is carried across an image change: stepping to the next picture
+  while zoomed in keeps the on-screen size and the spot in the picture, so
+  a burst can be checked at 100%. A fitted view stays fitted. Entering or
+  leaving fullscreen refits a fitted view and leaves a zoomed one alone.
+
+### Fixed
+- A screen preview that arrived after the step was only shown when the view
+  was fitted, so paging while zoomed in left the view empty.
+
+## 0.18.7 - 2026-09-02
+
+### Fixed
+- Files and folders whose name begins with a dot are skipped when a folder
+  is read. These were macOS AppleDouble companions: a card that has been in
+  a Mac carries "._IMG_0001.CR3" beside every "IMG_0001.CR3", and since
+  "._IMG_0001" is a different stem it arrived as an extra, unreadable entry
+  rather than merging into the pair. .Trashes, .Spotlight-V100 and
+  .DS_Store went the same way. The scan report counts them.
+
+### Added
+- "subfolders" in the culling toolbar reads the subfolders of the folder
+  that is opened. Off by default and remembered. Pairing is keyed by folder
+  AND stem, so IMG_0001 from two DCIM folders stays two entries.
+- "open cards" opens a memory card by itself as soon as it is plugged in,
+  subfolders and all. On by default and remembered. A volume counts as a
+  card when it has a DCIM folder, and that folder is what gets opened.
+  Volumes present at startup are not treated as new.
+- Reloading a folder keeps the scope it was opened with.
+
+## 0.18.6 - 2026-08-27
+
+### Fixed
+- Zooming in with Cmd/Ctrl + "+" no longer jumps far past the requested
+  step. Zooming requests the full preview, which arrives moments later and
+  is several times wider than the screen preview it replaces (2560 px
+  against 8192 for an R5 frame); the swap kept the transform, and since
+  what reaches the screen is scale times pixmap width, the picture grew by
+  the resolution ratio. The scale is now divided by that ratio and the view
+  re-centred on the same relative point, so the picture stays exactly where
+  it was. A side effect: the reported zoom percentage becomes truthful.
+- A pixel swap at the same resolution (the white balance / exposure path)
+  no longer touches the view at all.
+
 ## 0.18.5 - 2026-08-27
 
 ### Changed
