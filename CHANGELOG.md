@@ -4,6 +4,35 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.12 - 2026-09-05
+
+### Fixed
+- Importing from a camera failed with "[-4] Error loading a library" in the
+  built app: the libgphoto2 driver directories were not in the bundle.
+  libgphoto2 opens its drivers at run time from CAMLIBS and IOLIBS, and
+  gphoto2/__init__.py only sets those variables when
+  gphoto2/libgphoto2/camlibs and .../iolibs exist next to it - which
+  --collect-all does not guarantee, because PyInstaller relocates every .so
+  out of the package tree. build.yml now adds camlibs, iolibs and locale
+  explicitly, with their destination paths.
+- camera.py also locates the driver directories itself at start-up and sets
+  the variables before gphoto2 is imported, first at the expected paths and
+  then by a bounded walk of the bundle. A usable value already in the
+  environment still wins, so a system install or a venv is never overruled.
+- The build now fails when ptp2 or iolibs are missing from the finished
+  .app. The fault was invisible until someone plugged in a camera.
+- A crash when switching the colour scheme, found while testing this
+  release and older than it: setting a NEW application stylesheet repolishes
+  every widget QStyleSheetStyle has ever seen, including ones Python has
+  dropped while Qt still has their deletion queued. 0.17.1 stopped setting
+  the SAME sheet twice; this flushes the deferred deletions before setting a
+  different one. Measured at 14 crashes in 33 runs of test_cullview.py
+  before, 0 in 17 after.
+- gphoto2 errors reached the user unwrapped as "[-4] ...". Camera.autodetect
+  had no handler, and in connect() the port list was built before the try.
+  Both go through one translation now: error -4 explains the macOS
+  quarantine flag and how to clear it, and the driver paths go to the log.
+
 ## 0.18.11 - 2026-09-04
 
 ### Added

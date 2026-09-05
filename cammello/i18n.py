@@ -4696,6 +4696,12 @@ TRANSLATIONS = {
         'fr': 'Le module gphoto2 est absent : aucun appareil n’est joignable. Installez-le avec : pip install gphoto2',
         'it': 'Manca il modulo gphoto2, quindi nessuna fotocamera è raggiungibile. Installalo con: pip install gphoto2',
     },
+    'The camera drivers could not be loaded. On macOS this is usually the quarantine flag on a downloaded app; a Terminal command clears it: xattr -dr com.apple.quarantine /Applications/Cammello.app - then start Cammello again. A card reader works in the meantime.': {
+        'de': 'Die Kameratreiber konnten nicht geladen werden. Unter macOS liegt das meist am Quarantäne-Merkmal einer heruntergeladenen App; im Terminal entfernt es dieser Befehl: xattr -dr com.apple.quarantine /Applications/Cammello.app – danach Cammello neu starten. In der Zwischenzeit hilft ein Kartenleser.',
+        'es': 'No se pudieron cargar los controladores de la cámara. En macOS suele deberse al indicador de cuarentena de una aplicación descargada; este comando del Terminal lo elimina: xattr -dr com.apple.quarantine /Applications/Cammello.app; después vuelve a iniciar Cammello. Mientras tanto, un lector de tarjetas funciona.',
+        'fr': 'Les pilotes de l’appareil photo n’ont pas pu être chargés. Sous macOS, c’est le plus souvent l’attribut de quarantaine d’une application téléchargée ; cette commande du Terminal le supprime : xattr -dr com.apple.quarantine /Applications/Cammello.app — puis relancez Cammello. En attendant, un lecteur de cartes fonctionne.',
+        'it': 'Non è stato possibile caricare i driver della fotocamera. Su macOS di solito dipende dal contrassegno di quarantena di un’app scaricata; questo comando del Terminale lo rimuove: xattr -dr com.apple.quarantine /Applications/Cammello.app — poi riavvia Cammello. Nel frattempo un lettore di schede funziona.',
+    },
     'Export…': {
         'de': 'Export…',
         'es': 'Exportar…',

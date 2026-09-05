@@ -1,4 +1,5 @@
 """Main application window and entry point."""
+import gc
 import os
 import sys
 from PyQt5.QtWidgets import (
@@ -77,8 +78,18 @@ def _apply_app_stylesheet():
     if app is None:
         return
     sheet = app_style()
-    if app.styleSheet() != sheet:
-        app.setStyleSheet(sheet)
+    if app.styleSheet() == sheet:
+        return
+    # 0.18.12: not setting the same sheet twice was not enough. When the
+    # sheet really does change, the same repolish walks widgets that Python
+    # has dropped but Qt has not deleted yet - deleteLater() only queues the
+    # deletion. Flushing the queue first (and collecting the cycles that
+    # hold the last Python reference) means the walk sees a settled widget
+    # tree. Measured against a crash that fired in roughly two runs out of
+    # five of test_cullview.py.
+    gc.collect()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.setStyleSheet(sheet)
 
 
 class MainWindow(FlickrMixin,

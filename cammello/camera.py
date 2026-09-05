@@ -28,6 +28,7 @@ Deliberate shape:
     alone (two cards can both hold IMG_0001.CR3).
 """
 
+import logging
 import os
 import sys
 import time
@@ -100,6 +101,169 @@ class CameraFile:
 
     def __repr__(self):
         return f'CameraFile({self.folder!r}, {self.name!r}, {self.size})'
+
+
+# ── Driver libraries inside a frozen bundle (0.18.12) ────────────────────────
+#
+# What went wrong in 0.18.3: libgphoto2 does not link its drivers, it opens
+# them at run time from the directories named in CAMLIBS and IOLIBS.
+# gphoto2/__init__.py sets both relative to its own file - BUT ONLY IF THE
+# DIRECTORIES EXIST. In the built .app they did not: PyInstaller treats
+# every .so as a binary and relocates it, so `--collect-all gphoto2` alone
+# does not reproduce gphoto2/libgphoto2/camlibs/ inside the bundle. The
+# variables therefore stayed unset, libgphoto2 fell back to the paths
+# compiled into the wheel on the build machine, found nothing loadable, and
+# answered -4 "Error loading a library".
+#
+# Two fixes, on purpose: build.yml now copies the three directories in
+# explicitly, and this code looks for them at start-up wherever the bundler
+# put them. Either one alone would do; together they survive the next
+# PyInstaller release changing its layout again.
+
+DRIVER_ENV = ('CAMLIBS', 'IOLIBS')
+_DRIVER_SUFFIXES = ('.so', '.dylib')
+
+
+def _holds_libraries(path):
+    """A directory that actually contains loadable driver files."""
+    try:
+        return any(name.endswith(_DRIVER_SUFFIXES) for name in os.listdir(path))
+    except OSError:
+        return False
+
+
+def bundle_roots():
+    """Places a frozen build may keep the libgphoto2 tree.
+
+    On macOS PyInstaller splits the bundle into Contents/Frameworks (where
+    _MEIPASS points) and Contents/Resources, and which of the two holds a
+    real file rather than a symlink has changed between releases. Both are
+    checked, plus the plain directory next to the executable for Linux.
+    """
+    roots = []
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        roots.append(meipass)
+        contents = os.path.dirname(meipass)
+        for sibling in ('Resources', 'Frameworks'):
+            roots.append(os.path.join(contents, sibling))
+    try:
+        roots.append(os.path.dirname(os.path.abspath(sys.executable)))
+    except (OSError, TypeError):        # pragma: no cover - defensive
+        pass
+    seen = []
+    for root in roots:
+        if root and root not in seen:
+            seen.append(root)
+    return seen
+
+
+def find_driver_dirs(roots=None):
+    """Locate {'CAMLIBS': …, 'IOLIBS': …} in a bundle, as far as they exist.
+
+    Layout first, search second: the expected relative paths are tried
+    directly, and only if that fails does it walk the bundle (shallow, and
+    only for the two directory names) - a full walk of a 400 MB bundle at
+    every start would be a poor trade.
+    """
+    wanted_dirs = {'CAMLIBS': 'camlibs', 'IOLIBS': 'iolibs'}
+    found = {}
+    roots = bundle_roots() if roots is None else list(roots)
+    for root in roots:
+        for key, leaf in wanted_dirs.items():
+            if key in found:
+                continue
+            for middle in (os.path.join('gphoto2', 'libgphoto2'),
+                           'libgphoto2', ''):
+                candidate = os.path.join(root, middle, leaf)
+                if os.path.isdir(candidate) and _holds_libraries(candidate):
+                    found[key] = candidate
+                    break
+    if len(found) == len(wanted_dirs):
+        return found
+    for root in roots:
+        for base, dirs, _files in os.walk(root):
+            if base[len(root):].count(os.sep) > 4:
+                dirs[:] = []
+                continue
+            for key, leaf in wanted_dirs.items():
+                if key in found or leaf not in dirs:
+                    continue
+                candidate = os.path.join(base, leaf)
+                if _holds_libraries(candidate):
+                    found[key] = candidate
+            if len(found) == len(wanted_dirs):
+                return found
+    return found
+
+
+def prepare_driver_env(force=False):
+    """Point libgphoto2 at the bundled drivers. Returns what was set.
+
+    A value already in the environment is left alone when it names a usable
+    directory - a system install or a developer's venv must keep winning
+    over anything guessed here.
+    """
+    settled = {}
+    for key in DRIVER_ENV:
+        current = os.environ.get(key)
+        if not force and current and os.path.isdir(current) \
+                and _holds_libraries(current):
+            settled[key] = current
+    if len(settled) == len(DRIVER_ENV):
+        return {}
+    if not getattr(sys, 'frozen', False) and not force:
+        return {}
+    changed = {}
+    for key, path in find_driver_dirs().items():
+        if key in settled:
+            continue
+        os.environ[key] = path
+        changed[key] = path
+    if changed:
+        logging.getLogger('Cammello').info(
+            'Camera drivers found in the bundle: %s',
+            ', '.join(f'{k}={v}' for k, v in sorted(changed.items())))
+    return changed
+
+
+def driver_report():
+    """One line per driver directory, for the log and for bug reports."""
+    lines = []
+    for key in DRIVER_ENV:
+        path = os.environ.get(key)
+        if not path:
+            lines.append(f'{key}: not set')
+        elif not os.path.isdir(path):
+            lines.append(f'{key}: {path} (missing)')
+        else:
+            try:
+                libs = [n for n in os.listdir(path)
+                        if n.endswith(_DRIVER_SUFFIXES)]
+            except OSError as exc:
+                lines.append(f'{key}: {path} (unreadable: {exc})')
+                continue
+            note = ''
+            if key == 'CAMLIBS':
+                has_ptp = any(n.startswith('ptp2.') for n in libs)
+                note = ', ptp2 present' if has_ptp else ', PTP2 MISSING'
+            lines.append(f'{key}: {path} ({len(libs)} libraries{note})')
+    return lines
+
+
+# The message a user sees for gphoto2 error -4. English on purpose - the
+# caller translates it, and it is a table key, so it must stay one literal.
+DRIVER_LOAD_FAILED = (
+    'The camera drivers could not be loaded. On macOS this is usually the '
+    'quarantine flag on a downloaded app; a Terminal command clears it: '
+    'xattr -dr com.apple.quarantine /Applications/Cammello.app - then start '
+    'Cammello again. A card reader works in the meantime.')
+
+
+# Prepared at import time so it happens before anything imports gphoto2:
+# the package reads CAMLIBS/IOLIBS while it is being imported, and setting
+# them afterwards would be too late.
+prepare_driver_env()
 
 
 # ── Backend availability ─────────────────────────────────────────────────────
@@ -219,11 +383,36 @@ class GPhoto2Backend:
         import gphoto2 as gp
         self._gp = gp
         self._camera = None
+        for line in driver_report():
+            logging.getLogger('Cammello').info('Camera driver path: %s', line)
+
+    def _fail(self, exc):
+        """Turn a gphoto2 error into something a photographer can act on.
+
+        0.18.12: -4 used to escape unwrapped and reach the user as the bare
+        string "[-4] Error loading a library", which says nothing about what
+        to do. Every gphoto2 call in this class goes through here now.
+        """
+        gp = self._gp
+        if exc.code == gp.GP_ERROR_LIBRARY:
+            logging.getLogger('Cammello').error(
+                'gphoto2 cannot load its drivers (-4). %s',
+                '; '.join(driver_report()))
+            return CameraError(DRIVER_LOAD_FAILED)
+        if exc.code == gp.GP_ERROR_MODEL_NOT_FOUND:
+            return CameraError(
+                'No camera answered. Switch it on, connect the USB '
+                'cable, and close any other program that may be '
+                'holding the camera.')
+        return CameraError(f'The camera could not be opened: {exc.string}')
 
     def list_devices(self):
         gp = self._gp
         out = []
-        found = gp.Camera.autodetect()
+        try:
+            found = gp.Camera.autodetect()
+        except gp.GPhoto2Error as exc:
+            raise self._fail(exc) from exc
         for i in range(found.count()):
             out.append(CameraDevice(found.get_name(i), found.get_value(i),
                                     self.name))
@@ -232,23 +421,19 @@ class GPhoto2Backend:
     def connect(self, device=None):
         gp = self._gp
         camera = gp.Camera()
-        if device is not None and device.addr:
-            # Bind to one specific port; without this init() simply takes
-            # the first camera, which is wrong with two bodies attached.
-            port_info_list = gp.PortInfoList()
-            port_info_list.load()
-            idx = port_info_list.lookup_path(device.addr)
-            camera.set_port_info(port_info_list.get_info(idx))
         try:
+            if device is not None and device.addr:
+                # Bind to one specific port; without this init() simply
+                # takes the first camera, which is wrong with two bodies
+                # attached. Inside the try since 0.18.12: loading the port
+                # list is itself a library load and can fail with -4.
+                port_info_list = gp.PortInfoList()
+                port_info_list.load()
+                idx = port_info_list.lookup_path(device.addr)
+                camera.set_port_info(port_info_list.get_info(idx))
             camera.init()
         except gp.GPhoto2Error as exc:
-            if exc.code == gp.GP_ERROR_MODEL_NOT_FOUND:
-                raise CameraError(
-                    'No camera answered. Switch it on, connect the USB '
-                    'cable, and close any other program that may be '
-                    'holding the camera.') from exc
-            raise CameraError(
-                f'The camera could not be opened: {exc.string}') from exc
+            raise self._fail(exc) from exc
         self._camera = camera
 
     def list_files(self, progress=None):

@@ -214,10 +214,27 @@ jobs:
           # setzt CAMLIBS/IOLIBS relativ zu seinem eigenen Verzeichnis,
           # und ohne die mitgelieferten camlibs/ptp2.so findet libgphoto2
           # gar keine Kamera.
+          # 0.18.12: --collect-all allein REICHT NICHT. PyInstaller haelt
+          # jede .so fuer ein Binary und verschiebt sie aus dem Paketbaum
+          # heraus; gphoto2/__init__.py setzt CAMLIBS/IOLIBS aber nur, wenn
+          # gphoto2/libgphoto2/camlibs bzw. .../iolibs dort noch existieren.
+          # In v0.18.3 bis v0.18.11 taten sie das nicht - die App meldete
+          # "[-4] Fehler beim Laden einer Bibliothek". Darum die drei
+          # Verzeichnisse zusaetzlich als Daten, mit Zielpfad.
           if [ "${{ matrix.arch }}" = "x86_64" ]; then
             GPHOTO_FLAG=""
           else
             GPHOTO_FLAG="--collect-all gphoto2"
+            GPHOTO_DIR=$(python3 -c "import gphoto2, os; print(os.path.dirname(gphoto2.__file__))")
+            echo "gphoto2 liegt in $GPHOTO_DIR"
+            for sub in camlibs iolibs locale; do
+              if [ -d "$GPHOTO_DIR/libgphoto2/$sub" ]; then
+                GPHOTO_FLAG="$GPHOTO_FLAG --add-data $GPHOTO_DIR/libgphoto2/$sub:gphoto2/libgphoto2/$sub"
+                echo "  + $sub ($(ls "$GPHOTO_DIR/libgphoto2/$sub" | wc -l) Dateien)"
+              else
+                echo "  ! $sub fehlt im Wheel"
+              fi
+            done
           fi
           # --onedir statt --onefile: onefile+windowed ist auf macOS
           # deprecated (ab PyInstaller 7.0 ein Fehler); das .app-Bundle
@@ -232,6 +249,22 @@ jobs:
             --collect-all keyring --hidden-import keyring.backends.macOS \
             --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy \
             $GPHOTO_FLAG Cammello.py
+
+      - name: Kameratreiber im Bundle pruefen
+        if: ${{ matrix.arch == 'arm64' }}
+        run: |
+          # Der Fehler aus 0.18.3 ist unsichtbar, solange niemand eine
+          # Kamera anschliesst. Deshalb bricht der Build jetzt ab, statt
+          # eine App auszuliefern, die keine Kamera oeffnen kann.
+          PTP=$(find dist/Cammello.app -name 'ptp2.so' -o -name 'ptp2.dylib' | head -1)
+          IOL=$(find dist/Cammello.app -type d -name iolibs | head -1)
+          echo "ptp2:   ${PTP:-NICHT GEFUNDEN}"
+          echo "iolibs: ${IOL:-NICHT GEFUNDEN}"
+          if [ -z "$PTP" ] || [ -z "$IOL" ]; then
+            echo "::error::Die libgphoto2-Treiber fehlen im Bundle - der Kamera-Import wuerde mit -4 scheitern."
+            exit 1
+          fi
+          find dist/Cammello.app -type d -name camlibs -exec sh -c 'echo "camlibs: $1 ($(ls "$1" | wc -l) Dateien)"' _ {} \;
 
       # ── Code signing + notarization ───────────────────────────────────
       # These steps stay DORMANT until the signing secrets exist: each
