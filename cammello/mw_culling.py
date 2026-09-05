@@ -37,7 +37,8 @@ from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 from .constants import *
 # Explicit alongside the star import: the dialog added in 0.18.5 uses it,
 # and a star-import name is one pyflakes cannot verify.
-from .constants import current_input_style
+from .constants import (current_input_style, camera_dest_dir,
+                        remember_camera_dest)
 from . import culling
 from . import channels, previews, edits, camera
 from .edit_panel import EditPanel
@@ -236,6 +237,201 @@ class _CullStrip(QListWidget):
         owner = self._owner
         if hasattr(owner, '_cull_request_visible_thumbs'):
             owner._cull_request_visible_thumbs()
+
+
+class _CameraPickDialog(QDialog):
+    """Pick which frames come off the camera, and where they land (0.18.13).
+
+    Harald: "Ich moechte aber von der Kamera nur die ausgewaehlten Bilder
+    kopieren, wie von der SD-Karte." Until now "From camera…" asked for a
+    folder and then took everything.
+
+    No thumbnails, on purpose: a preview per frame is a round trip over the
+    cable, and how long that takes on an R5 with 800 frames is not something
+    that could be measured here. Name, folder, time and size come out of the
+    listing that has to happen anyway, so this list costs nothing extra.
+    Previews can be added once there is a number.
+
+    The destination sits in the same dialog, which also answers the other
+    complaint - a separate folder prompt before anything was even chosen.
+    What is already in the destination is unticked and greyed, so a second
+    run after a cancelled import shows at a glance what is left.
+    """
+
+    COL_NAME, COL_FOLDER, COL_TIME, COL_SIZE = range(4)
+
+    def __init__(self, parent, files, start_dir=''):
+        super().__init__(parent)
+        self.setWindowTitle(tr('Import from camera') + f' - {APP_NAME}')
+        self.setMinimumSize(720, 520)
+        self.setStyleSheet(current_input_style())
+        self._files = list(files)
+        self._present = set()
+
+        layout = QVBoxLayout(self)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel(tr('Destination folder:')))
+        self.dest_edit = QLineEdit(start_dir or '')
+        self.dest_edit.textChanged.connect(self._dest_changed)
+        row.addWidget(self.dest_edit, 1)
+        browse = QPushButton(tr('Browse…'))
+        browse.clicked.connect(self._browse)
+        row.addWidget(browse)
+        layout.addLayout(row)
+
+        filters = QHBoxLayout()
+        for label, kind in ((tr('All'), camera.KIND_ALL),
+                            (tr('RAW only'), camera.KIND_RAW),
+                            (tr('JPEG only'), camera.KIND_JPEG)):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _c, k=kind: self._tick_kind(k))
+            filters.addWidget(btn)
+        none_btn = QPushButton(tr('None'))
+        none_btn.clicked.connect(self._tick_none)
+        filters.addWidget(none_btn)
+        filters.addSpacing(12)
+        filters.addWidget(QLabel(tr('Day:')))
+        self.day_combo = QComboBox()
+        self.day_combo.addItem(tr('All days'), None)
+        for day, count in camera.camera_day_counts(self._files):
+            shown = day if day else tr('No time on the card')
+            self.day_combo.addItem(f'{shown} ({count})', day)
+        self.day_combo.currentIndexChanged.connect(self._day_changed)
+        filters.addWidget(self.day_combo)
+        filters.addStretch(1)
+        layout.addLayout(filters)
+
+        self.list = QListWidget()
+        self.list.setAlternatingRowColors(True)
+        self.list.itemChanged.connect(lambda _i: self._update_status())
+        layout.addWidget(self.list, 1)
+        self._fill()
+
+        self.status = QLabel('')
+        layout.addWidget(self.status)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok
+                                   | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._ok_btn = buttons.button(QDialogButtonBox.Ok)
+        self._ok_btn.setText(tr('Import'))
+
+        self._dest_changed(self.dest_edit.text())
+
+    # ── building the list ────────────────────────────────────────────────
+
+    def _row_text(self, cfile):
+        when = time.strftime('%Y-%m-%d %H:%M',
+                             time.localtime(cfile.mtime)) if cfile.mtime \
+            else tr('no time')
+        folder = os.path.basename(cfile.folder.rstrip('/')) or cfile.folder
+        return f'{cfile.name}    {folder}    {when}    ' \
+               f'{camera.format_size(cfile.size)}'
+
+    def _fill(self):
+        self.list.clear()
+        for cfile in self._files:
+            item = QListWidgetItem(self._row_text(cfile))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, cfile)
+            self.list.addItem(item)
+
+    def _items(self):
+        return [self.list.item(i) for i in range(self.list.count())]
+
+    # ── the destination decides what is already there ────────────────────
+
+    def _dest_changed(self, text):
+        dest = (text or '').strip()
+        existing = camera.scan_dest(dest) if dest and os.path.isdir(dest) \
+            else {}
+        self._present = set()
+        self.list.blockSignals(True)
+        for item in self._items():
+            cfile = item.data(Qt.UserRole)
+            here = (cfile.key in existing
+                    and existing[cfile.key] == cfile.size and cfile.size > 0)
+            if here:
+                self._present.add(id(item))
+                item.setCheckState(Qt.Unchecked)
+                item.setForeground(QColor('#909090'))
+                item.setText(self._row_text(cfile) + '    '
+                             + tr('(already in the folder)'))
+            else:
+                item.setText(self._row_text(cfile))
+        self.list.blockSignals(False)
+        self._update_status()
+
+    # ── the quick filters ────────────────────────────────────────────────
+
+    def _current_day(self):
+        return self.day_combo.currentData()
+
+    def _tick_kind(self, kind):
+        """Tick everything of one kind on the chosen day, untick the rest.
+
+        Files already in the destination stay unticked whatever the filter
+        says - copying them again would only be skipped anyway.
+        """
+        wanted_files = set(id(f) for f in camera.filter_files(
+            self._files, kind, self._current_day()))
+        self.list.blockSignals(True)
+        for item in self._items():
+            if id(item) in self._present:
+                item.setCheckState(Qt.Unchecked)
+                continue
+            on = id(item.data(Qt.UserRole)) in wanted_files
+            item.setCheckState(Qt.Checked if on else Qt.Unchecked)
+        self.list.blockSignals(False)
+        self._update_status()
+
+    def _tick_none(self):
+        self.list.blockSignals(True)
+        for item in self._items():
+            item.setCheckState(Qt.Unchecked)
+        self.list.blockSignals(False)
+        self._update_status()
+
+    def _day_changed(self, _index):
+        # Changing the day re-ticks that day; the list itself keeps showing
+        # everything, so a mistake is visible instead of hidden by a filter.
+        self._tick_kind(camera.KIND_ALL)
+
+    # ── status and result ────────────────────────────────────────────────
+
+    def selected_files(self):
+        return [item.data(Qt.UserRole) for item in self._items()
+                if item.checkState() == Qt.Checked]
+
+    def _update_status(self):
+        chosen = self.selected_files()
+        self.status.setText(tr(
+            '{n} of {total} selected, {size}').format(
+                n=len(chosen), total=len(self._files),
+                size=camera.format_size(camera.total_bytes(chosen))))
+        if hasattr(self, '_ok_btn'):
+            self._ok_btn.setEnabled(bool(chosen))
+
+    def _browse(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self, tr('Import from camera into folder'),
+            self.dest_edit.text().strip())
+        if chosen:
+            self.dest_edit.setText(chosen)
+
+    def _accept_if_valid(self):
+        dest = self.dest_edit.text().strip()
+        if not dest or not os.path.isdir(dest):
+            QMessageBox.warning(self, tr('Import from camera'), tr(
+                'Pick a folder that exists.'))
+            return
+        if not self.selected_files():
+            return
+        self.accept()
 
 
 class _TransferDialog(QDialog):
@@ -522,6 +718,46 @@ class _FolderCopyWorker(QThread):
 
 
 
+class _CameraListWorker(QThread):
+    """Reads what is on the card, off the GUI thread (0.18.13).
+
+    Split out of _CameraImportWorker because the user now sees the listing
+    before anything is copied. Walking the card costs a round trip per file
+    for name, size and time - too slow for the GUI thread, and the reason
+    the old flow simply copied everything.
+    """
+    listing = pyqtSignal(int)              # files seen so far
+    found = pyqtSignal(object)             # [CameraFile]
+    fatal = pyqtSignal(str)
+    done = pyqtSignal()
+
+    def __init__(self, device, logger):
+        super().__init__()
+        self.device = device
+        self.log = logger
+        self.files = []
+
+    def run(self):
+        backend = None
+        try:
+            backend = camera.make_backend()
+            backend.connect(self.device)
+            self.files = backend.list_files(progress=self.listing.emit)
+            self.log.info('Camera listing from "%s": %d file(s).',
+                          self.device.name if self.device else '?',
+                          len(self.files))
+            self.found.emit(self.files)
+        except camera.CameraError as exc:
+            self.fatal.emit(str(exc))
+        except Exception as exc:                      # pragma: no cover
+            self.log.error('Camera listing failed: %s', exc, exc_info=True)
+            self.fatal.emit(str(exc))
+        finally:
+            if backend is not None:
+                backend.close()
+            self.done.emit()
+
+
 class _CameraImportWorker(QThread):
     """Copies files off a PTP camera into a local folder, off the GUI thread.
 
@@ -537,11 +773,15 @@ class _CameraImportWorker(QThread):
     fatal = pyqtSignal(str)                # nothing could be done
     done = pyqtSignal(str)                 # summary
 
-    def __init__(self, device, dest_dir, logger):
+    def __init__(self, device, dest_dir, logger, files=None):
         super().__init__()
         self.device = device
         self.dest_dir = dest_dir
         self.log = logger
+        # 0.18.13: the picker has already walked the card, so the list comes
+        # in ready-made. None keeps the old behaviour - list, then copy
+        # everything - which is what the tests from 0.18.3 exercise.
+        self.files = None if files is None else list(files)
         self.copied = 0
         self._cancelled = False
 
@@ -555,7 +795,8 @@ class _CameraImportWorker(QThread):
         try:
             backend = camera.make_backend()
             backend.connect(self.device)
-            files = backend.list_files(progress=self.listing.emit)
+            files = (backend.list_files(progress=self.listing.emit)
+                     if self.files is None else self.files)
             existing = camera.scan_dest(self.dest_dir)
             todo, skipped, conflicts = camera.plan_import(files, existing)
             self.log.info(
@@ -2788,20 +3029,60 @@ class MWCullingMixin:
             if not ok:
                 return
             device = devices[names.index(pick)]
-        dest = QFileDialog.getExistingDirectory(
-            self, tr('Import from camera into folder'),
-            remembered_dir(self.settings))
-        if not dest:
+        # 0.18.13: read the card FIRST and let the user pick. The folder is
+        # asked for inside the picker, not before it.
+        self._cull_camera_device = device
+        self._cull_list_dlg = UploadProgressDialog(
+            0, self, verb=tr('Reading'),
+            title=tr('Import from camera') + f' - {APP_NAME}')
+        self._cull_list_dlg.set_detail(tr('Reading the card…'))
+        self._cull_camera_lister = _CameraListWorker(device, self.logger)
+        lw = self._cull_camera_lister
+        lw.listing.connect(self._cull_on_camera_listing)
+        lw.found.connect(self._cull_on_camera_listed)
+        lw.fatal.connect(self._cull_on_camera_fatal)
+        lw.done.connect(self._cull_on_camera_list_done)
+        self._cull_list_dlg.show()
+        lw.start()
+
+    def _cull_on_camera_listed(self, files):
+        self._cull_camera_files = list(files)
+
+    def _cull_on_camera_list_done(self):
+        """The card has been read - now the picker, then the copying."""
+        self._cull_list_dlg.force_close()
+        self._cull_list_dlg = None
+        fatal = getattr(self, '_cull_camera_fatal', None)
+        self._cull_camera_fatal = None
+        if fatal:
+            QMessageBox.warning(self, tr('Import from camera'), tr(fatal))
             return
-        remember_dir(self.settings, dest)
-        self.logger.info('Camera import: "%s" -> "%s".', device.name, dest)
+        files = getattr(self, '_cull_camera_files', [])
+        if not files:
+            QMessageBox.information(self, tr('Import from camera'), tr(
+                'The card holds no images.'))
+            return
+        dlg = _CameraPickDialog(self, files,
+                                camera_dest_dir(self.settings))
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        chosen = dlg.selected_files()
+        dest = dlg.dest_edit.text().strip()
+        remember_camera_dest(self.settings, dest)
+        self._cull_start_camera_copy(self._cull_camera_device, dest, chosen)
+
+    def _cull_start_camera_copy(self, device, dest, files):
+        self.logger.info('Camera import: "%s" -> "%s", %d of %d file(s).',
+                         device.name, dest, len(files),
+                         len(getattr(self, '_cull_camera_files', files)))
         self._cull_camera_dest = dest
         self._cull_copy_dlg = UploadProgressDialog(
             0, self, verb=tr('Importing'),
             title=tr('Import from camera') + f' - {APP_NAME}')
         self._cull_copy_done = 0
         self._cull_camera_worker = _CameraImportWorker(device, dest,
-                                                       self.logger)
+                                                       self.logger,
+                                                       files=files)
         w = self._cull_camera_worker
         w.listing.connect(self._cull_on_camera_listing)
         w.ready.connect(self._cull_on_camera_ready)
@@ -2814,7 +3095,8 @@ class MWCullingMixin:
         w.start()
 
     def _cull_on_camera_listing(self, count):
-        self._cull_copy_dlg.set_detail(
+        dlg = getattr(self, '_cull_list_dlg', None) or self._cull_copy_dlg
+        dlg.set_detail(
             tr('Reading the card: {n} file(s) so far…').format(n=count))
 
     def _cull_on_camera_ready(self, count):

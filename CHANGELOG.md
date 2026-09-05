@@ -4,6 +4,31 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.13 - 2026-09-05
+
+### Added
+- Importing from a camera now lists the card first and lets the user pick
+  which frames to fetch, instead of copying everything. The picker shows
+  name, folder, capture time and size per row, with quick filters for all /
+  RAW only / JPEG only / none and a day selector. No thumbnails: a preview
+  per frame is a round trip over the cable and the cost could not be
+  measured without a camera.
+- The destination folder is chosen inside that same dialog and remembered
+  under its own key, falling back to the system Pictures folder. It used to
+  be asked for up front and prefilled with the last folder opened anywhere -
+  which, right after opening a card, was the card itself.
+- Files already present in the destination are shown greyed and unticked,
+  and no filter ticks them back on, so a second run after a cancelled
+  import shows what is left.
+- culling.session_day() / day_counts(): a shooting day starts at 4 in the
+  morning, so frames after midnight stay with the evening before. One
+  implementation, ready for the planned day filter on the card.
+
+### Changed
+- _CameraListWorker reads the card; _CameraImportWorker accepts a ready-made
+  file list and then does not walk the card a second time. Without a list it
+  behaves as it did in 0.18.3.
+
 ## 0.18.12 - 2026-09-05
 
 ### Fixed

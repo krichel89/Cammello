@@ -54,9 +54,11 @@ BACKEND_WPD = 'wpd'
 # than duplicated by hand - a second hand-kept list of the same names is
 # exactly what went wrong in sdc._ASSIGN_RE.
 try:  # pragma: no cover - trivial
-    from .culling import RAW_EXTENSIONS, JPEG_EXTENSIONS
+    from .culling import (RAW_EXTENSIONS, JPEG_EXTENSIONS,
+                          session_day, day_counts)
 except ImportError:  # pragma: no cover - direct import in plain tests
-    from culling import RAW_EXTENSIONS, JPEG_EXTENSIONS
+    from culling import (RAW_EXTENSIONS, JPEG_EXTENSIONS,
+                         session_day, day_counts)
 
 # Sidecars do not exist on a camera card, but a card written by a tethering
 # tool may carry them, and audio/video from the same card is worth having.
@@ -310,6 +312,41 @@ def wanted(name):
     ext = os.path.splitext(name)[1].lower()
     return (ext in RAW_EXTENSIONS or ext in JPEG_EXTENSIONS
             or ext in EXTRA_EXTENSIONS)
+
+
+KIND_ALL, KIND_RAW, KIND_JPEG = 'all', 'raw', 'jpeg'
+
+
+def kind_of(name):
+    """'raw', 'jpeg' or 'other' for one file name."""
+    ext = os.path.splitext(name)[1].lower()
+    if ext in RAW_EXTENSIONS:
+        return KIND_RAW
+    if ext in JPEG_EXTENSIONS:
+        return KIND_JPEG
+    return 'other'
+
+
+def filter_files(files, kind=KIND_ALL, day=None):
+    """The subset a quick filter in the picker should tick.
+
+    `day` is a session day as culling.session_day() spells it, or None for
+    every day. Kept out of the dialog so it can be tested without Qt, and
+    so the card-side day filter can use the same two helpers later.
+    """
+    out = []
+    for f in files:
+        if kind != KIND_ALL and kind_of(f.name) != kind:
+            continue
+        if day is not None and session_day(f.mtime) != day:
+            continue
+        out.append(f)
+    return out
+
+
+def camera_day_counts(files):
+    """[(day, count)] for the files on the card, oldest first."""
+    return day_counts(files, lambda f: f.mtime)
 
 
 def scan_dest(dest):

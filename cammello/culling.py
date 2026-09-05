@@ -18,6 +18,7 @@ import os
 import queue
 import re
 import threading
+import time
 
 from .constants import *
 
@@ -342,6 +343,45 @@ def _write_xmp_jpeg(path, rating, label):
 RAW_EXTENSIONS = {'.cr3', '.cr2', '.crw', '.nef', '.nrw', '.arw', '.raf',
                   '.orf', '.rw2', '.dng', '.pef', '.srw', '.x3f'}
 JPEG_EXTENSIONS = {'.jpg', '.jpeg'}
+
+# ── Shooting sessions ────────────────────────────────────────────────────────
+#
+# A festival session runs past midnight: the last frames of the opening gala
+# carry the next day's date. Splitting at midnight would tear one evening in
+# two, so the day starts at 4 in the morning. Decided with Harald.
+
+DAY_START_HOUR = 4
+
+
+def session_day(ts, start_hour=DAY_START_HOUR):
+    """The calendar day a timestamp belongs to, as 'YYYY-MM-DD'.
+
+    Anything before `start_hour` counts towards the day before. Local time,
+    because that is the clock the photographer worked by. Returns '' for a
+    timestamp of 0 - a card can report no time at all.
+    """
+    if not ts:
+        return ''
+    stamp = time.localtime(int(ts) - int(start_hour) * 3600)
+    return time.strftime('%Y-%m-%d', stamp)
+
+
+def day_counts(items, get_time, start_hour=DAY_START_HOUR):
+    """[(day, count)] over the sessions found, oldest first, '' last.
+
+    One helper for both callers - the camera picker now, the card filter
+    next - so the day boundary never has to be written down twice.
+    """
+    counts = {}
+    for item in items:
+        day = session_day(get_time(item), start_hour)
+        counts[day] = counts.get(day, 0) + 1
+    named = sorted((d for d in counts if d))
+    out = [(d, counts[d]) for d in named]
+    if '' in counts:
+        out.append(('', counts['']))
+    return out
+
 
 # ── Color label sets ─────────────────────────────────────────────────────────
 #

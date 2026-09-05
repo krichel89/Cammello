@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.18.12'
+__version__ = '0.18.13'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -56,6 +56,35 @@ def remember_dir(settings, path):
     folder = path if os.path.isdir(path) else os.path.dirname(path)
     if folder and os.path.isdir(folder):
         settings.setValue(LAST_DIR_KEY, folder)
+        settings.sync()
+
+
+CAMERA_DEST_KEY = 'camera_dest_dir'
+
+
+def camera_dest_dir(settings):
+    """Where an import from the camera should land (0.18.13).
+
+    Its OWN memory, not the "last folder used anywhere": that one holds the
+    card just opened, so the import would suggest copying the card onto
+    itself. Falls back to the system's Pictures folder.
+    """
+    last = settings.value(CAMERA_DEST_KEY, '', type=str) if settings else ''
+    if last and os.path.isdir(last):
+        return last
+    pics = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
+    if pics and os.path.isdir(pics):
+        return pics
+    return os.path.expanduser('~')
+
+
+def remember_camera_dest(settings, path):
+    """Store the folder an import ended up in."""
+    if not settings or not path:
+        return
+    folder = path if os.path.isdir(path) else os.path.dirname(path)
+    if folder and os.path.isdir(folder):
+        settings.setValue(CAMERA_DEST_KEY, folder)
         settings.sync()
 
 
