@@ -648,6 +648,103 @@ def card_folder(volume):
     return None
 
 
+def volume_of(path):
+    """The mounted volume `path` sits on, or None (0.18.16).
+
+    Matched against list_volumes() rather than guessed from the string: the
+    same code already knows what a volume looks like on each system, and a
+    folder named /Volumes-Backup must not pass for one.
+    """
+    if not path:
+        return None
+    full = os.path.abspath(path)
+    best = None
+    for volume in list_volumes():
+        root = os.path.abspath(volume)
+        if full == root or full.startswith(root.rstrip(os.sep) + os.sep):
+            if best is None or len(root) > len(best):
+                best = root
+    return best
+
+
+def eject_command(volume):
+    """The command that ejects `volume` on this system, as an argv list.
+
+    Kept separate from running it so the wording can be checked without a
+    card in the machine - nothing here could be tested for real in the
+    sandbox, and inventing an option name would be the easy way to ship a
+    command that fails at the one moment it matters.
+
+    macOS: diskutil eject, which unmounts and powers the slot down.
+    Linux: udisksctl unmount, the user-session way that needs no root.
+    Windows: no such command exists, so the shell verb is used, the same
+    one the Explorer context menu calls.
+    """
+    if sys.platform == 'darwin':
+        return ['diskutil', 'eject', volume]
+    if sys.platform == 'win32':
+        # ntpath explicitly: os.path is posixpath everywhere else, and a
+        # drive letter would survive into the script as "E:\\".
+        import ntpath
+        drive = ntpath.splitdrive(volume)[0] or volume
+        script = (
+            '$sh = New-Object -comObject Shell.Application; '
+            f"$d = $sh.Namespace(17).ParseName('{drive}'); "
+            "if ($d -eq $null) { exit 2 }; $d.InvokeVerb('Eject')")
+        return ['powershell', '-NoProfile', '-NonInteractive',
+                '-Command', script]
+    return ['udisksctl', 'unmount', '--no-user-interaction', '-b', volume]
+
+
+def eject_volume(volume, timeout=30):
+    """Eject the card. Returns (ok, message); never raises.
+
+    `ok` is what the system reported, not what the user sees: Windows'
+    shell verb reports success without waiting, so the caller checks
+    afterwards whether the volume is really gone.
+    """
+    import subprocess
+    if not volume:
+        return False, 'No card to eject.'
+    argv = eject_command(volume)
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout)
+    except FileNotFoundError:
+        return False, f'{argv[0]} is not available on this system.'
+    except subprocess.TimeoutExpired:
+        return False, 'Ejecting took too long.'
+    except OSError as exc:                       # pragma: no cover
+        return False, str(exc)
+    if done.returncode == 0:
+        return True, (done.stdout or '').strip()
+    detail = (done.stderr or done.stdout or '').strip()
+    return False, detail or f'Ejecting failed (code {done.returncode}).'
+
+
+def still_mounted(volume):
+    """Is the volume still there? Asked after ejecting, not before."""
+    return bool(volume) and (volume in {os.path.abspath(v)
+                                        for v in list_volumes()}
+                             or os.path.isdir(volume))
+
+
+def suggest_card():
+    """A mounted card to offer in the Open dialog, or None (0.18.14).
+
+    Harald: opening should propose the card, moving should propose a place
+    to keep pictures. A volume counts as a card when it has a DCIM folder -
+    the same single test card_folder() uses, so a backup drive named
+    "Fotos" is not mistaken for one. The DCIM folder itself is returned,
+    because that is what card_scope() wants to see anyway.
+    """
+    for volume in sorted(list_volumes()):
+        folder = card_folder(volume)
+        if folder:
+            return folder
+    return None
+
+
 def card_scope(folder):
     """The whole card a folder belongs to, or None (0.18.10).
 

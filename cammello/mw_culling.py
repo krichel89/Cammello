@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QToolButton, QInputDialog, QShortcut, QDialog, QDialogButtonBox,
     QLineEdit, QRadioButton, QApplication)
 from PyQt5.QtGui import (QIcon, QPixmap, QColor, QPen, QPainter,
-                         QKeySequence)
+                         QKeySequence, QFont, QFontMetrics)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 
 from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
@@ -38,7 +38,8 @@ from .constants import *
 # Explicit alongside the star import: the dialog added in 0.18.5 uses it,
 # and a star-import name is one pyflakes cannot verify.
 from .constants import (current_input_style, camera_dest_dir,
-                        remember_camera_dest)
+                        remember_camera_dest, transfer_dest_dir,
+                        remember_transfer_dest)
 from . import culling
 from . import channels, previews, edits, camera
 from .edit_panel import EditPanel
@@ -100,6 +101,10 @@ class _LabelBarDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.current_row = -1
         self.dark = False
+        # 0.18.15: the i key turns a second, smaller line on under the file
+        # name - time taken and size. Off by default; a grid full of numbers
+        # is not what most passes need.
+        self.show_info = False
 
     def set_dark(self, dark):
         self.dark = bool(dark)
@@ -132,6 +137,22 @@ class _LabelBarDelegate(QStyledItemDelegate):
         band_h = max(self.BAR + 2, fm.height())
         band_top = r.bottom() - inset - band_h
         name_bottom = band_top - 2
+        info = (index.data(Qt.UserRole + 5) or '') if self.show_info else ''
+        if info:
+            # The info line sits between the name and the star band, in a
+            # smaller font and a dimmer pen, so the name stays the thing the
+            # eye finds first.
+            small = QFont(opt.font)
+            small.setPointSizeF(max(7.0, opt.font.pointSizeF() - 2))
+            sfm = QFontMetrics(small)
+            painter.setFont(small)
+            painter.setPen(QColor('#9a9a9a') if self.dark
+                           else QColor('#5a5a5a'))
+            painter.drawText(r.x() + inset, name_bottom - sfm.descent(),
+                             sfm.elidedText(info, Qt.ElideMiddle,
+                                            r.width() - 2 * inset))
+            painter.setFont(opt.font)
+            name_bottom -= sfm.height()
         name = index.data(Qt.UserRole + 2) or ''
         if name:
             painter.setPen(text_color)
@@ -951,6 +972,17 @@ class MWCullingMixin:
         cam_btn.clicked.connect(self._cull_import_from_camera)
         bar.addWidget(cam_btn)
         self.cull_camera_btn = cam_btn
+        # 0.18.16 (Harald): eject the card from inside Cammello. Enabled
+        # only while the open folder actually sits on a removable volume -
+        # a button that could unmount the system disk would be a poor idea.
+        self.cull_eject_btn = QPushButton(tr('Eject card'))
+        self.cull_eject_btn.setToolTip(tr(
+            'Close the card and unmount it. Ratings still waiting to be '
+            'written\nare written first; the card is only reported as safe '
+            'when it is really gone.'))
+        self.cull_eject_btn.setEnabled(False)
+        self.cull_eject_btn.clicked.connect(self._cull_eject_card)
+        bar.addWidget(self.cull_eject_btn)
         # 0.18.7: both settings sit next to the folder actions they change,
         # and both are remembered - a card is opened the same way every time
         # or the automatic opening would be a surprise rather than a help.
@@ -992,6 +1024,19 @@ class MWCullingMixin:
         self.cull_order_combo.currentIndexChanged.connect(
             lambda _i: self._cull_order_changed())
         bar.addWidget(self.cull_order_combo)
+        # 0.18.15 (Harald): "nur die Bilder von heute". Same source as the
+        # order - the file time from the scan - so the day filter costs no
+        # file access either. Filled by _cull_fill_days() after every scan.
+        bar.addWidget(QLabel(tr('Day:')))
+        self.cull_day_combo = QComboBox()
+        self.cull_day_combo.addItem(tr('All days'), None)
+        self.cull_day_combo.setToolTip(tr(
+            'A shooting day starts at 4 in the morning, so an evening that '
+            'runs\npast midnight stays one day. The time is the file time, '
+            'as for the order.'))
+        self.cull_day_combo.currentIndexChanged.connect(
+            self._cull_apply_filter)
+        bar.addWidget(self.cull_day_combo)
         self.cull_mode_lbl = QLabel()
         self.cull_mode_lbl.setToolTip(tr('Number keys 1-5 set stars or colors; '
                                       'M toggles the mode.'))
@@ -1063,6 +1108,18 @@ class MWCullingMixin:
             b.clicked.connect(self._cull_apply_filter)
             self._cull_color_btns.append(b)
             bar.addWidget(b)
+        # 0.18.14: one switch that undoes the whole filter cluster - stars,
+        # rejects and colours together. Disabled while nothing is filtered,
+        # so it doubles as the answer to "is anything hidden right now?".
+        self.cull_clear_filter_btn = QPushButton(tr('Clear filter'))
+        self.cull_clear_filter_btn.setProperty('cammelloCompact', True)
+        self.cull_clear_filter_btn.setToolTip(tr(
+            'Show every image again: no star limit, no colour limit, '
+            'rejects visible. Opening a folder or a card does this by '
+            'itself.'))
+        self.cull_clear_filter_btn.setEnabled(False)   # nothing filtered yet
+        self.cull_clear_filter_btn.clicked.connect(self._cull_clear_filter)
+        bar.addWidget(self.cull_clear_filter_btn)
         bar.addWidget(toolbar_separator())
         bar.addStretch(1)      # second half of the centring pair
         # "Apply" (Übernehmen) hands the selection (or all filtered images) to
@@ -1229,8 +1286,12 @@ class MWCullingMixin:
         if not hasattr(self, '_cull_reader'):
             return
         if not folder:
+            # 0.18.14: a card first, if one is mounted - that is where the
+            # pictures come from. Only when there is none does the dialog
+            # start where it started last time.
+            start = camera.suggest_card() or remembered_dir(self.settings)
             folder = QFileDialog.getExistingDirectory(
-                self, tr('Open folder'), remembered_dir(self.settings))
+                self, tr('Open folder'), start)
             if not folder:
                 return
             remember_dir(self.settings, folder)
@@ -1299,7 +1360,15 @@ class MWCullingMixin:
         self._cull_reader.done.connect(self._cull_meta_done)
         self._cull_reader.start()
 
-        self._cull_apply_filter()
+        self._cull_update_eject()
+        # The day list belongs to THIS card - built before the filter runs,
+        # because clearing the filter reads the combo (0.18.15).
+        self._cull_fill_days()
+        # 0.18.14 (Harald): a filter from the previous card hides most of
+        # the new one, and the missing images say nothing about why. Every
+        # open and every reload starts unfiltered; _cull_clear_filter()
+        # applies the filter itself, so this replaces the call.
+        self._cull_clear_filter()
         # 0.18.4: three numbers in the log, so "reading the card takes too
         # long" can be answered instead of guessed - the rows, the metadata
         # pass, and the moment the first screenful of thumbnails is actually
@@ -1437,7 +1506,167 @@ class MWCullingMixin:
                 sel.add(-1 if i == len(btns) - 1 else i)
         return sel or None
 
+    def _cull_close_folder(self):
+        """Let go of the open folder entirely (0.18.16).
+
+        The same teardown _cull_open_folder() does before it reads a new
+        folder, but without opening one afterwards: reader stopped, pending
+        writes out, decode jobs retired, list and view emptied. Ejecting
+        needs this - a running reader keeps file handles on the card.
+        """
+        if not hasattr(self, '_cull_reader'):
+            return
+        if self._cull_reader is not None:
+            self._cull_reader.stop()
+            self._cull_reader.wait(2000)
+        self._cull_wb.flush(10)
+        self._cull_flush_edits()
+        self._cull_loader.new_generation()
+        self._cull_loader.wait_idle(5000)
+        self._cull_items = []
+        self._cull_visible = []
+        self._cull_index = -1
+        self._cull_folder = ''
+        self._cull_folders = []
+        self._cull_decorated = set()
+        self._cull_row_by_path = {}
+        self._cull_row_by_item = {}
+        self.cull_strip.blockSignals(True)
+        self.cull_strip.clear()
+        self.cull_strip.blockSignals(False)
+        self.cull_view.clear_image()
+        self._cull_fill_days()
+        self._cull_set_status()
+
+    def _cull_update_eject(self):
+        """Enable the eject button when the open folder is on a card."""
+        btn = getattr(self, 'cull_eject_btn', None)
+        if btn is None:
+            return
+        volume = camera.volume_of(getattr(self, '_cull_folder', ''))
+        self._cull_eject_volume = volume
+        btn.setEnabled(bool(volume))
+        if volume:
+            btn.setToolTip(tr('Eject {name}').format(
+                name=os.path.basename(volume.rstrip(os.sep)) or volume))
+
+    def _cull_eject_card(self):
+        """Write, close, unmount - in that order (0.18.16).
+
+        Ejecting while the folder is still open is how a card ends up
+        "in use": the reader thread has file handles, the thumbnails hold
+        the JPEGs, and the write-behind queue may still owe the card a
+        sidecar. So the pending writes are flushed, the folder is closed,
+        and only then is the volume unmounted.
+        """
+        volume = getattr(self, '_cull_eject_volume', None)
+        if not volume:
+            return
+        name = os.path.basename(volume.rstrip(os.sep)) or volume
+        self._cull_wb.flush(10)
+        errors = list(getattr(self._cull_wb, 'errors', ()))
+        if errors:
+            # Never unmount over unwritten ratings - that is the one case
+            # where ejecting loses work.
+            QMessageBox.warning(self, tr('Eject card'), tr(
+                'Ratings could not be written to the card, so it was not '
+                'ejected. The log has the details.'))
+            return
+        self._cull_close_folder()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ok, detail = camera.eject_volume(volume)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if ok and not camera.still_mounted(volume):
+            self.logger.info('Ejected "%s".', volume)
+            self._cull_known_volumes = camera.list_volumes()
+            self._cull_update_eject()
+            self._cull_set_status()
+            QMessageBox.information(self, tr('Eject card'), tr(
+                '{name} can be removed.').format(name=name))
+            return
+        if ok:
+            # Windows reports the shell verb as done before the drive is
+            # actually gone, and something still holding a handle looks
+            # exactly like this.
+            detail = tr('The system did not report an error, but the card '
+                        'is still mounted. Something else may be using it.')
+        self.logger.warning('Eject of "%s" failed: %s', volume, detail)
+        self._cull_update_eject()
+        QMessageBox.warning(self, tr('Eject card'),
+                            tr('{name} could not be ejected.').format(
+                                name=name) + '\n\n' + str(detail))
+
+    def _cull_day_filter(self):
+        """The chosen shooting day, or None for all of them (0.18.15)."""
+        combo = getattr(self, 'cull_day_combo', None)
+        return combo.currentData() if combo is not None else None
+
+    def _cull_fill_days(self):
+        """Rebuild the day list from what is actually on the card.
+
+        Called after every scan. The current choice is kept if that day is
+        still there - reloading the same card must not throw the filter
+        away - and today is named so, because that is what it is usually
+        for.
+        """
+        combo = getattr(self, 'cull_day_combo', None)
+        if combo is None:
+            return
+        chosen = combo.currentData()
+        today = culling.session_day(time.time())
+        blocked = combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(tr('All days'), None)
+        for day, count in culling.day_counts(self._cull_items,
+                                             lambda it: it.taken):
+            if not day:
+                label = tr('no time ({n})').format(n=count)
+            elif day == today:
+                label = tr('today ({n})').format(n=count)
+            else:
+                shown = time.strftime('%d.%m.%Y', time.strptime(day,
+                                                                '%Y-%m-%d'))
+                label = f'{shown} ({count})'
+            combo.addItem(label, day)
+        idx = combo.findData(chosen) if chosen is not None else 0
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(blocked)
+
+    def _cull_filter_active(self):
+        """Is anything hidden right now? (0.18.14)"""
+        return bool(self._cull_min_rating()
+                    or self.cull_hide_rejects_cb.isChecked()
+                    or self._cull_label_filter()
+                    or self._cull_day_filter())
+
+    def _cull_clear_filter(self, *_a):
+        """Undo stars, rejects and colours in one go.
+
+        Called by the switch next to the swatches AND by every folder open:
+        a filter left over from the previous card hides most of the new one,
+        and the images are simply missing with nothing to say why.
+        """
+        if not hasattr(self, 'cull_hide_rejects_cb'):
+            return                      # tab never built (no pyexiv2)
+        self._cull_minrating = 0        # the name _cull_min_rating() reads
+        self._cull_update_stars()
+        blocked = self.cull_hide_rejects_cb.blockSignals(True)
+        self.cull_hide_rejects_cb.setChecked(False)
+        self.cull_hide_rejects_cb.blockSignals(blocked)
+        for b in self._cull_color_btns:
+            b.setChecked(False)
+        combo = getattr(self, 'cull_day_combo', None)
+        if combo is not None:
+            blocked = combo.blockSignals(True)
+            combo.setCurrentIndex(0)                  # All days
+            combo.blockSignals(blocked)
+        self._cull_apply_filter()
+
     def _cull_apply_filter(self, *_a):
+        if hasattr(self, 'cull_clear_filter_btn'):
+            self.cull_clear_filter_btn.setEnabled(self._cull_filter_active())
         current_item = (self._cull_visible[self._cull_index]
                         if 0 <= self._cull_index < len(self._cull_visible)
                         else None)
@@ -1445,7 +1674,8 @@ class MWCullingMixin:
             self._cull_items,
             min_rating=self._cull_min_rating(),
             exclude_rejects=self.cull_hide_rejects_cb.isChecked(),
-            label_indices=self._cull_label_filter())
+            label_indices=self._cull_label_filter(),
+            day=self._cull_day_filter())
         self.cull_strip.blockSignals(True)
         self.cull_strip.clear()
         cell = 230 if self._cull_grid else 152
@@ -1511,6 +1741,9 @@ class MWCullingMixin:
                 if mark:
                     break
         li.setData(Qt.UserRole + 3, mark)
+        # 0.18.15: the info line for the i key. Both numbers come from the
+        # scan, which stats every name anyway - no file is opened for this.
+        li.setData(Qt.UserRole + 5, culling.item_info_text(item))
         # Crop/edit badge (0.13): path-based, like the channel mark.
         li.setData(Qt.UserRole + 4,
                    edits.has_edit(self._cull_edits, item.display_path)
@@ -1829,6 +2062,19 @@ class MWCullingMixin:
         self.cull_view.set_info_overlay('<br>'.join(lines))
         self.cull_view.show_info_overlay(True)
 
+    def _cull_update_grid_info(self):
+        """Show or hide the time/size line in the thumbnails (0.18.15).
+
+        Only the delegate flag and a repaint: the text itself is already on
+        every row, put there by _cull_decorate_row, so nothing is read or
+        rebuilt when the key is pressed.
+        """
+        delegate = getattr(self, '_cull_delegate', None)
+        if delegate is None:
+            return
+        delegate.show_info = self._cull_show_exif
+        self.cull_strip.viewport().update()
+
     # ── Keyboard ──────────────────────────────────────────────────────────────
 
     def _cull_update_mode_label(self):
@@ -1878,8 +2124,13 @@ class MWCullingMixin:
             if self._cull_visible:
                 self._cull_show_index(len(self._cull_visible) - 1)
         elif key == Qt.Key_I:
+            # 0.18.15: ONE key for both views. In the loupe it is the EXIF
+            # overlay it has always been; in the grid it turns the time and
+            # size line on in every cell. Same switch, so the state cannot
+            # disagree between the two views.
             self._cull_show_exif = not self._cull_show_exif
             self._cull_update_info_overlay()
+            self._cull_update_grid_info()
         elif key == Qt.Key_M:
             self._cull_number_mode = ('color'
                                       if self._cull_number_mode == 'rating'
@@ -2856,11 +3107,14 @@ class MWCullingMixin:
         rows = self._cull_send_rows()
         if rows is None:
             return
-        dlg = _TransferDialog(self, remembered_dir(self.settings))
+        dlg = _TransferDialog(self, transfer_dest_dir(self.settings))
         if dlg.exec_() != QDialog.Accepted:
             return
         dest, move, scope = dlg.result_values()
-        remember_dir(self.settings, dest)
+        # 0.18.14: its own memory. remember_dir() would put the destination
+        # into the OPEN memory, where the next Open dialog would offer the
+        # folder pictures were moved OUT of.
+        remember_transfer_dest(self.settings, dest)
         group = []
         for r in rows:
             if not (0 <= r < len(self._cull_visible)):

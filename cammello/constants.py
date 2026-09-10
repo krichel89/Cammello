@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.18.13'
+__version__ = '0.18.16'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -29,34 +29,67 @@ def manual_url(lang):
 
 
 LAST_DIR_KEY = 'last_open_dir'
+TRANSFER_DEST_KEY = 'transfer_dest_dir'
 
 
-def remembered_dir(settings):
-    """Where a file/folder dialog should start (0.14).
+def _pictures_or_home():
+    """The system's Pictures folder, or the home directory.
 
-    The folder last opened, if it still exists - otherwise the system's
-    Pictures folder, which is where photographs live. Falls back to the home
-    directory on systems that report no Pictures location.
+    The system names a Pictures location even where no such folder was ever
+    created, so it has to be checked like any other path.
     """
-    last = settings.value(LAST_DIR_KEY, '', type=str) if settings else ''
-    if last and os.path.isdir(last):
-        return last
-    # The system names a Pictures location even where no such folder was
-    # ever created, so it has to be checked like any other path.
     pics = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
     if pics and os.path.isdir(pics):
         return pics
     return os.path.expanduser('~')
 
 
-def remember_dir(settings, path):
-    """Store the folder a dialog ended up in. `path` may be a file."""
+def stored_dir(settings, key):
+    """The folder stored under `key`, if it still exists (0.18.14).
+
+    One implementation for all three memories - opening, moving/copying and
+    importing from the camera. They are separate keys on purpose (a card is
+    a fine place to open and a poor place to write to), but the lookup is
+    the same and is not written down three times.
+    """
+    last = settings.value(key, '', type=str) if settings else ''
+    if last and os.path.isdir(last):
+        return last
+    return _pictures_or_home()
+
+
+def store_dir(settings, key, path):
+    """Remember a folder under `key`. `path` may be a file."""
     if not settings or not path:
         return
     folder = path if os.path.isdir(path) else os.path.dirname(path)
     if folder and os.path.isdir(folder):
-        settings.setValue(LAST_DIR_KEY, folder)
+        settings.setValue(key, folder)
         settings.sync()
+
+
+def remembered_dir(settings):
+    """Where a file/folder dialog should start (0.14)."""
+    return stored_dir(settings, LAST_DIR_KEY)
+
+
+def remember_dir(settings, path):
+    """Store the folder a dialog ended up in. `path` may be a file."""
+    store_dir(settings, LAST_DIR_KEY, path)
+
+
+def transfer_dest_dir(settings):
+    """Where "Move/copy to…" should start (0.18.14).
+
+    Its own memory, and the Pictures folder before anything is stored:
+    Harald's rule is that moving suggests a place to KEEP pictures, while
+    opening suggests the card they come from.
+    """
+    return stored_dir(settings, TRANSFER_DEST_KEY)
+
+
+def remember_transfer_dest(settings, path):
+    store_dir(settings, TRANSFER_DEST_KEY, path)
 
 
 CAMERA_DEST_KEY = 'camera_dest_dir'
@@ -69,23 +102,12 @@ def camera_dest_dir(settings):
     card just opened, so the import would suggest copying the card onto
     itself. Falls back to the system's Pictures folder.
     """
-    last = settings.value(CAMERA_DEST_KEY, '', type=str) if settings else ''
-    if last and os.path.isdir(last):
-        return last
-    pics = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
-    if pics and os.path.isdir(pics):
-        return pics
-    return os.path.expanduser('~')
+    return stored_dir(settings, CAMERA_DEST_KEY)
 
 
 def remember_camera_dest(settings, path):
     """Store the folder an import ended up in."""
-    if not settings or not path:
-        return
-    folder = path if os.path.isdir(path) else os.path.dirname(path)
-    if folder and os.path.isdir(folder):
-        settings.setValue(CAMERA_DEST_KEY, folder)
-        settings.sync()
+    store_dir(settings, CAMERA_DEST_KEY, path)
 
 
 def gallery_page_name(prefix, suffix):

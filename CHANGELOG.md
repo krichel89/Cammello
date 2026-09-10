@@ -4,6 +4,62 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.16 - 2026-09-10
+
+### Added
+- An "Eject card" button next to "From camera…", enabled only while the
+  open folder is on a removable volume. It flushes pending ratings, closes
+  the folder (a running reader holds file handles, which is what usually
+  makes a card "in use"), unmounts, and then checks whether the volume is
+  really gone before reporting the card safe - Windows' shell verb reports
+  success before the drive disappears.
+- Pending ratings that cannot be written stop the eject instead of losing
+  work.
+- camera.volume_of(), eject_command(), eject_volume(), still_mounted():
+  diskutil on macOS, udisksctl on Linux, the Explorer shell verb on
+  Windows. None of it could be exercised without a removable volume; the
+  command wording and the ordering are what the tests hold.
+- _cull_close_folder(): the teardown half of opening a folder, on its own.
+
+## 0.18.15 - 2026-09-07
+
+### Added
+- The grid can show time taken and file size under each file name, toggled
+  with the i key - the same key and the same state as the EXIF overlay in
+  the loupe, so the two views cannot disagree. Off by default.
+- CullItem.size, filled by the scan: the same stat that reads the file time
+  for ORDER_TIME carries the size, so the line costs no extra file access
+  and pressing i reads nothing at all. No EXIF: a screenful of tiles would
+  mean a screenful of opened RAW files.
+- culling.size_text() and culling.item_info_text() build the line.
+- A "Day" selector next to "Order": all days (default) or one of the days
+  found on the card, with a count each; today is labelled as today. Single
+  choice. A shooting day starts at 4 in the morning, so an evening running
+  past midnight stays one day - the same culling.session_day() the camera
+  picker uses. It counts as an active filter, the clear switch resets it,
+  and reloading the same card keeps the chosen day when it still exists.
+
+## 0.18.14 - 2026-09-07
+
+### Added
+- A "Clear filter" switch next to the colour swatches: stars, hide-rejects
+  and colours in one go. Disabled while nothing is filtered, so it also
+  answers "is anything hidden right now?".
+- Opening a folder or reloading a card clears the filter by itself. A
+  filter left from the previous card hid most of the new one, with nothing
+  on screen to say why.
+- camera.suggest_card(): the first mounted volume with a DCIM folder. The
+  Open dialog starts there when a card is mounted, otherwise where it
+  started last time.
+
+### Changed
+- "Move/copy to…" starts at the system Pictures folder and remembers its
+  own destination, separately from the folder Open remembers. One key for
+  everything meant that after opening a card, Move suggested the card, and
+  after a move, Open suggested the folder the pictures had just left.
+- constants.stored_dir() / store_dir() hold the lookup once; the three
+  folder memories (open, transfer, camera import) differ only in their key.
+
 ## 0.18.13 - 2026-09-05
 
 ### Added

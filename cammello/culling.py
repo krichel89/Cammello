@@ -383,6 +383,34 @@ def day_counts(items, get_time, start_hour=DAY_START_HOUR):
     return out
 
 
+def size_text(num):
+    """Bytes as a short human string. Base 1000, like the camera counts."""
+    value = float(num or 0)
+    for unit in ('B', 'kB', 'MB', 'GB'):
+        if value < 1000 or unit == 'GB':
+            if unit == 'B':
+                return f'{int(value)} {unit}'
+            return f'{value:.1f} {unit}'
+        value /= 1000.0
+    return f'{value:.1f} GB'                       # pragma: no cover
+
+
+def item_info_text(item):
+    """The line the grid shows under the file name when the i key is on.
+
+    Time taken and size, both straight out of the scan - it stats every
+    name anyway. No EXIF, so no RAW is opened for a full screen of
+    thumbnails; the time is the file time, exactly as for ORDER_TIME.
+    """
+    parts = []
+    if getattr(item, 'taken', 0):
+        parts.append(time.strftime('%d.%m. %H:%M',
+                                   time.localtime(item.taken)))
+    if getattr(item, 'size', 0):
+        parts.append(size_text(item.size))
+    return '  ·  '.join(parts)
+
+
 # ── Color label sets ─────────────────────────────────────────────────────────
 #
 # Lightroom stores the label as text and the text depends on the UI language /
@@ -427,7 +455,7 @@ class CullItem:
     """One picture = a RAW file, a JPEG, or a RAW+JPEG pair (same stem)."""
 
     __slots__ = ('stem', 'raw_path', 'jpg_path', 'rating', 'label',
-                 'in_table', 'taken')
+                 'in_table', 'taken', 'size')
 
     def __init__(self, stem, raw_path=None, jpg_path=None):
         self.stem = stem
@@ -439,6 +467,9 @@ class CullItem:
         # 0.18.11: file time of the oldest file of this entry, for sorting
         # by when it was taken. NOT read from EXIF - see ORDER_TIME.
         self.taken = 0.0
+        # 0.18.15: bytes of the whole entry - RAW plus JPEG for a pair. The
+        # scan already stats every name for `taken`, so this is free.
+        self.size = 0
 
     @property
     def display_path(self):
@@ -531,18 +562,19 @@ def scan_folder(folder, report=None, recursive=False, order=ORDER_NAME):
     folders = []
 
     def entries(path):
-        """(name, is_dir, mtime) for one folder. os.scandir carries the
+        """(name, is_dir, mtime, size) for one folder. os.scandir carries the
         time along with the name, so ordering by when a picture was taken
         costs a stat and not a file read - 3 ms against 0.6 ms for 1600
-        names, measured."""
+        names, measured. The size rides along in the same stat (0.18.15)."""
         out = []
         with os.scandir(path) as it:
             for entry in it:
                 try:
-                    mtime = entry.stat(follow_symlinks=False).st_mtime
+                    info = entry.stat(follow_symlinks=False)
+                    mtime, size = info.st_mtime, info.st_size
                 except OSError:
-                    mtime = 0.0
-                out.append((entry.name, entry.is_dir(), mtime))
+                    mtime, size = 0.0, 0
+                out.append((entry.name, entry.is_dir(), mtime, size))
         return sorted(out)
 
     try:
@@ -555,7 +587,7 @@ def scan_folder(folder, report=None, recursive=False, order=ORDER_NAME):
                 # Hidden folders are pruned here rather than counted: the
                 # scan must not descend into .Trashes or .Spotlight-V100.
                 stack.extend(os.path.join(root, name)
-                             for name, is_dir, _m in found
+                             for name, is_dir, _m, _s in found
                              if is_dir and not is_hidden_name(name))
         else:
             folders.append((folder, entries(folder)))
@@ -565,7 +597,7 @@ def scan_folder(folder, report=None, recursive=False, order=ORDER_NAME):
                            'items': 0, 'by_ext': {}, 'hidden': 0})
         return []
     for root, found in folders:
-        for name, is_dir, mtime in found:
+        for name, is_dir, mtime, size in found:
             if is_dir:
                 # Folders are not names the user is missing pictures from,
                 # so they stay out of the counts entirely.
@@ -590,6 +622,7 @@ def scan_folder(folder, report=None, recursive=False, order=ORDER_NAME):
                 # The pair is one picture: the older of the two files is
                 # when it was taken, whatever order they were written in.
                 item.taken = mtime
+            item.size += size
             if ext in RAW_EXTENSIONS:
                 item.raw_path = path
             else:
@@ -798,11 +831,20 @@ class WriteBehind:
 
 # ── Filtering ────────────────────────────────────────────────────────────────
 
-def filter_items(items, min_rating=0, exclude_rejects=True, label_indices=None):
+def filter_items(items, min_rating=0, exclude_rejects=True, label_indices=None,
+                 day=None):
     """label_indices: None = all labels, else a set of color indices 0-4;
-    include -1 in the set to also match items without any label."""
+    include -1 in the set to also match items without any label.
+
+    `day` (0.18.15): a session day as session_day() spells it, or None for
+    every day. The card of a festival holds several evenings; this is what
+    shows only today's. The day comes from the file time the scan already
+    read - no file is opened for it.
+    """
     out = []
     for it in items:
+        if day is not None and session_day(getattr(it, 'taken', 0)) != day:
+            continue
         if it.rating == -1:
             # A reject has no meaningful star count. Until 0.12.6 the rejects
             # switch alone decided; since 0.12.7 rejects are shown BY DEFAULT
