@@ -93,13 +93,12 @@ jobs:
     # so the build stays green until the secrets are set and signs itself
     # once they are.
     env:
-      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-      MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-      MACOS_CERTIFICATE_NAME: ${{ secrets.MACOS_CERTIFICATE_NAME }}
-      MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
-      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
-      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -268,35 +267,38 @@ jobs:
 
       # ── Code signing + notarization ───────────────────────────────────
       # These steps stay DORMANT until the signing secrets exist: each
-      # guards on env.MACOS_CERTIFICATE (the notarize step also on
-      # env.MACOS_NOTARY_KEY), and those env values come from the job-level
-      # env block above. A step `if:` cannot read the `secrets` context
-      # directly, which is why the secrets are lifted to env first. Result:
-      # the build stays green WITHOUT the secrets and starts signing
-      # automatically once they are set. Nothing here was testable in
-      # advance - it needs a real Apple Developer ID certificate and Apple's
-      # servers - so treat the first signed run as the real test and check
-      # the two verify lines (codesign --verify, spctl) in the logs.
+      # guards on env.MACOS_CERT_P12 (the notarize step also on
+      # env.MACOS_NOTARY_APPLE_ID), and those env values come from the
+      # job-level env block above. A step `if:` cannot read the `secrets`
+      # context directly, which is why the secrets are lifted to env first.
+      # Result: the build stays green WITHOUT the secrets and starts signing
+      # automatically once they are set.
+      #
+      # Notarization runs with an Apple ID + app-specific password (not an
+      # App Store Connect API key), so Cammello and LrMediaWiki2 share the
+      # SAME six secrets under the same names.
       #
       # Required repository secrets (Settings > Secrets and variables >
-      # Actions) once the certificates are bought:
-      #   MACOS_CERTIFICATE        base64 of the Developer ID Application
-      #                            .p12  (base64 -i cert.p12 | pbcopy)
-      #   MACOS_CERTIFICATE_PWD    the .p12 export password
-      #   MACOS_CERTIFICATE_NAME   the identity string, e.g.
-      #                            "Developer ID Application: Harald Krichel (TEAMID)"
-      #   MACOS_KEYCHAIN_PWD       any throwaway password for the temp keychain
-      #   MACOS_NOTARY_KEY         base64 of the App Store Connect API key .p8
-      #   MACOS_NOTARY_KEY_ID      the API key ID
-      #   MACOS_NOTARY_ISSUER_ID   the API key issuer UUID
+      # Actions):
+      #   MACOS_CERT_P12         base64 of the Developer ID Application
+      #                          .p12  (base64 -i devid.p12 | pbcopy)
+      #   MACOS_CERT_PASSWORD    the .p12 export password
+      #   MACOS_SIGN_IDENTITY    the identity string, e.g.
+      #                          "Developer ID Application: Harald Krichel (TEAMID)"
+      #   MACOS_NOTARY_APPLE_ID  the Apple ID (e-mail) of the developer account
+      #   MACOS_NOTARY_PASSWORD  an app-specific password from account.apple.com
+      #   MACOS_NOTARY_TEAM_ID   the 10-character team ID
+      # The temporary keychain password is generated here, so it is NOT a
+      # secret - it never leaves the runner.
       - name: Codesign app bundle
-        if: ${{ env.MACOS_CERTIFICATE != '' }}
+        if: ${{ env.MACOS_CERT_P12 != '' }}
         run: |
           set -euo pipefail
           # A minimal Hardened Runtime entitlements file. Hardened Runtime is
           # required for notarization; PyInstaller apps need the two JIT/
           # unsigned-memory exceptions or Python's own dynamic code loading
-          # is killed at launch.
+          # is killed at launch. disable-library-validation lets the bundled
+          # .so/.dylib files (pyexiv2, rawpy, libgphoto2) load.
           cat > entitlements.plist <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -310,46 +312,97 @@ jobs:
           </plist>
           PLIST
           # Import the certificate into a fresh, unlocked keychain so codesign
-          # never shows an interactive prompt on the runner.
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-          security create-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+          # never shows an interactive prompt on the runner. The keychain
+          # password is throwaway and generated here.
+          KC_PWD=$(openssl rand -base64 24)
+          echo "$MACOS_CERT_P12" | base64 --decode > certificate.p12
+          security create-keychain -p "$KC_PWD" build.keychain
+          # Keep the login keychain in the search list; replacing it wholesale
+          # has bitten other projects. Just make ours the default and unlock it.
+          security list-keychains -d user -s build.keychain \
+            $(security list-keychains -d user | tr -d '"')
           security default-keychain -s build.keychain
-          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+          security unlock-keychain -p "$KC_PWD" build.keychain
+          # Do not let the keychain re-lock in the middle of a long build.
+          security set-keychain-settings -lut 7200 build.keychain
           security import certificate.p12 -k build.keychain \
-            -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: \
-            -s -k "$MACOS_KEYCHAIN_PWD" build.keychain
-          # Sign every nested binary first, then the bundle, with a secure
-          # timestamp and the Hardened Runtime.
-          codesign --force --deep --timestamp --options runtime \
-            --entitlements entitlements.plist \
-            --sign "$MACOS_CERTIFICATE_NAME" dist/Cammello.app
-          codesign --verify --deep --strict --verbose=2 dist/Cammello.app
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KC_PWD" build.keychain >/dev/null
           rm -f certificate.p12
+          security find-identity -v -p codesigning build.keychain
+          # INSIDE-OUT signing, deliberately NOT `codesign --deep`: Apple
+          # documents --deep as unsuitable for shipping ("for emergency
+          # repairs only"), and on a PyInstaller bundle it regularly leaves
+          # nested .so/.dylib files with the wrong entitlements, which the
+          # notary service then rejects. So: every Mach-O inside the bundle
+          # first, the app itself last.
+          find dist/Cammello.app -type f \( -name '*.so' -o -name '*.dylib' \) -print0 \
+            | xargs -0 -r codesign --force --timestamp --options runtime \
+                --entitlements entitlements.plist \
+                --sign "$MACOS_SIGN_IDENTITY"
+          # Anything else that is a Mach-O binary (helper executables,
+          # extensionless libraries). `file` decides, not the file name.
+          find dist/Cammello.app -type f -perm -u+x -print0 \
+            | while IFS= read -r -d '' f; do
+                if file -b "$f" | grep -q 'Mach-O'; then
+                  codesign --force --timestamp --options runtime \
+                    --entitlements entitlements.plist \
+                    --sign "$MACOS_SIGN_IDENTITY" "$f"
+                fi
+              done
+          # Nested frameworks/bundles (Qt plugins et al.), then the app.
+          find dist/Cammello.app -type d -name '*.framework' -print0 \
+            | xargs -0 -r -I{} codesign --force --timestamp --options runtime \
+                --sign "$MACOS_SIGN_IDENTITY" {}
+          codesign --force --timestamp --options runtime \
+            --entitlements entitlements.plist \
+            --sign "$MACOS_SIGN_IDENTITY" dist/Cammello.app
+          codesign --verify --deep --strict --verbose=2 dist/Cammello.app
 
       - name: Notarize app bundle
-        if: ${{ env.MACOS_CERTIFICATE != '' && env.MACOS_NOTARY_KEY != '' }}
+        if: ${{ env.MACOS_CERT_P12 != '' && env.MACOS_NOTARY_APPLE_ID != '' }}
         run: |
           set -euo pipefail
-          echo "$MACOS_NOTARY_KEY" | base64 --decode > notary_key.p8
-          # Notarization needs a zip of the .app; notarytool waits for the
-          # verdict with --wait.
+          # Notarization needs a zip of the .app. ditto, NOT zip: the zip
+          # tool does not preserve the symlinks and extended attributes a
+          # signed bundle carries, which breaks the signature in transit.
           ditto -c -k --keepParent dist/Cammello.app notarize.zip
+          # notarytool has been observed to exit 0 even on "status: Invalid",
+          # so the verdict is checked explicitly instead of trusting $?.
+          set +e
           xcrun notarytool submit notarize.zip \
-            --key notary_key.p8 \
-            --key-id "$MACOS_NOTARY_KEY_ID" \
-            --issuer "$MACOS_NOTARY_ISSUER_ID" \
-            --wait
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --wait 2>&1 | tee notary.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" -ne 0 ] || ! grep -q "status: Accepted" notary.log; then
+            echo "::error::Notarization failed - see the log above."
+            SUB=$(grep -m1 -Eo '\bid: [0-9a-fA-F-]{36}' notary.log | awk '{print $2}' || true)
+            if [ -n "${SUB:-}" ]; then
+              xcrun notarytool log "$SUB" \
+                --apple-id "$MACOS_NOTARY_APPLE_ID" \
+                --password "$MACOS_NOTARY_PASSWORD" \
+                --team-id "$MACOS_NOTARY_TEAM_ID" || true
+            fi
+            exit 1
+          fi
           # Staple the ticket into the bundle so it validates offline, then
           # confirm Gatekeeper accepts it.
           xcrun stapler staple dist/Cammello.app
           spctl -a -vvv --type execute dist/Cammello.app
-          rm -f notary_key.p8
+          rm -f notarize.zip notary.log
 
       - name: Package Mac app
         run: |
+          # ditto instead of `zip -r`: zip does not preserve the symlinks
+          # and extended attributes of a signed .app, so the downloaded app
+          # would fail its own signature check. ditto is also what Apple's
+          # own notarization instructions use.
           cd dist
-          zip -r "${{ matrix.zipname }}" Cammello.app
+          ditto -c -k --keepParent Cammello.app "${{ matrix.zipname }}"
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
