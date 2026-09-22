@@ -11,8 +11,10 @@ from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
                              QAbstractItemView, QProgressBar, QComboBox,
                              QApplication, QLayout, QSizePolicy, QSpinBox)
 from PyQt5.QtCore import (Qt, QEvent, pyqtSignal, QUrl, QSize, QSettings,
+                          QRectF, QPointF,
                           QObject, QRect, QPoint)
-from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon
+from PyQt5.QtGui import (QDesktopServices, QPixmap, QIcon, QPainter,
+                         QPen, QColor, QPolygonF)
 from .constants import *
 from .i18n import tr
 from .sdc import *
@@ -1582,6 +1584,100 @@ TOOLBAR_HEIGHT = 24        # compact control height for the tab toolbars
 
 
 TOOLBAR_SEPARATOR_NAME = 'cammelloToolbarSeparator'
+
+
+# ── Toolbar pictograms (0.18.18) ─────────────────────────────────────────────
+#
+# Harald: "Die Tool-Leiste ist zu breit, wir muessen Text-Buttons in Symbole
+# aendern." Four of the labels are the wide ones, and only one of them has a
+# usable system icon (the folder). Qt's standard set has nothing for a
+# camera, an eject or a filter, and a font glyph was already tried once in
+# 0.18.x - the reload arrow rendered as a hairline, and as tofu where the
+# fallback font had no such character. So these are PAINTED, like the colour
+# swatches: no asset files, no font dependency, and they take the current
+# text colour so they stay legible in both schemes.
+
+PICTOGRAMS = ('camera', 'eject', 'filter', 'filter_dot', 'filter_off')
+
+
+def pictogram(kind, color, size=18):
+    """A QIcon drawn on the fly. `color` is anything QColor accepts.
+
+    Drawn at 4x and handed to QIcon as a device-pixel-ratio pixmap, which
+    is what keeps the diagonals smooth on a Retina display instead of
+    stair-stepping like a 18 px bitmap would.
+    """
+    scale = 4
+    pm = QPixmap(size * scale, size * scale)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.scale(scale, scale)
+    ink = QColor(color)
+    pen = QPen(ink)
+    pen.setWidthF(1.6)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+
+    if kind == 'camera':
+        # Body, lens, and the little viewfinder bump - the shape reads as a
+        # camera even at 18 px, which a detailed drawing would not.
+        body = QRectF(s * 0.12, s * 0.30, s * 0.76, s * 0.50)
+        p.drawRoundedRect(body, s * 0.10, s * 0.10)
+        p.drawEllipse(QPointF(s * 0.50, s * 0.55), s * 0.16, s * 0.16)
+        p.drawLine(QPointF(s * 0.34, s * 0.30), QPointF(s * 0.40, s * 0.20))
+        p.drawLine(QPointF(s * 0.40, s * 0.20), QPointF(s * 0.60, s * 0.20))
+        p.drawLine(QPointF(s * 0.60, s * 0.20), QPointF(s * 0.66, s * 0.30))
+    elif kind == 'eject':
+        # The universal eject mark: triangle over a bar.
+        tri = QPolygonF([QPointF(s * 0.50, s * 0.18),
+                         QPointF(s * 0.86, s * 0.58),
+                         QPointF(s * 0.14, s * 0.58)])
+        p.setBrush(ink)
+        p.drawPolygon(tri)
+        p.drawRoundedRect(QRectF(s * 0.14, s * 0.70, s * 0.72, s * 0.14),
+                          s * 0.06, s * 0.06)
+    elif kind in ('filter', 'filter_dot', 'filter_off'):
+        # A funnel. `filter_dot` adds a filled mark for "collapsed, and
+        # something IS filtered" - the state where hidden controls would
+        # otherwise hide the reason images are missing. `filter_off` strikes
+        # the funnel through, for the switch that clears the filter.
+        funnel = QPolygonF([QPointF(s * 0.16, s * 0.22),
+                            QPointF(s * 0.84, s * 0.22),
+                            QPointF(s * 0.57, s * 0.54),
+                            QPointF(s * 0.57, s * 0.86),
+                            QPointF(s * 0.43, s * 0.78),
+                            QPointF(s * 0.43, s * 0.54)])
+        p.drawPolygon(funnel)
+        if kind == 'filter_dot':
+            p.setBrush(ink)
+            p.drawEllipse(QPointF(s * 0.80, s * 0.76), s * 0.14, s * 0.14)
+        elif kind == 'filter_off':
+            p.drawLine(QPointF(s * 0.16, s * 0.86), QPointF(s * 0.86, s * 0.16))
+    else:                                    # pragma: no cover - guarded below
+        p.end()
+        raise ValueError(f'unknown pictogram: {kind}')
+
+    p.end()
+    pm.setDevicePixelRatio(float(scale))
+    return QIcon(pm)
+
+
+def icon_button(icon, tooltip, size=18, box=(32, 28)):
+    """A compact icon button that keeps its label in the tooltip.
+
+    The label is NOT dropped, it moves: every one of these buttons is also
+    reachable from the menu, and the tooltip names the action in words.
+    """
+    btn = QToolButton()
+    btn.setIcon(icon)
+    btn.setIconSize(QSize(size, size))
+    btn.setMinimumSize(*box)
+    btn.setProperty('cammelloCompact', True)
+    btn.setToolTip(tooltip)
+    return btn
 
 
 def toolbar_separator():

@@ -2300,6 +2300,7 @@ class MainWindow(FlickrMixin,
             if hasattr(self, '_cull_delegate'):
                 self._cull_delegate.set_dark(self._is_dark_scheme_for(scheme))
                 self._cull_apply_bg(self._is_dark_scheme_for(scheme))
+                self._cull_update_icons()      # 0.18.18: painted pictograms
             return
         _APPLIED_SCHEME[0] = scheme
         def _ensure_style(name):
@@ -2384,6 +2385,9 @@ class MainWindow(FlickrMixin,
         if hasattr(self, '_cull_delegate'):
             self._cull_delegate.set_dark(dark)
             self.cull_strip.viewport().update()
+            # 0.18.18: the toolbar icons are painted in the text colour, so
+            # they have to be repainted when that colour changes.
+            self._cull_update_icons()
 
     def _is_dark_scheme(self):
         """Effective darkness: explicit choice, or the system palette."""

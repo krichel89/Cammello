@@ -29,8 +29,8 @@ from PyQt5.QtWidgets import (
     QToolButton, QInputDialog, QShortcut, QDialog, QDialogButtonBox,
     QLineEdit, QRadioButton, QApplication)
 from PyQt5.QtGui import (QIcon, QPixmap, QColor, QPen, QPainter,
-                         QKeySequence, QFont, QFontMetrics)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+                         QKeySequence, QFont, QFontMetrics, QImage)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QMutex
 
 from PyQt5.QtCore import QUrl, QMimeData, QItemSelectionModel, QObject
 
@@ -45,6 +45,7 @@ from . import channels, previews, edits, camera
 from .edit_panel import EditPanel
 from .culling_view import CullImageView
 from .widgets import (UploadProgressDialog, toolbar_separator,
+                      pictogram, icon_button,
                       slim_toolbar)
 from .i18n import tr
 
@@ -280,6 +281,7 @@ class _CameraPickDialog(QDialog):
     """
 
     COL_NAME, COL_FOLDER, COL_TIME, COL_SIZE = range(4)
+    THUMB = 128
 
     def __init__(self, parent, files, start_dir=''):
         super().__init__(parent)
@@ -325,12 +327,18 @@ class _CameraPickDialog(QDialog):
 
         self.list = QListWidget()
         self.list.setAlternatingRowColors(True)
+        # 0.18.17: room for the camera's own preview next to each row.
+        self.list.setIconSize(QSize(self.THUMB, self.THUMB))
         self.list.itemChanged.connect(lambda _i: self._update_status())
+        bar = self.list.verticalScrollBar()
+        bar.valueChanged.connect(lambda _v: self._ask_for_visible())
         layout.addWidget(self.list, 1)
         self._fill()
 
         self.status = QLabel('')
         layout.addWidget(self.status)
+        self.thumb_status = QLabel('')
+        layout.addWidget(self.thumb_status)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok
                                    | QDialogButtonBox.Cancel)
@@ -341,6 +349,50 @@ class _CameraPickDialog(QDialog):
         self._ok_btn.setText(tr('Import'))
 
         self._dest_changed(self.dest_edit.text())
+
+    # ── previews ─────────────────────────────────────────────────────────
+
+    def attach_thumbs(self, worker):
+        """Hook up the preview worker and ask for the first screenful."""
+        self._thumbs = worker
+        worker.thumb.connect(self.set_thumb)
+        worker.progress.connect(self.set_thumb_progress)
+        QTimer.singleShot(0, self._ask_for_visible)
+
+    def _visible_rows(self):
+        """Indices currently on screen, plus one screenful of lead."""
+        if self.list.count() == 0:
+            return []
+        first = self.list.indexAt(self.list.viewport().rect().topLeft()).row()
+        last = self.list.indexAt(
+            self.list.viewport().rect().bottomLeft()).row()
+        if first < 0:
+            first = 0
+        if last < 0:
+            last = min(self.list.count() - 1, first + 8)
+        span = max(1, last - first + 1)
+        return list(range(first, min(self.list.count(), last + span + 1)))
+
+    def _ask_for_visible(self):
+        worker = getattr(self, '_thumbs', None)
+        if worker is not None:
+            worker.want(self._visible_rows())
+
+    def set_thumb(self, index, data):
+        if not (0 <= index < self.list.count()):
+            return
+        image = QImage.fromData(data)
+        if image.isNull():
+            return
+        if max(image.width(), image.height()) > self.THUMB:
+            image = image.scaled(self.THUMB, self.THUMB,
+                                 Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.list.item(index).setIcon(QIcon(QPixmap.fromImage(image)))
+
+    def set_thumb_progress(self, done, total):
+        self.thumb_status.setText('' if done >= total else tr(
+            'Previews: {done} of {total}. Scrolling fetches what you look '
+            'at first.').format(done=done, total=total))
 
     # ── building the list ────────────────────────────────────────────────
 
@@ -356,6 +408,7 @@ class _CameraPickDialog(QDialog):
         self.list.clear()
         for cfile in self._files:
             item = QListWidgetItem(self._row_text(cfile))
+            item.setSizeHint(QSize(0, self.THUMB + 8))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked)
             item.setData(Qt.UserRole, cfile)
@@ -739,6 +792,99 @@ class _FolderCopyWorker(QThread):
 
 
 
+class _CameraThumbWorker(QThread):
+    """Fetches the camera's own previews for the picker (0.18.17).
+
+    Harald: "Ich brauche die Vorschaubilder, auch wenn es sehr langsam
+    ist." So they are fetched - but the cost is real and shapes the design:
+
+    * one round trip per frame over USB, and the connection stays open for
+      the whole time the picker is on screen. Nothing else may touch the
+      camera meanwhile, which is why the copy only starts after stop() has
+      returned - a second session would be error -53 all over again.
+    * GP_FILE_TYPE_PREVIEW, so the body sends its embedded JPEG instead of
+      a 45 MB raw.
+    * VISIBLE FIRST. want() hands in the rows currently on screen; the
+      worker finishes the frame in its hand and then serves those before
+      going back to filling in from the top. Scrolling therefore shows
+      pictures within a frame or two instead of after 700 others.
+    * one failure is one missing thumbnail, never the end of the run.
+    """
+    thumb = pyqtSignal(int, bytes)         # index into the file list
+    progress = pyqtSignal(int, int)        # done, total
+    fatal = pyqtSignal(str)
+    done = pyqtSignal()
+
+    def __init__(self, device, files, logger):
+        super().__init__()
+        self.device = device
+        self.files = list(files)
+        self.log = logger
+        self._lock = QMutex()
+        self._wanted = []
+        self._fetched = set()
+        self._stop = False
+
+    def want(self, indices):
+        """Say which rows are on screen. Cheap, called while scrolling."""
+        self._lock.lock()
+        try:
+            self._wanted = [i for i in indices if i not in self._fetched]
+        finally:
+            self._lock.unlock()
+
+    def stop(self):
+        self._stop = True
+
+    def _next(self):
+        self._lock.lock()
+        try:
+            while self._wanted:
+                i = self._wanted.pop(0)
+                if i not in self._fetched:
+                    return i
+        finally:
+            self._lock.unlock()
+        for i in range(len(self.files)):
+            if i not in self._fetched:
+                return i
+        return None
+
+    def run(self):
+        backend = None
+        try:
+            backend = camera.make_backend()
+            backend.connect(self.device)
+            total = len(self.files)
+            while not self._stop:
+                i = self._next()
+                if i is None:
+                    break
+                self._fetched.add(i)
+                try:
+                    data = backend.preview(self.files[i])
+                except camera.CameraError as exc:
+                    self.log.warning('No preview for %s: %s',
+                                     self.files[i].name, exc)
+                    data = b''
+                except Exception as exc:              # pragma: no cover
+                    self.log.warning('No preview for %s: %r',
+                                     self.files[i].name, exc)
+                    data = b''
+                if data:
+                    self.thumb.emit(i, data)
+                self.progress.emit(len(self._fetched), total)
+        except camera.CameraError as exc:
+            self.fatal.emit(str(exc))
+        except Exception as exc:                      # pragma: no cover
+            self.log.error('Preview run failed: %s', exc, exc_info=True)
+            self.fatal.emit(str(exc))
+        finally:
+            if backend is not None:
+                backend.close()
+            self.done.emit()
+
+
 class _CameraListWorker(QThread):
     """Reads what is on the card, off the GUI thread (0.18.13).
 
@@ -895,7 +1041,12 @@ class MWCullingMixin:
         self._cull_visible = []        # after filtering
         self._cull_index = -1
         self._cull_direction = 1
-        self._cull_number_mode = 'rating'      # or 'color'
+        # 0.18.18 (Harald): "cammello soll sich bitte merken, ob ich Sterne
+        # oder Farben eingeben will" - the M mode is now persistent instead
+        # of starting on stars every session.
+        self._cull_number_mode = (
+            'color' if self.settings.value('cull_number_mode', 'rating',
+                                           type=str) == 'color' else 'rating')
         self._cull_grid = False
         # 0.18.4: set when fullscreen was entered from the grid.
         self._cull_fs_from_grid = False
@@ -941,10 +1092,17 @@ class MWCullingMixin:
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 2)
         bar.setSpacing(6)
-        open_btn = QPushButton(tr('Open…'))
-        open_btn.setToolTip(tr('Open a folder of images for culling.'))
+        # 0.18.18 (Harald): the toolbar had grown too wide, so the four
+        # widest labels became icons. The words are not lost - each one is
+        # the tooltip, and all four actions are in the menus as well.
+        open_btn = icon_button(
+            self.style().standardIcon(QStyle.SP_DirOpenIcon),
+            tr('Open…') + ' - ' + tr('Open a folder of images for culling.'))
+        if open_btn.icon().isNull():          # a style without that icon
+            open_btn.setText(tr('Open…'))
         open_btn.clicked.connect(self._cull_open_folder)
         bar.addWidget(open_btn)
+        self.cull_open_btn = open_btn
         # Reload sits right next to Open as a compact icon button. The ⟳ glyph
         # is tiny at the default font size, so scale it up to button height.
         self.cull_reload_btn = QToolButton()
@@ -964,22 +1122,21 @@ class MWCullingMixin:
         # 0.18.3: Canon bodies speak PTP, so the card never becomes a volume
         # and "Open…" has nothing to point at. This is the backup path for a
         # missing card reader: copy off the camera, then open the copy.
-        cam_btn = QPushButton(tr('From camera…'))
-        cam_btn.setToolTip(tr(
-            'Copy pictures straight off a connected camera into a folder and '
-            'open that folder.\nMeant as the backup when no card reader is '
-            'at hand - a reader is considerably faster.'))
+        cam_btn = icon_button(pictogram('camera', self._cull_ink()), tr(
+            'From camera… - copy pictures straight off a connected camera '
+            'into a folder and\nopen that folder. Meant as the backup when '
+            'no card reader is at hand -\na reader is considerably faster.'))
         cam_btn.clicked.connect(self._cull_import_from_camera)
         bar.addWidget(cam_btn)
         self.cull_camera_btn = cam_btn
         # 0.18.16 (Harald): eject the card from inside Cammello. Enabled
         # only while the open folder actually sits on a removable volume -
         # a button that could unmount the system disk would be a poor idea.
-        self.cull_eject_btn = QPushButton(tr('Eject card'))
-        self.cull_eject_btn.setToolTip(tr(
-            'Close the card and unmount it. Ratings still waiting to be '
-            'written\nare written first; the card is only reported as safe '
-            'when it is really gone.'))
+        self.cull_eject_btn = icon_button(
+            pictogram('eject', self._cull_ink()), tr(
+                'Eject card - close the card and unmount it. Ratings still '
+                'waiting to be written\nare written first; the card is only '
+                'reported as safe when it is really gone.'))
         self.cull_eject_btn.setEnabled(False)
         self.cull_eject_btn.clicked.connect(self._cull_eject_card)
         bar.addWidget(self.cull_eject_btn)
@@ -1049,7 +1206,26 @@ class MWCullingMixin:
         # right (0.12.5).
         bar.addStretch(1)
         bar.addWidget(toolbar_separator())
-        bar.addWidget(QLabel(tr('Filter:')))
+        # 0.18.18 (Harald): "Das Filter Menue koennte man einklappen." The
+        # funnel is the hinge and STAYS visible when the rest folds away -
+        # otherwise a filter could hide images with nothing on screen to say
+        # why. When it is folded and something IS filtered, the funnel
+        # carries a dot (see _cull_update_icons).
+        self._cull_filter_widgets = []
+        # NOT checkable: a checked QToolButton is painted blue by
+        # BUTTON_STYLE, and a permanently blue funnel would read as "a
+        # filter is on" in exactly the state where nothing is filtered. The
+        # state lives in a flag, and the icon and tooltip say which it is.
+        self._cull_filter_collapsed = False
+        self.cull_filter_toggle = icon_button(
+            pictogram('filter', self._cull_ink()), tr('Hide the filter'))
+        self.cull_filter_toggle.clicked.connect(
+            lambda _c: self._cull_set_filter_collapsed(
+                not self._cull_filter_collapsed, remember=True))
+        bar.addWidget(self.cull_filter_toggle)
+        filter_lbl = QLabel(tr('Filter:'))
+        self._cull_filter_widgets.append(filter_lbl)
+        bar.addWidget(filter_lbl)
         # Minimum rating as STARS, not a dropdown (Harald): click a star to
         # show that rating and up, click the active star again for "all".
         self._cull_minrating = 0
@@ -1067,6 +1243,7 @@ class MWCullingMixin:
                             '(click again for all).').format(n=n))
             b.clicked.connect(lambda _c, n=n: self._cull_set_min_rating(n))
             self.cull_star_btns.append(b)
+            self._cull_filter_widgets.append(b)
             bar.addWidget(b)
         self._cull_update_stars()
         # 0.12.7 (Harald's decision): rejects stay VISIBLE by default - grey
@@ -1080,6 +1257,7 @@ class MWCullingMixin:
             tr('Rejected images are shown greyed out with a red X. Check '
                'this to hide them completely.'))
         self.cull_hide_rejects_cb.stateChanged.connect(self._cull_apply_filter)
+        self._cull_filter_widgets.append(self.cull_hide_rejects_cb)
         bar.addWidget(self.cull_hide_rejects_cb)
         # Colour filter: multi-select swatches, part of the same filter cluster.
         # None active = all colours; any active = only those colours (grey
@@ -1107,18 +1285,19 @@ class MWCullingMixin:
                          else tr('colour {n}').format(n=i + 1))
             b.clicked.connect(self._cull_apply_filter)
             self._cull_color_btns.append(b)
+            self._cull_filter_widgets.append(b)
             bar.addWidget(b)
         # 0.18.14: one switch that undoes the whole filter cluster - stars,
         # rejects and colours together. Disabled while nothing is filtered,
         # so it doubles as the answer to "is anything hidden right now?".
-        self.cull_clear_filter_btn = QPushButton(tr('Clear filter'))
-        self.cull_clear_filter_btn.setProperty('cammelloCompact', True)
-        self.cull_clear_filter_btn.setToolTip(tr(
-            'Show every image again: no star limit, no colour limit, '
-            'rejects visible. Opening a folder or a card does this by '
-            'itself.'))
+        self.cull_clear_filter_btn = icon_button(
+            pictogram('filter_off', self._cull_ink()), tr(
+                'Clear filter - show every image again: no star limit, no '
+                'colour limit,\nrejects visible. Opening a folder or a card '
+                'does this by itself.'))
         self.cull_clear_filter_btn.setEnabled(False)   # nothing filtered yet
         self.cull_clear_filter_btn.clicked.connect(self._cull_clear_filter)
+        self._cull_filter_widgets.append(self.cull_clear_filter_btn)
         bar.addWidget(self.cull_clear_filter_btn)
         bar.addWidget(toolbar_separator())
         bar.addStretch(1)      # second half of the centring pair
@@ -1204,6 +1383,9 @@ class MWCullingMixin:
         self._cull_delegate = _LabelBarDelegate(self.cull_strip)
         self._cull_delegate.set_dark(self._is_dark_scheme())
         self._cull_apply_bg(self._is_dark_scheme())
+        # 0.18.18: restore the folded/unfolded state of the filter cluster.
+        self._cull_set_filter_collapsed(
+            self.settings.value('cull_filter_collapsed', False, type=bool))
         self.cull_strip.setItemDelegate(self._cull_delegate)
         self.cull_strip.currentRowChanged.connect(self._cull_show_index)
         self.cull_strip.itemSelectionChanged.connect(self._cull_set_status)
@@ -1598,6 +1780,52 @@ class MWCullingMixin:
                             tr('{name} could not be ejected.').format(
                                 name=name) + '\n\n' + str(detail))
 
+    def _cull_ink(self):
+        """The colour the painted toolbar icons take.
+
+        The window's own text colour, so the icons follow the scheme
+        instead of being a fixed grey that vanishes in one of the two.
+        """
+        return self.palette().buttonText().color()
+
+    def _cull_update_icons(self):
+        """Repaint the toolbar pictograms (0.18.18).
+
+        Called when the colour scheme changes - a black funnel on a dark
+        toolbar would be invisible - and whenever the filter folds or the
+        filter state changes, because the funnel then carries a dot.
+        """
+        if not hasattr(self, 'cull_filter_toggle'):
+            return
+        ink = self._cull_ink()
+        self.cull_camera_btn.setIcon(pictogram('camera', ink))
+        self.cull_eject_btn.setIcon(pictogram('eject', ink))
+        self.cull_clear_filter_btn.setIcon(pictogram('filter_off', ink))
+        hidden = getattr(self, '_cull_filter_collapsed', False)
+        marked = hidden and self._cull_filter_active()
+        self.cull_filter_toggle.setIcon(
+            pictogram('filter_dot' if marked else 'filter', ink))
+        self.cull_filter_toggle.setToolTip(
+            tr('A filter is active - click to show it') if marked
+            else (tr('Show the filter') if hidden else tr('Hide the filter')))
+
+    def _cull_set_filter_collapsed(self, collapsed, remember=False):
+        """Fold the filter cluster away, or bring it back.
+
+        Only the funnel stays. The widgets keep existing and keep their
+        values - folding is not clearing, and the two must not be confused:
+        that is what the dot on the funnel is for.
+        """
+        toggle = getattr(self, 'cull_filter_toggle', None)
+        if toggle is None:
+            return
+        self._cull_filter_collapsed = bool(collapsed)
+        for w in self._cull_filter_widgets:
+            w.setVisible(not collapsed)
+        if remember:
+            self.settings.setValue('cull_filter_collapsed', bool(collapsed))
+        self._cull_update_icons()
+
     def _cull_day_filter(self):
         """The chosen shooting day, or None for all of them (0.18.15)."""
         combo = getattr(self, 'cull_day_combo', None)
@@ -1667,6 +1895,7 @@ class MWCullingMixin:
     def _cull_apply_filter(self, *_a):
         if hasattr(self, 'cull_clear_filter_btn'):
             self.cull_clear_filter_btn.setEnabled(self._cull_filter_active())
+            self._cull_update_icons()
         current_item = (self._cull_visible[self._cull_index]
                         if 0 <= self._cull_index < len(self._cull_visible)
                         else None)
@@ -2135,6 +2364,8 @@ class MWCullingMixin:
             self._cull_number_mode = ('color'
                                       if self._cull_number_mode == 'rating'
                                       else 'rating')
+            self.settings.setValue('cull_number_mode',
+                                   self._cull_number_mode)
             self._cull_update_mode_label()
         elif key == Qt.Key_X:
             self._cull_set_rating(-1)
@@ -3318,7 +3549,27 @@ class MWCullingMixin:
             return
         dlg = _CameraPickDialog(self, files,
                                 camera_dest_dir(self.settings))
-        if dlg.exec_() != QDialog.Accepted:
+        # 0.18.17: previews stream in while the dialog is open, over a
+        # connection of their own. It MUST be gone before the copy starts -
+        # PTP allows one session, a second one is error -53.
+        thumbs = _CameraThumbWorker(self._cull_camera_device, files,
+                                    self.logger)
+        thumbs.fatal.connect(lambda m: self.logger.warning(
+            'Previews unavailable: %s', m))
+        dlg.attach_thumbs(thumbs)
+        thumbs.start()
+        try:
+            accepted = dlg.exec_() == QDialog.Accepted
+        finally:
+            thumbs.stop()
+            if not thumbs.wait(15000):                # pragma: no cover
+                self.logger.warning(
+                    'Preview thread did not stop; not copying now.')
+                QMessageBox.warning(self, tr('Import from camera'), tr(
+                    'The camera is still busy with the previews. Try again '
+                    'in a moment.'))
+                return
+        if not accepted:
             return
         chosen = dlg.selected_files()
         dest = dlg.dest_edit.text().strip()

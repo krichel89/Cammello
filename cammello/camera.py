@@ -253,6 +253,19 @@ def driver_report():
     return lines
 
 
+# Error -53. PTP allows ONE session at a time, so this always means
+# something else got there first. On macOS that is usually the system
+# agent that reacts to the camera being plugged in, not an app the user
+# can see. Written as one literal so it can be a translation key.
+CLAIM_RETRY_WAIT = 1.2
+
+USB_CLAIMED = (
+    'Another program is holding the camera. Quit Lightroom, Photos, Image '
+    'Capture and EOS Utility, then run "killall ptpcamerad" in Terminal - '
+    'macOS restarts that helper by itself and it grabs the camera on sight. '
+    'Cammello retries once before showing this.')
+
+
 # The message a user sees for gphoto2 error -4. English on purpose - the
 # caller translates it, and it is a table key, so it must stay one literal.
 DRIVER_LOAD_FAILED = (
@@ -420,6 +433,7 @@ class GPhoto2Backend:
         import gphoto2 as gp
         self._gp = gp
         self._camera = None
+        self._last_code = 0
         for line in driver_report():
             logging.getLogger('Cammello').info('Camera driver path: %s', line)
 
@@ -436,6 +450,10 @@ class GPhoto2Backend:
                 'gphoto2 cannot load its drivers (-4). %s',
                 '; '.join(driver_report()))
             return CameraError(DRIVER_LOAD_FAILED)
+        if exc.code == gp.GP_ERROR_IO_USB_CLAIM:
+            logging.getLogger('Cammello').error(
+                'The USB device could not be claimed (-53).')
+            return CameraError(USB_CLAIMED)
         if exc.code == gp.GP_ERROR_MODEL_NOT_FOUND:
             return CameraError(
                 'No camera answered. Switch it on, connect the USB '
@@ -458,6 +476,24 @@ class GPhoto2Backend:
     def connect(self, device=None):
         gp = self._gp
         camera = gp.Camera()
+        # 0.18.17: one retry on -53. The macOS helper usually lets go a
+        # moment after it has looked at the camera, so the second attempt
+        # often succeeds where the first was half a second too early.
+        try:
+            self._open(camera, device)
+        except CameraError:
+            if self._last_code != gp.GP_ERROR_IO_USB_CLAIM:
+                raise
+            logging.getLogger('Cammello').info(
+                'USB device busy, retrying once in %.1f s.', CLAIM_RETRY_WAIT)
+            time.sleep(CLAIM_RETRY_WAIT)
+            camera = gp.Camera()
+            self._open(camera, device)
+        self._camera = camera
+
+    def _open(self, camera, device):
+        gp = self._gp
+        self._last_code = 0
         try:
             if device is not None and device.addr:
                 # Bind to one specific port; without this init() simply
@@ -470,8 +506,8 @@ class GPhoto2Backend:
                 camera.set_port_info(port_info_list.get_info(idx))
             camera.init()
         except gp.GPhoto2Error as exc:
+            self._last_code = exc.code
             raise self._fail(exc) from exc
-        self._camera = camera
 
     def list_files(self, progress=None):
         """Walk the camera's folders. Recursive on purpose: DCIM holds one
@@ -535,6 +571,29 @@ class GPhoto2Backend:
             except OSError:
                 pass
         return target
+
+    def preview(self, cfile):
+        """The camera's embedded JPEG preview for one file, as bytes.
+
+        GP_FILE_TYPE_PREVIEW, not NORMAL: the body sends the thumbnail it
+        already has instead of the whole 45 MB raw. Still one round trip per
+        frame over USB - see _CameraThumbWorker for why that is done in the
+        background and visible frames first.
+
+        Returns b'' when the camera has no preview for that file rather
+        than raising: one thumbnail failing must not stop the run.
+        """
+        gp = self._gp
+        try:
+            camera_file = self._camera.file_get(
+                cfile.folder, cfile.name, gp.GP_FILE_TYPE_PREVIEW)
+            data = camera_file.get_data_and_size()
+        except gp.GPhoto2Error as exc:
+            if exc.code in (gp.GP_ERROR_NOT_SUPPORTED,
+                            gp.GP_ERROR_FILE_NOT_FOUND):
+                return b''
+            raise self._fail(exc) from exc
+        return bytes(memoryview(data).tobytes())
 
     def close(self):
         if self._camera is not None:

@@ -179,6 +179,7 @@ class FakeGp:
     GPhoto2Error = FakeError
     GP_ERROR_LIBRARY = -4
     GP_ERROR_MODEL_NOT_FOUND = -105
+    GP_ERROR_IO_USB_CLAIM = -53          # added in 0.18.17
 
     class Camera:
         @staticmethod
@@ -212,11 +213,17 @@ check('and it leaks no bracketed error code either',
       raised is not None and '[-4]' not in str(raised))
 
 # connect() used to build the port list OUTSIDE the try - that is how the
-# bare string reached the dialog. The whole body is guarded now.
+# bare string reached the dialog. The whole body is guarded now; since
+# 0.18.17 the guarded part lives in _open(), which connect() calls (twice,
+# when the first attempt hits -53).
+open_src = src[src.index('    def _open(self, camera, device):'):]
+open_src = open_src[:open_src.index('\n    def ')]
+check('the port list is built inside the try',
+      open_src.index('try:') < open_src.index('PortInfoList()'))
 connect_src = src[src.index('    def connect(self, device=None):'):]
 connect_src = connect_src[:connect_src.index('\n    def ')]
-check('the port list is built inside the try in connect()',
-      connect_src.index('try:') < connect_src.index('PortInfoList()'))
+check('and connect() goes through it',
+      '_open(camera, device)' in connect_src)
 
 
 # ── 8. five languages ────────────────────────────────────────────────────────

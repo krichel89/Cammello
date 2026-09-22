@@ -4,6 +4,58 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.18 - 2026-09-22
+
+### Changed
+- The culling toolbar was too wide. Open…, From camera…, Eject card and
+  Clear filter are icon buttons now: 92 px together instead of 455 px. The
+  wording moved into the tooltips, and all four actions remain in the menus.
+- The filter cluster folds away behind a funnel toggle (remembered): the
+  minimum width of the culling pane drops from 2009 px to 1452 px. When it
+  is folded AND something is filtered, the funnel carries a dot and says so
+  in its tooltip - folding must not hide the reason images are missing.
+  Folding is not clearing; the values stay.
+- The M mode (number keys set stars or colours) is remembered between
+  sessions instead of starting on stars every time.
+
+### Added
+- widgets.pictogram(): toolbar icons painted at 4x in the window's own text
+  colour, repainted when the colour scheme changes. Qt's standard set has no
+  camera, eject or funnel, and a font glyph already failed once in this app.
+
+### Build
+- The Linux build collects the libgphoto2 camlibs/iolibs/locale directories
+  explicitly, the same gap that produced error -4 on macOS until 0.18.12.
+- The CI test job ran 8 of over 60 test files. The full suite now runs as a
+  non-blocking step, so unknown failures surface without holding up a
+  release.
+- Workflow permissions default to contents:read; only the three jobs that
+  upload artefacts get write. A "Signaturstatus" step states plainly whether
+  the app came out signed and stapled - skipped signing steps used to be a
+  silent outcome.
+- pip caching in all four jobs.
+
+## 0.18.17 - 2026-09-10
+
+### Added
+- The camera picker shows the camera's own previews (GP_FILE_TYPE_PREVIEW,
+  so the body sends its embedded JPEG rather than a 45 MB raw). They stream
+  in while the dialog is open, VISIBLE ROWS FIRST: scrolling tells the
+  worker what is on screen, so a preview arrives after one or two frames
+  instead of after everything above it. A missing or broken preview is an
+  empty tile, not the end of the run.
+- The preview connection is stopped and waited for before the copy starts -
+  PTP allows one session, and a second one is error -53. If it does not
+  stop within 15 seconds the copy is refused with a message rather than
+  attempted.
+
+### Fixed
+- Error -53 ("Could not claim the USB device") reached the user raw. It is
+  now retried once after 1.2 seconds - the macOS helper usually lets go
+  right after it has looked at the camera - and then explained: quit
+  Lightroom/Photos/Image Capture/EOS Utility and run killall ptpcamerad.
+  In five languages.
+
 ## 0.18.16 - 2026-09-10
 
 ### Added

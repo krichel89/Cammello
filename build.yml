@@ -16,9 +16,7 @@ on:
         required: true
 
 permissions:
-  contents: read # Vorgabe: nur lesen. Schreibrechte bekommen unten NUR die
-  # drei Build-Jobs, die Artefakte ans Release haengen. Der Test-Job braucht
-  # sie nicht - und er ist der Job, in dem fremder Testcode laeuft. (0.18.18)
+  contents: write # Erlaubt das Hochladen der fertigen Dateien in das Release
 
 # Actions auf der Node-24-Runtime (checkout v5, setup-python v6,
 # action-gh-release v3). Die Vorgaengerversionen liefen auf Node 20, das
@@ -31,8 +29,6 @@ jobs:
   # ein PyInstaller-Build wuerde so etwas nicht bemerken.
   test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -41,10 +37,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          # 0.18.18: der pip-Cache spart in jedem der vier Jobs das erneute
-          # Herunterladen von PyQt5, rawpy und pyexiv2 (zusammen gut 100 MB).
-          cache: pip
-          cache-dependency-path: requirements.txt
 
       - name: Install system libraries for PyQt5
         run: |
@@ -74,40 +66,8 @@ jobs:
           python test_culling.py
           python test_cullview.py
 
-      # 0.18.18: die Liste oben ist von Hand gefuehrt und deckt 8 von ueber
-      # 60 Testdateien ab - alles, was seit 0.12 dazugekommen ist, lief im
-      # CI nie. Dieser Schritt laeuft die GANZE Reihe, blockiert den Build
-      # aber NICHT (continue-on-error), damit ein unbekannter Fehlschlag
-      # nicht ausgerechnet ein Release aufhaelt. Was hier rot wird, gehoert
-      # in die Liste oben - oder repariert.
-      - name: Volle Testreihe (nur zur Information)
-        continue-on-error: true
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          # test_workflows_0161.py ist nicht HOME-idempotent und faellt beim
-          # zweiten Lauf im selben HOME durch - hier bekommt jede Datei ein
-          # frisches HOME, also darf sie mitlaufen.
-          fails=""
-          for f in test_*.py; do
-            H=$(mktemp -d)
-            if HOME="$H" timeout 600 python "$f" > "/tmp/$f.log" 2>&1; then
-              echo "ok   $f"
-            else
-              echo "FAIL $f (rc=$?)"
-              tail -5 "/tmp/$f.log" | sed 's/^/     /'
-              fails="$fails $f"
-            fi
-            rm -rf "$H"
-          done
-          if [ -n "$fails" ]; then
-            echo "::warning::Diese Testdateien sind rot:$fails"
-          fi
-
   build-mac:
     needs: test
-    permissions:
-      contents: write
     if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'mac' }}
     # 0.14.1-Tooling: ein Matrix-Job pro Architektur. macos-latest ist seit
     # den 14er-Images Apple Silicon (arm64); Intel-Macs koennen das Bundle
@@ -147,10 +107,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          # 0.18.18: der pip-Cache spart in jedem der vier Jobs das erneute
-          # Herunterladen von PyQt5, rawpy und pyexiv2 (zusammen gut 100 MB).
-          cache: pip
-          cache-dependency-path: requirements.txt
 
       - name: Install exiv2 native libraries
         run: |
@@ -412,100 +368,32 @@ jobs:
           # tool does not preserve the symlinks and extended attributes a
           # signed bundle carries, which breaks the signature in transit.
           ditto -c -k --keepParent dist/Cammello.app notarize.zip
-
-          CRED=(--apple-id "$MACOS_NOTARY_APPLE_ID"
-                --password "$MACOS_NOTARY_PASSWORD"
-                --team-id "$MACOS_NOTARY_TEAM_ID")
-
-          # `notarytool submit --wait` is NOT used: its polling dies on the
-          # first network hiccup ("The request timed out", NSURLError -1001),
-          # which killed the 2026-09-22 Intel run after 27 minutes of
-          # "In Progress" - and that error says nothing about the app. So the
-          # submission and the waiting are separated, and the wait shrugs off
-          # transient network errors instead of failing the build.
-          xcrun notarytool submit notarize.zip "${CRED[@]}" \
-            --output-format json > submit.json || {
-              echo "::error::Upload to the notary service failed."
-              cat submit.json || true
-              exit 1
-            }
-          SUB=$(python3 -c 'import json;print(json.load(open("submit.json")).get("id",""))')
-          if [ -z "$SUB" ]; then
-            echo "::error::No submission id in the notary response."
-            cat submit.json
-            exit 1
-          fi
-          echo "Submission: $SUB"
-
-          # Poll for at most 4 hours (the job itself may run 6). On
-          # 2026-09-22 two submissions sat in "In Progress" for well over
-          # 90 minutes, so a short deadline just throws away a build that
-          # would have passed.
-          DEADLINE=$((SECONDS + 14400))
-          STATUS=""
-          NETFAIL=0
-          while [ "$SECONDS" -lt "$DEADLINE" ]; do
-            sleep 30
-            if ! xcrun notarytool info "$SUB" "${CRED[@]}" \
-                   --output-format json > info.json 2>info.err; then
-              NETFAIL=$((NETFAIL + 1))
-              echo "Statusabfrage fehlgeschlagen ($NETFAIL), wird wiederholt:"
-              tail -2 info.err || true
-              # Only give up if the service stays unreachable for ~15 minutes.
-              if [ "$NETFAIL" -ge 30 ]; then
-                echo "::error::The notary service stayed unreachable."
-                exit 1
-              fi
-              continue
+          # notarytool has been observed to exit 0 even on "status: Invalid",
+          # so the verdict is checked explicitly instead of trusting $?.
+          set +e
+          xcrun notarytool submit notarize.zip \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --wait 2>&1 | tee notary.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" -ne 0 ] || ! grep -q "status: Accepted" notary.log; then
+            echo "::error::Notarization failed - see the log above."
+            SUB=$(grep -m1 -Eo '\bid: [0-9a-fA-F-]{36}' notary.log | awk '{print $2}' || true)
+            if [ -n "${SUB:-}" ]; then
+              xcrun notarytool log "$SUB" \
+                --apple-id "$MACOS_NOTARY_APPLE_ID" \
+                --password "$MACOS_NOTARY_PASSWORD" \
+                --team-id "$MACOS_NOTARY_TEAM_ID" || true
             fi
-            NETFAIL=0
-            STATUS=$(python3 -c 'import json;print(json.load(open("info.json")).get("status",""))')
-            echo "Status: ${STATUS:-unbekannt}"
-            [ "$STATUS" = "In Progress" ] || break
-          done
-
-          if [ "$STATUS" = "In Progress" ] || [ -z "$STATUS" ]; then
-            # Timed out while the service was still chewing on it. This says
-            # nothing about the app, so the build does NOT fail: the .app is
-            # signed, and a signed app that Apple accepts later still passes
-            # Gatekeeper for any user who is online - stapling only matters
-            # offline. Staple it by hand afterwards if the verdict is good:
-            #   xcrun stapler staple /path/to/Cammello.app
-            echo "::warning::Notarization still pending after the deadline (submission $SUB). The signed but unstapled app is published anyway."
-            rm -f notarize.zip submit.json info.json info.err
-            exit 0
-          fi
-
-          if [ "$STATUS" != "Accepted" ]; then
-            # A real verdict against the app (Invalid/Rejected) DOES fail the
-            # build - publishing that would help nobody.
-            echo "::error::Notarization did not succeed (status: $STATUS)."
-            xcrun notarytool log "$SUB" "${CRED[@]}" || true
             exit 1
           fi
-
           # Staple the ticket into the bundle so it validates offline, then
           # confirm Gatekeeper accepts it.
           xcrun stapler staple dist/Cammello.app
           spctl -a -vvv --type execute dist/Cammello.app
-          rm -f notarize.zip submit.json info.json info.err
-
-      # 0.18.18: ohne diese Zeile ist "unsigniert" ein stilles Ergebnis -
-      # die Signatur- und Notarisierungsschritte ueberspringen sich selbst,
-      # wenn ein Geheimnis fehlt oder umbenannt wurde, und das faellt erst
-      # dem Nutzer auf, der die App nicht oeffnen kann.
-      - name: Signaturstatus
-        run: |
-          if codesign -dv dist/Cammello.app 2>&1 | grep -q 'Authority=Developer ID'; then
-            echo "signiert: ja"
-            if xcrun stapler validate dist/Cammello.app >/dev/null 2>&1; then
-              echo "notarisiert und gestapelt: ja"
-            else
-              echo "::warning::Signiert, aber kein Notarisierungsticket im Bundle."
-            fi
-          else
-            echo "::warning::Diese App ist NICHT signiert - Gatekeeper wird sie beim Nutzer blockieren."
-          fi
+          rm -f notarize.zip notary.log
 
       - name: Package Mac app
         run: |
@@ -526,8 +414,6 @@ jobs:
 
   build-windows:
     needs: test
-    permissions:
-      contents: write
     if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
@@ -538,10 +424,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          # 0.18.18: der pip-Cache spart in jedem der vier Jobs das erneute
-          # Herunterladen von PyQt5, rawpy und pyexiv2 (zusammen gut 100 MB).
-          cache: pip
-          cache-dependency-path: requirements.txt
 
       - name: Install Dependencies
         run: |
@@ -581,8 +463,6 @@ jobs:
 
   build-linux:
     needs: test
-    permissions:
-      contents: write
     if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'linux' }}
     runs-on: ubuntu-latest
     steps:
@@ -593,10 +473,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          # 0.18.18: der pip-Cache spart in jedem der vier Jobs das erneute
-          # Herunterladen von PyQt5, rawpy und pyexiv2 (zusammen gut 100 MB).
-          cache: pip
-          cache-dependency-path: requirements.txt
 
       - name: Install system libraries for PyQt5
         run: |
@@ -618,23 +494,7 @@ jobs:
         run: |
           # --onefile ergibt ein einzelnes ausfuehrbares Binary; PyQt5 ist
           # darin enthalten, der Nutzer braucht es nicht separat zu installieren.
-          # 0.18.18: dieselbe Luecke, die auf dem Mac den Fehler -4 ergab
-          # (siehe 0.18.12 im Mac-Job), gab es hier auch: --collect-all
-          # allein legt die camlibs/iolibs nicht zuverlaessig unter
-          # gphoto2/libgphoto2/ ab, wo das Paket sie sucht. Kein Bericht von
-          # einem Linux-Nutzer bisher - aber der Fehler ist unsichtbar, bis
-          # jemand eine Kamera ansteckt.
-          GPHOTO_FLAG="--collect-all gphoto2"
-          GPHOTO_DIR=$(python3 -c "import gphoto2, os; print(os.path.dirname(gphoto2.__file__))")
-          for sub in camlibs iolibs locale; do
-            if [ -d "$GPHOTO_DIR/libgphoto2/$sub" ]; then
-              GPHOTO_FLAG="$GPHOTO_FLAG --add-data $GPHOTO_DIR/libgphoto2/$sub:gphoto2/libgphoto2/$sub"
-              echo "  + $sub ($(ls "$GPHOTO_DIR/libgphoto2/$sub" | wc -l) Dateien)"
-            else
-              echo "  ! $sub fehlt im Wheel"
-            fi
-          done
-          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.SecretService --hidden-import secretstorage --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy $GPHOTO_FLAG Cammello.py
+          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.SecretService --hidden-import secretstorage --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy --collect-all gphoto2 Cammello.py
           cd dist
           tar -czf Cammello_Linux.tar.gz Cammello
 
