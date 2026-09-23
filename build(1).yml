@@ -1,0 +1,558 @@
+name: Build Mac, Windows and Linux App
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: # Ermöglicht den manuellen Start im Browser oder per CLI
+    inputs:
+      platform:
+        description: "Welche Plattform bauen?"
+        type: choice
+        default: both
+        options: [both, mac, windows, linux]
+      tag:
+        description: "Release-Tag, an das die Artefakte gehaengt werden (z. B. v0.9.11)"
+        type: string
+        required: true
+
+permissions:
+  contents: write # Erlaubt das Hochladen der fertigen Dateien in das Release
+
+# Actions auf der Node-24-Runtime (checkout v5, setup-python v6,
+# action-gh-release v3). Die Vorgaengerversionen liefen auf Node 20, das
+# abgekuendigt ist und vom Runner ersatzweise auf Node 24 ausgefuehrt wurde
+# ("Node.js 20 is deprecated"-Warnung).
+
+jobs:
+  # Vorstufe: Syntaxpruefung und Offscreen-Testsuite. Faengt unter anderem
+  # verlorene Modul-Importe ab (der Fehler, der 0.9.x den Login gekostet hat) -
+  # ein PyInstaller-Build wuerde so etwas nicht bemerken.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install system libraries for PyQt5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile check
+        run: python -m py_compile cammello/*.py Cammello.py
+
+      - name: Offscreen test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python test_imports.py
+          python test_098.py
+          python test_uploadsel.py
+          python test_cancel.py
+          python test_merge.py
+          python test_iptc.py
+          python test_culling.py
+          python test_cullview.py
+
+  build-mac:
+    needs: test
+    if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'mac' }}
+    # 0.14.1-Tooling: ein Matrix-Job pro Architektur. macos-latest ist seit
+    # den 14er-Images Apple Silicon (arm64); Intel-Macs koennen das Bundle
+    # nicht starten. GitHubs alter Intel-Runner macos-13 wurde im Dezember
+    # 2025 stillgelegt; der Ersatz ist das Standard-Label macos-15-intel
+    # (kostenlos fuer oeffentliche Repos, angekuendigt bis August 2027 als
+    # letztes x86_64-Image). Universal2 ist keine Option: pyexiv2 und rawpy
+    # liefern nur getrennte Arch-Wheels.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+            zipname: Cammello_Mac.zip
+          - runner: macos-15-intel
+            arch: x86_64
+            zipname: Cammello_Mac_Intel.zip
+    runs-on: ${{ matrix.runner }}
+    # Signing secrets are lifted to job-level env because a step's `if:`
+    # cannot reference the `secrets` context directly (GitHub only exposes
+    # secrets through env). The signing/notarize steps below guard on these,
+    # so the build stays green until the secrets are set and signs itself
+    # once they are.
+    env:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install exiv2 native libraries
+        run: |
+          # Das macOS-Wheel von pyexiv2 bringt zwar libexiv2.dylib mit,
+          # aber die linkt gegen ABSOLUTE Homebrew-Pfade (brotli, gettext/
+          # libintl, inih; per otool am Wheel verifiziert). Fehlen die beim
+          # Bauen, kann PyInstaller sie nicht buendeln - die fertige App
+          # scheitert dann beim Nutzer mit "Failed to load dynlib/dll ...
+          # libexiv2.dylib" und der Culling-/IPTC-/FTP-Teil verschwindet
+          # (so geschehen bei v0.11.1). brew install exiv2 zieht alle drei
+          # als Abhaengigkeiten mit.
+          # HOMEBREW_NO_REQUIRE_TAP_TRUST: der GitHub-Runner hat vorinstallierte
+          # Taps (z. B. aws/tap), die als "nicht vertraut" gelten; ohne diese
+          # Variable bricht brew mit einer Trust-Warnung ab. Auf einem
+          # Wegwerf-CI-Runner ist das Abschalten unbedenklich.
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+          brew install exiv2
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            # rawpy liefert seit 0.26 keine macOS-x86_64-Wheels mehr; 0.25.1
+            # ist die letzte Version mit Intel-Wheel (cp311 vorhanden). Das
+            # requirements-Pin rawpy>=0.27 ist auf Intel unerfuellbar, also
+            # rawpy herausfiltern und die Intel-Version explizit setzen.
+            # Folge: der Intel-Build traegt ein aelteres LibRaw (relevant
+            # nur fuer sehr neue Kameramodelle); arm64 bleibt aktuell.
+            # 0.18.3: gphoto2 ebenfalls herausfiltern. Das x86_64-Wheel
+            # ist macosx_15_0 - es wuerde das Mindest-macOS des Intel-Builds
+            # von 13 (Ventura, diktiert vom pyexiv2-Wheel) auf 15 anheben.
+            # Preis: kein Kamera-Import im Intel-Build; dort bleibt der
+            # Kartenleser der Weg.
+            grep -v '^rawpy' requirements.txt \
+              | grep -v '^gphoto2' > requirements_intel.txt
+            pip install -r requirements_intel.txt 'rawpy==0.25.1'
+          else
+            pip install -r requirements.txt
+          fi
+
+      - name: Build .icns from icon.png
+        run: |
+          # macOS dock icons leave a transparent margin (~80% content); our
+          # source art is full-bleed, so pad it before building the iconset,
+          # otherwise Cammello looks oversized next to other dock icons.
+          # Remove any stale build artefacts first (a checked-in icon.iconset
+          # would otherwise make `mkdir` fail with "File exists").
+          rm -rf icon.iconset icon_padded.png
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+
+          # macOS does NOT round app icons itself - the artwork has to carry
+          # the shape. Our source is a full-bleed square, so it was showing
+          # up with hard corners next to every other dock icon (0.14.2).
+          #
+          # Apple's grid: the rounded body covers 824 of 1024 px, and its
+          # outline is a SUPERELLIPSE (|x|^n + |y|^n = 1, n ~ 5), not a
+          # rounded rectangle - a plain corner radius reads subtly wrong
+          # beside system icons. The mask is drawn oversampled and scaled
+          # down, which is what antialiases the curve.
+          def squircle(size, n=5.0, ss=8):
+              big = size * ss
+              m = Image.new("L", (big, big), 0)
+              d = ImageDraw.Draw(m)
+              a = big / 2.0
+              for y in range(big):
+                  dy = abs((y + 0.5 - a) / a) ** n
+                  if dy >= 1.0:
+                      continue
+                  dx = (1.0 - dy) ** (1.0 / n)
+                  d.line([(a - dx * a, y), (a + dx * a, y)], fill=255)
+              return m.resize((size, size), Image.LANCZOS)
+
+          im = Image.open("cammello/assets/icon.png").convert("RGBA")
+          size, content = 1024, 824
+          art = im.resize((content, content), Image.LANCZOS)
+          art.putalpha(squircle(content))
+          canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+          off = (size - content) // 2
+          canvas.paste(art, (off, off), art)
+          canvas.save("icon_padded.png")
+          # Keep the runtime asset in step, so the splash and the About page
+          # show the same shape as the dock.
+          canvas.save("cammello/assets/icon_rounded.png")
+          PY
+          mkdir -p icon.iconset
+          # 64 is NOT a valid Apple iconset size (it exists only as
+          # 32x32@2x); listing it can make iconutil reject the whole
+          # set. 0.16.0.
+          for size in 16 32 128 256 512; do
+            sips -z $size $size icon_padded.png \
+              --out icon.iconset/icon_${size}x${size}.png
+            double=$((size * 2))
+            sips -z $double $double icon_padded.png \
+              --out icon.iconset/icon_${size}x${size}@2x.png
+          done
+          iconutil -c icns icon.iconset -o cammello/assets/icon.icns
+
+      - name: Build App
+        run: |
+          # 0.18.3: gphoto2 steckt nur im arm64-Build (siehe Intel-Filter
+          # oben). --collect-all ist Pflicht, nicht Kosmetik: das Paket
+          # setzt CAMLIBS/IOLIBS relativ zu seinem eigenen Verzeichnis,
+          # und ohne die mitgelieferten camlibs/ptp2.so findet libgphoto2
+          # gar keine Kamera.
+          # 0.18.12: --collect-all allein REICHT NICHT. PyInstaller haelt
+          # jede .so fuer ein Binary und verschiebt sie aus dem Paketbaum
+          # heraus; gphoto2/__init__.py setzt CAMLIBS/IOLIBS aber nur, wenn
+          # gphoto2/libgphoto2/camlibs bzw. .../iolibs dort noch existieren.
+          # In v0.18.3 bis v0.18.11 taten sie das nicht - die App meldete
+          # "[-4] Fehler beim Laden einer Bibliothek". Darum die drei
+          # Verzeichnisse zusaetzlich als Daten, mit Zielpfad.
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            GPHOTO_FLAG=""
+          else
+            GPHOTO_FLAG="--collect-all gphoto2"
+            GPHOTO_DIR=$(python3 -c "import gphoto2, os; print(os.path.dirname(gphoto2.__file__))")
+            echo "gphoto2 liegt in $GPHOTO_DIR"
+            for sub in camlibs iolibs locale; do
+              if [ -d "$GPHOTO_DIR/libgphoto2/$sub" ]; then
+                GPHOTO_FLAG="$GPHOTO_FLAG --add-data $GPHOTO_DIR/libgphoto2/$sub:gphoto2/libgphoto2/$sub"
+                echo "  + $sub ($(ls "$GPHOTO_DIR/libgphoto2/$sub" | wc -l) Dateien)"
+              else
+                echo "  ! $sub fehlt im Wheel"
+              fi
+            done
+          fi
+          # --onedir statt --onefile: onefile+windowed ist auf macOS
+          # deprecated (ab PyInstaller 7.0 ein Fehler); das .app-Bundle
+          # entsteht bei --onedir genauso und wird gezippt.
+          # --add-data buendelt die Assets (Logo!): --collect-submodules
+          # sammelt nur Module, keine Datendateien - deshalb fehlte das
+          # Logo in allen bisherigen Binaries.
+          pyinstaller --onedir --windowed --name Cammello \
+            --icon cammello/assets/icon.icns \
+            --add-data "cammello/assets:cammello/assets" \
+            --hidden-import paramiko \
+            --collect-all keyring --hidden-import keyring.backends.macOS \
+            --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy \
+            $GPHOTO_FLAG Cammello.py
+
+      - name: Kameratreiber im Bundle pruefen
+        if: ${{ matrix.arch == 'arm64' }}
+        run: |
+          # Der Fehler aus 0.18.3 ist unsichtbar, solange niemand eine
+          # Kamera anschliesst. Deshalb bricht der Build jetzt ab, statt
+          # eine App auszuliefern, die keine Kamera oeffnen kann.
+          PTP=$(find dist/Cammello.app -name 'ptp2.so' -o -name 'ptp2.dylib' | head -1)
+          IOL=$(find dist/Cammello.app -type d -name iolibs | head -1)
+          echo "ptp2:   ${PTP:-NICHT GEFUNDEN}"
+          echo "iolibs: ${IOL:-NICHT GEFUNDEN}"
+          if [ -z "$PTP" ] || [ -z "$IOL" ]; then
+            echo "::error::Die libgphoto2-Treiber fehlen im Bundle - der Kamera-Import wuerde mit -4 scheitern."
+            exit 1
+          fi
+          find dist/Cammello.app -type d -name camlibs -exec sh -c 'echo "camlibs: $1 ($(ls "$1" | wc -l) Dateien)"' _ {} \;
+
+      # ── Code signing + notarization ───────────────────────────────────
+      # These steps stay DORMANT until the signing secrets exist: each
+      # guards on env.MACOS_CERT_P12 (the notarize step also on
+      # env.MACOS_NOTARY_APPLE_ID), and those env values come from the
+      # job-level env block above. A step `if:` cannot read the `secrets`
+      # context directly, which is why the secrets are lifted to env first.
+      # Result: the build stays green WITHOUT the secrets and starts signing
+      # automatically once they are set.
+      #
+      # Notarization runs with an Apple ID + app-specific password (not an
+      # App Store Connect API key), so Cammello and LrMediaWiki2 share the
+      # SAME six secrets under the same names.
+      #
+      # Required repository secrets (Settings > Secrets and variables >
+      # Actions):
+      #   MACOS_CERT_P12         base64 of the Developer ID Application
+      #                          .p12  (base64 -i devid.p12 | pbcopy)
+      #   MACOS_CERT_PASSWORD    the .p12 export password
+      #   MACOS_SIGN_IDENTITY    the identity string, e.g.
+      #                          "Developer ID Application: Harald Krichel (TEAMID)"
+      #   MACOS_NOTARY_APPLE_ID  the Apple ID (e-mail) of the developer account
+      #   MACOS_NOTARY_PASSWORD  an app-specific password from account.apple.com
+      #   MACOS_NOTARY_TEAM_ID   the 10-character team ID
+      # The temporary keychain password is generated here, so it is NOT a
+      # secret - it never leaves the runner.
+      - name: Codesign app bundle
+        if: ${{ env.MACOS_CERT_P12 != '' }}
+        run: |
+          set -euo pipefail
+          # A minimal Hardened Runtime entitlements file. Hardened Runtime is
+          # required for notarization; PyInstaller apps need the two JIT/
+          # unsigned-memory exceptions or Python's own dynamic code loading
+          # is killed at launch. disable-library-validation lets the bundled
+          # .so/.dylib files (pyexiv2, rawpy, libgphoto2) load.
+          cat > entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+           "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key><true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          # Import the certificate into a fresh, unlocked keychain so codesign
+          # never shows an interactive prompt on the runner. The keychain
+          # password is throwaway and generated here.
+          KC_PWD=$(openssl rand -base64 24)
+          echo "$MACOS_CERT_P12" | base64 --decode > certificate.p12
+          security create-keychain -p "$KC_PWD" build.keychain
+          # Keep the login keychain in the search list; replacing it wholesale
+          # has bitten other projects. Just make ours the default and unlock it.
+          security list-keychains -d user -s build.keychain \
+            $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KC_PWD" build.keychain
+          # Do not let the keychain re-lock in the middle of a long build.
+          security set-keychain-settings -lut 7200 build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KC_PWD" build.keychain >/dev/null
+          rm -f certificate.p12
+          security find-identity -v -p codesigning build.keychain
+          # INSIDE-OUT signing, deliberately NOT `codesign --deep`: Apple
+          # documents --deep as unsuitable for shipping ("for emergency
+          # repairs only"), and on a PyInstaller bundle it regularly leaves
+          # nested .so/.dylib files with the wrong entitlements, which the
+          # notary service then rejects. So: every Mach-O inside the bundle
+          # first, the app itself last.
+          find dist/Cammello.app -type f \( -name '*.so' -o -name '*.dylib' \) -print0 \
+            | xargs -0 -r codesign --force --timestamp --options runtime \
+                --entitlements entitlements.plist \
+                --sign "$MACOS_SIGN_IDENTITY"
+          # Anything else that is a Mach-O binary (helper executables,
+          # extensionless libraries). `file` decides, not the file name.
+          find dist/Cammello.app -type f -perm -u+x -print0 \
+            | while IFS= read -r -d '' f; do
+                if file -b "$f" | grep -q 'Mach-O'; then
+                  codesign --force --timestamp --options runtime \
+                    --entitlements entitlements.plist \
+                    --sign "$MACOS_SIGN_IDENTITY" "$f"
+                fi
+              done
+          # Nested frameworks/bundles (Qt plugins et al.), then the app.
+          find dist/Cammello.app -type d -name '*.framework' -print0 \
+            | xargs -0 -r -I{} codesign --force --timestamp --options runtime \
+                --sign "$MACOS_SIGN_IDENTITY" {}
+          codesign --force --timestamp --options runtime \
+            --entitlements entitlements.plist \
+            --sign "$MACOS_SIGN_IDENTITY" dist/Cammello.app
+          codesign --verify --deep --strict --verbose=2 dist/Cammello.app
+
+      - name: Notarize app bundle
+        if: ${{ env.MACOS_CERT_P12 != '' && env.MACOS_NOTARY_APPLE_ID != '' }}
+        run: |
+          set -euo pipefail
+          # Notarization needs a zip of the .app. ditto, NOT zip: the zip
+          # tool does not preserve the symlinks and extended attributes a
+          # signed bundle carries, which breaks the signature in transit.
+          ditto -c -k --keepParent dist/Cammello.app notarize.zip
+
+          CRED=(--apple-id "$MACOS_NOTARY_APPLE_ID"
+                --password "$MACOS_NOTARY_PASSWORD"
+                --team-id "$MACOS_NOTARY_TEAM_ID")
+
+          # `notarytool submit --wait` is NOT used: its polling dies on the
+          # first network hiccup ("The request timed out", NSURLError -1001),
+          # which killed the 2026-09-22 Intel run after 27 minutes of
+          # "In Progress" - and that error says nothing about the app. So the
+          # submission and the waiting are separated, and the wait shrugs off
+          # transient network errors instead of failing the build.
+          xcrun notarytool submit notarize.zip "${CRED[@]}" \
+            --output-format json > submit.json || {
+              echo "::error::Upload to the notary service failed."
+              cat submit.json || true
+              exit 1
+            }
+          SUB=$(python3 -c 'import json;print(json.load(open("submit.json")).get("id",""))')
+          if [ -z "$SUB" ]; then
+            echo "::error::No submission id in the notary response."
+            cat submit.json
+            exit 1
+          fi
+          echo "Submission: $SUB"
+
+          # Poll for at most 4 hours (the job itself may run 6). On
+          # 2026-09-22 two submissions sat in "In Progress" for well over
+          # 90 minutes, so a short deadline just throws away a build that
+          # would have passed.
+          DEADLINE=$((SECONDS + 14400))
+          STATUS=""
+          NETFAIL=0
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            sleep 30
+            if ! xcrun notarytool info "$SUB" "${CRED[@]}" \
+                   --output-format json > info.json 2>info.err; then
+              NETFAIL=$((NETFAIL + 1))
+              echo "Statusabfrage fehlgeschlagen ($NETFAIL), wird wiederholt:"
+              tail -2 info.err || true
+              # Only give up if the service stays unreachable for ~15 minutes.
+              if [ "$NETFAIL" -ge 30 ]; then
+                echo "::error::The notary service stayed unreachable."
+                exit 1
+              fi
+              continue
+            fi
+            NETFAIL=0
+            STATUS=$(python3 -c 'import json;print(json.load(open("info.json")).get("status",""))')
+            echo "Status: ${STATUS:-unbekannt}"
+            [ "$STATUS" = "In Progress" ] || break
+          done
+
+          if [ "$STATUS" = "In Progress" ] || [ -z "$STATUS" ]; then
+            # Timed out while the service was still chewing on it. This says
+            # nothing about the app, so the build does NOT fail: the .app is
+            # signed, and a signed app that Apple accepts later still passes
+            # Gatekeeper for any user who is online - stapling only matters
+            # offline. Staple it by hand afterwards if the verdict is good:
+            #   xcrun stapler staple /path/to/Cammello.app
+            echo "::warning::Notarization still pending after the deadline (submission $SUB). The signed but unstapled app is published anyway."
+            rm -f notarize.zip submit.json info.json info.err
+            exit 0
+          fi
+
+          if [ "$STATUS" != "Accepted" ]; then
+            # A real verdict against the app (Invalid/Rejected) DOES fail the
+            # build - publishing that would help nobody.
+            echo "::error::Notarization did not succeed (status: $STATUS)."
+            xcrun notarytool log "$SUB" "${CRED[@]}" || true
+            exit 1
+          fi
+
+          # Staple the ticket into the bundle so it validates offline, then
+          # confirm Gatekeeper accepts it.
+          xcrun stapler staple dist/Cammello.app
+          spctl -a -vvv --type execute dist/Cammello.app
+          rm -f notarize.zip submit.json info.json info.err
+
+      - name: Package Mac app
+        run: |
+          # ditto instead of `zip -r`: zip does not preserve the symlinks
+          # and extended attributes of a signed .app, so the downloaded app
+          # would fail its own signature check. ditto is also what Apple's
+          # own notarization instructions use.
+          cd dist
+          ditto -c -k --keepParent Cammello.app "${{ matrix.zipname }}"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/${{ matrix.zipname }}
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    needs: test
+    if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+          pip install -r requirements.txt
+
+      - name: Build .ico from icon.png
+        shell: python
+        run: |
+          from PIL import Image
+          im = Image.open("cammello/assets/icon.png")
+          # The .ico writer is picky across Pillow versions: it wants an
+          # RGBA image and refuses sizes larger than the source. Normalise
+          # to RGBA, and if the source is smaller than 256 px upscale it to
+          # a 256 square first so every requested size can be produced.
+          im = im.convert("RGBA")
+          if min(im.size) < 256:
+              im = im.resize((256, 256), Image.LANCZOS)
+          sizes = [(16, 16), (32, 32), (48, 48), (128, 128), (256, 256)]
+          im.save("cammello/assets/icon.ico", format="ICO", sizes=sizes)
+
+      - name: Build App
+        run: |
+          # Unter Windows ist --onefile unproblematisch und ergibt eine
+          # einzelne Cammello.exe.
+          # --add-data mit Semikolon (Windows-Trenner); siehe Mac-Job.
+          pyinstaller --onefile --windowed --name Cammello --icon cammello/assets/icon.ico --add-data "cammello/assets;cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.Windows --hidden-import win32ctypes.core.ctypes --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy Cammello.py
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/Cammello.exe
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    needs: test
+    if: ${{ github.event_name == 'release' || inputs.platform == 'both' || inputs.platform == 'linux' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install system libraries for PyQt5
+        run: |
+          # PyQt5 braucht zur Laufzeit ein paar X11/GL-Systembibliotheken;
+          # ohne die scheitert der Start mit "could not load Qt platform
+          # plugin xcb", auch wenn PyInstaller sauber gebaut hat.
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build App
+        run: |
+          # --onefile ergibt ein einzelnes ausfuehrbares Binary; PyQt5 ist
+          # darin enthalten, der Nutzer braucht es nicht separat zu installieren.
+          pyinstaller --onefile --windowed --name Cammello --add-data "cammello/assets:cammello/assets" --hidden-import paramiko --collect-all keyring --hidden-import keyring.backends.SecretService --hidden-import secretstorage --collect-submodules cammello --collect-all pyexiv2 --collect-all rawpy --collect-all gphoto2 Cammello.py
+          cd dist
+          tar -czf Cammello_Linux.tar.gz Cammello
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/Cammello_Linux.tar.gz
+          tag_name: ${{ github.event.release.tag_name || inputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
