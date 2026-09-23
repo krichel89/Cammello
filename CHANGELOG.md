@@ -4,6 +4,52 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.22 - 2026-09-23
+
+### Changed
+- The sign-in window is down to ONE way in (Harald: "das Programm soll ja
+  moeglichst einfach fuer Benutzer sein"). Gone: the copyable
+  authorization link with its Copy and Open buttons, the "show the link
+  only" switch, and a browser chooser that was built and taken out again
+  the same day because it did not work on macOS. Press the button, the
+  default browser opens the Wikimedia page, confirm with "Allow" - done.
+  The paste field stays for the rare case where the loopback answer does
+  not arrive: the code is then in the browser's address bar.
+
+### Removed
+- OAuth 1.0a, entirely: `cammello/mw_oauth.py`, the "classic
+  authorization" switch, the manual oob code flow with its watcher and
+  second loopback server, the request signing in `api.py`,
+  `_login_with_stored_oauth` and `verifier_from_input`. The OAuth 2.0
+  consumer is approved for other users, OAuth 2 has been the default since
+  0.17.0 and has carried the real uploads since; a second signing path
+  meant a second set of secrets and a second set of failure modes.
+  `LOOPBACK_PORT` (8127, unchanged - the registered callback is compared
+  exactly) and `MWOAuthError` moved into `mw_oauth2`, which had been
+  borrowing them. The bot password stays as the fallback.
+- The status line no longer reads the 1.0a keyring slots at all. A
+  leftover pair cannot sign anything in any more, so showing it as
+  "authorized" would be untrue - and it saves a keychain prompt.
+- `test_oauth_loopback.py`, which tested only the 1.0a flow.
+
+### Fixed
+- THE CRASH of 2026-09-23, with the crash log as proof: the authorize
+  thread was a CHILD of the sign-in dialog (`parent=self`), and a failed
+  attempt left it running - `_on_failure` re-enabled the button but never
+  stopped the thread. When the dialog was then torn down, Qt deleted a
+  running QThread, which is `qFatal("QThread: Destroyed while thread is
+  still running")`, i.e. abort() - not an exception, which is why the log
+  ended mid-sentence. The C stack in `cammello_crash.log` shows exactly
+  that chain: QLabel mouse release (the login link) -> sipQDialog dtor ->
+  deleteChildren -> QThread dtor -> qErrnoWarning -> QMessageLogger::fatal
+  -> abort. Three changes: the worker has NO parent any more, every exit
+  from the dialog goes through `done()` which stops it, and a thread that
+  refuses to stop within two seconds is parked in a module-level list
+  instead of being dropped, so nothing ever deletes a running QThread.
+- The OAuth 2.0 path was gated on `mw_oauth.is_configured()`, the OLD
+  consumer key (QK finding, 2026-08-07): removing 1.0a would have switched
+  OAuth 2 off with it. Both places ask `mw_oauth2.is_configured()` now.
+
 ## 0.18.21 - 2026-09-23
 
 ### Changed

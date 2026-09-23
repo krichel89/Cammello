@@ -20,7 +20,7 @@ Geprueft wird mit einem gefaelschten Schluesselbund, der MITZAEHLT:
   3. mit Altlasten wird umgezogen, geloescht und dann gemerkt,
   4. eine FEHLGESCHLAGENE Loeschung wird NICHT gemerkt (sonst waere eine
      echte Anmeldung verloren),
-  5. eine bestehende 2.0-Anmeldung fragt die 1.0a-Faecher gar nicht,
+  5. die Statuszeile fragt die 1.0a-Faecher gar nicht mehr (0.18.22),
   6. das Entfernen der Berechtigung raeumt beides weg.
 """
 import json
@@ -198,17 +198,20 @@ for node in ast.walk(tree):
         func = node
 check('_refresh_oauth_status is still there', func is not None)
 body = ast.get_source_segment(src, func) if func else ''
-check('it only asks for the 1.0a tokens when there is no 2.0 one',
-      "if access else stored_oauth_tokens()" in body
-      or "'', ''" in body and 'access' in body, body[:0] or 'see source')
-
+# 0.18.22: the 1.0a path is gone, so the status line does not ask about
+# those slots AT ALL any more - which is the strongest form of what this
+# check always wanted. A leftover 1.0a pair can no longer sign anything
+# in, so counting it as "authorized" would have been a lie.
 calls = 0
 if func:
     for node in ast.walk(func):
         if isinstance(node, ast.Call) and getattr(node.func, 'id', '') \
                 == 'stored_oauth_tokens':
             calls += 1
-check('and it calls it exactly once, guarded', calls == 1, str(calls))
+check('it does not ask for the 1.0a tokens at all any more', calls == 0,
+      str(calls))
+check('and it reads the 2.0 token instead',
+      'stored_oauth2_tokens' in body, body[:0] or 'see source')
 
 print()
 print('FAILURES:', ', '.join(fails) if fails else 'none')

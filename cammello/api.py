@@ -96,12 +96,12 @@ class MediaWikiApi:
         self.csrf_token = None
         self.username = username
         self.password = password
-        # OAuth 1.0a access credentials (from mw_oauth / the OS keyring). When
-        # both are present every request is signed with an Authorization header
-        # and no BotPassword login handshake happens. Empty = BotPassword path.
-        self._oauth_token = oauth_token or ''
-        self._oauth_secret = oauth_secret or ''
-        self._use_oauth = bool(self._oauth_token and self._oauth_secret)
+        # 0.18.22: OAuth 1.0a is gone. The two arguments stay in the
+        # signature so an old caller does not blow up, but nothing is
+        # signed any more - OAuth 2.0 Bearer or BotPassword, nothing else.
+        self._oauth_token = ''
+        self._oauth_secret = ''
+        self._use_oauth = False
         # OAuth 2.0 (0.17.0): one Bearer header instead of per-request
         # signing. bearer_refresher is a callable returning a FRESH access
         # token (renewing via the refresh token and persisting the rotated
@@ -179,24 +179,7 @@ class MediaWikiApi:
         self.log.debug('→ %s [%s] params=%s%s',
                        method, desc, self._redact(payload), file_note)
 
-        # OAuth 1.0a: sign every request with the stored access token instead
-        # of relying on a login session cookie. Per RFC 5849 the multipart
-        # body of a file upload is NOT signed, so when `files` is present only
-        # the query parameters (plus the oauth_* parameters) go into the
-        # signature base string; the form fields ride in the multipart body.
-        if self._use_oauth:
-            from . import mw_oauth
-            sign_params = dict(kwargs.get('params') or {})
-            if not kwargs.get('files'):
-                body = kwargs.get('data')
-                if isinstance(body, dict):
-                    sign_params.update(body)
-            headers = dict(kwargs.get('headers') or {})
-            headers['Authorization'] = mw_oauth.authorization_header(
-                method, url, sign_params,
-                self._oauth_token, self._oauth_secret)
-            kwargs['headers'] = headers
-        elif self._use_bearer:
+        if self._use_bearer:
             headers = dict(kwargs.get('headers') or {})
             headers['Authorization'] = f'Bearer {self._bearer_token}'
             kwargs['headers'] = headers

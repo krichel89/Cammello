@@ -39,7 +39,7 @@ from .mw_iptc import MWIptcMixin
 from .mw_culling import MWCullingMixin, _TabBarDropSwitcher
 from .mw_flickr import FlickrMixin
 from . import iptc as iptc_mod
-from . import mw_oauth
+from . import mw_oauth2
 from . import credentials
 from . import channels
 from . import splash as splash_mod
@@ -1827,8 +1827,8 @@ class MainWindow(FlickrMixin,
         self.mw_password_edit.setEchoMode(QLineEdit.Password)
         self._mw_password_loaded = False
         # OAuth sign-in: only offered in builds with a registered consumer
-        # (mw_oauth.CONSUMER_KEY filled in) - see mw_oauth module docstring.
-        if mw_oauth.is_configured():
+        # 0.18.22: the OAuth 2.0 client decides, not the old 1.0a key.
+        if mw_oauth2.is_configured():
             self.oauth_status_label = QLabel()
             self.oauth_status_label.setWordWrap(True)
             oauth_btn = QPushButton(tr('Sign in with Wikimedia (OAuth)…'))
@@ -1988,11 +1988,11 @@ class MainWindow(FlickrMixin,
         if not hasattr(self, 'oauth_status_label'):
             return
         access, _refresh = stored_oauth2_tokens()
-        # 0.18.19: only ask about the 1.0a entries when there is no 2.0
-        # token. Both answers lead to the same line on screen, so reading
-        # the second one was a keychain prompt spent on nothing.
-        token, secret = ('', '') if access else stored_oauth_tokens()
-        if access or (token and secret):
+        # 0.18.22: the 1.0a entries are not asked about at all any more -
+        # they cannot sign anything in since the 1.0a path is gone, so a
+        # leftover pair must not read as "authorized". Removing the
+        # authorization still clears them, so nothing stays in the keyring.
+        if access:
             user = self._login_settings.value('oauth_username', '') or '?'
             self.oauth_status_label.setText(
                 tr('Authorized as {username}.').format(username=user))

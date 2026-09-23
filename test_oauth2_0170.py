@@ -23,7 +23,7 @@ os.environ.setdefault('CAMMELLO_WORKFLOWS',
 
 from cammello import mw_oauth2
 from cammello.api import MediaWikiApi
-from cammello.mw_oauth import LOOPBACK_PORT, MWOAuthError
+from cammello.mw_oauth2 import LOOPBACK_PORT, MWOAuthError
 
 fails = []
 

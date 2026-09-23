@@ -28,6 +28,7 @@ from .sdc import *
 from . import sdc
 from . import credentials
 from . import channels
+from . import mw_oauth2
 from . import filters
 # The colour-label swatches must match the culling module's exactly -
 # same colours, same order - so one swatch means one thing app-wide.
@@ -650,52 +651,12 @@ class LoginDialog(QDialog):
         return self.url_edit.text(), self.user_edit.text(), self.pass_edit.text()
 
 
-# ── OAuth sign-in (mw_oauth) ─────────────────────────────────────────────────
-#
-# 0.12.7 - what the manual path is actually for
-# --------------------------------------------
-# Harald's report: the automatic loopback return works; the manual path does
-# not. After clicking "Allow" on Meta the browser showed
-# ERR_CONNECTION_REFUSED on 127.0.0.1 - i.e. the wiki DID redirect to the
-# registered callback (it ignored the "oob" request) and nothing was
-# listening there. So the wiki never showed a code to type: the verifier was
-# in the browser's ADDRESS BAR the whole time, on the error page.
-#
-# Hence the manual field now accepts the whole pasted URL and digs the
-# verifier out of it. A bare code still works, so nothing is lost for
-# consumers where oob does behave.
+# ── OAuth sign-in ────────────────────────────────────────────────────────────
+# 0.18.22: only OAuth 2.0 (PKCE) is left. The 1.0a module, its manual "oob"
+# code flow and the verifier parser that belonged to it are gone; the
+# equivalent for 2.0 is mw_oauth2.code_from_input, which reads the code out
+# of a pasted address-bar line.
 
-
-def verifier_from_input(text):
-    """Extract the OAuth verifier from what the user pasted.
-
-    Accepts a full callback URL (`http://127.0.0.1:8127/cammello/?oauth_
-    token=...&oauth_verifier=...`), a bare query string, or the plain code.
-    Returns '' if nothing usable is in there.
-    """
-    text = (text or '').strip().strip('"\'')
-    if not text:
-        return ''
-    # A URL or a query string: read the parameter rather than guessing by
-    # position - the order of query parameters is not guaranteed.
-    if 'oauth_verifier=' in text:
-        query = text.split('?', 1)[1] if '?' in text else text
-        query = query.split('#', 1)[0]
-        params = urllib.parse.parse_qs(query, keep_blank_values=False)
-        values = params.get('oauth_verifier') or []
-        if values:
-            return values[0].strip()
-        return ''
-    if '://' in text or text.startswith('127.0.0.1') or '/' in text:
-        # Looks like a URL but carries no verifier - do not hand the whole
-        # address to the token exchange, it would fail with a confusing
-        # server error.
-        return ''
-    return text
-# Storage glue lives here (UI layer): access token/secret go to the OS
-# keyring (credentials.mw_oauth_slot); when no keyring backend exists they
-# fall back to QSettings 'Login' - same trust level as the old plaintext
-# BotPassword, so the app keeps working everywhere.
 
 def store_oauth2_tokens(access, refresh):
     """OAuth 2.0: write the CURRENT pair as one keyring entry. -> bool.
@@ -826,18 +787,41 @@ def clear_stored_oauth():
     s.sync()
 
 
+# Authorize threads that refused to stop in time. They are kept here so
+# neither Python nor Qt deletes a RUNNING QThread, which is a qFatal and
+# takes the whole program with it (Harald's crash, 2026-09-23). Each one
+# ends by itself once its run loop notices the stop flag.
+_LIVE_WORKERS = []
+
+
+def _sweep_live_workers():
+    """Drop the parked threads that have finished. Cheap, no waiting."""
+    for worker in list(_LIVE_WORKERS):
+        try:
+            running = worker.isRunning()
+        except RuntimeError:                 # pragma: no cover - already gone
+            running = False
+        if not running:
+            _LIVE_WORKERS.remove(worker)
+
+
 class OAuthLoginDialog(QDialog):
-    """Browser-based OAuth sign-in with a copyable authorize link.
+    """Browser-based OAuth 2.0 sign-in with a copyable authorize link.
 
-    The loopback callback (mw_oauth) listens on 127.0.0.1 and is reached
-    from ANY browser on this machine, so the link can be copied into a
-    second browser that holds the wiki session instead of the default
-    browser (explicit requirement).  The 'show link only' checkbox
-    starts UNCHECKED every time (0.12.8) - see below.
+    0.18.22: OAuth 1.0a is gone. The consumer is approved for other users,
+    OAuth 2 has been the default since 0.17.0 and has carried Harald's own
+    uploads since; keeping a second signing path alive meant keeping a
+    second set of secrets and a second set of failure modes.
 
-    On success the tokens are stored (see stored_oauth_tokens above), the
-    username lands in QSettings 'Login'/'oauth_username', and the dialog
-    accepts; the caller reads .username afterwards.
+    The loopback callback listens on 127.0.0.1 and is reached from ANY
+    browser on this machine, so the link works in a second browser that
+    holds a different wiki session. Since 0.18.22 that second browser can
+    be CHOSEN instead of copied into - Harald's Firefox is signed in as
+    "Seewolf" while the uploads go out as "Harald Krichel" in Vivaldi.
+
+    On success the tokens are stored, the username lands in QSettings
+    'Login'/'oauth_username', and the dialog accepts; the caller reads
+    .username afterwards.
     """
 
     def __init__(self, parent=None):
@@ -855,69 +839,32 @@ class OAuthLoginDialog(QDialog):
         # 0.12.7: the authorization flow used to log NOTHING - Harald's log
         # of a failed sign-in contained not one line about it, so the cause
         # could not be told from the outside. Every station now leaves a
-        # trace. No secrets are logged: the request token is not written,
-        # only whether one arrived.
+        # trace. No secrets are logged.
         self._log = logging.getLogger('Cammello')
 
         v = QVBoxLayout(self)
         intro = QLabel(tr(
             'Cammello asks Wikimedia for permission to upload and edit on '
             'Commons in your name. No password is entered in Cammello. '
-            'Open the link in any browser on this computer where you are '
-            'signed in to Wikimedia - a second browser works too; Cammello '
-            'receives the confirmation automatically.'))
+            'Your browser opens the Wikimedia page; confirm there with '
+            '"Allow" and Cammello receives the confirmation automatically.'))
         intro.setWordWrap(True)
         v.addWidget(intro)
 
-        # 0.17.0: OAuth 2.0 (PKCE) is the DEFAULT way in for this test
-        # series; this box switches back to the proven 1.0a signing path.
-        # Deliberately not persisted - an exception switch like the two
-        # below (the 0.12.8 lesson).
-        self.oauth1_cb = QCheckBox(
-            tr('Use the classic authorization (OAuth 1.0a)'))
-        self.oauth1_cb.setChecked(False)
-        v.addWidget(self.oauth1_cb)
-
-        self.show_only_cb = QCheckBox(
-            tr('Show the link only - do not open the default browser'))
-        # 0.12.8 (Harald): BOTH boxes start unchecked, every time. They
-        # used to remember their last state, so one manual sign-in left the
-        # dialog in manual mode for good - the normal one-click path stayed
-        # hidden behind a box the user had ticked once, days earlier. These
-        # are exception switches: the default has to be the normal way in,
-        # and choosing the exception has to be a deliberate act each time.
-        self.show_only_cb.setChecked(False)
-        v.addWidget(self.show_only_cb)
-
-        # oob mode: no loopback callback - after "Allow" the wiki shows a
-        # code the user pastes below. Works with any consumer/status.
-        self.oob_cb = QCheckBox(
-            tr('Confirm manually (use if the automatic confirmation does '
-               'not work - a code or the address from the browser)'))
-        self.oob_cb.setChecked(False)
-        v.addWidget(self.oob_cb)
-
+        # 0.18.22 (Harald): the dialog is down to ONE way in. The browser
+        # chooser (tried and dropped - it did not work on his Mac), the
+        # copyable authorization link, the "show the link only" switch and
+        # its Copy/Open buttons are all gone: "das Programm soll ja
+        # moeglichst einfach fuer Benutzer sein". Press the button, the
+        # default browser opens, done. What is left for the rare case is
+        # the paste field below, which the browser's own address bar feeds.
         self.start_btn = QPushButton(tr('Start authorization'))
         self.start_btn.clicked.connect(self._start)
         v.addWidget(self.start_btn)
 
-        url_row = QHBoxLayout()
-        url_row.addWidget(QLabel(tr('Authorization link:')))
-        self.url_edit = QLineEdit()
-        self.url_edit.setReadOnly(True)
-        url_row.addWidget(self.url_edit, 1)
-        self.copy_btn = QPushButton(tr('Copy'))
-        self.copy_btn.setEnabled(False)
-        self.copy_btn.clicked.connect(self._copy_url)
-        url_row.addWidget(self.copy_btn)
-        self.open_btn = QPushButton(tr('Open in default browser'))
-        self.open_btn.setEnabled(False)
-        self.open_btn.clicked.connect(self._open_url)
-        url_row.addWidget(self.open_btn)
-        v.addLayout(url_row)
-
-        # oob only: revealed once the authorize URL is shown, so the user can
-        # paste the code the wiki displays after "Allow".
+        # Revealed once the authorize URL is shown: if the loopback catch
+        # fails, the code sits in the browser's address bar and pasting the
+        # whole line works (mw_oauth2.code_from_input).
         self.verifier_row = QWidget()
         vr = QHBoxLayout(self.verifier_row)
         vr.setContentsMargins(0, 0, 0, 0)
@@ -926,10 +873,9 @@ class OAuthLoginDialog(QDialog):
         self.verifier_edit.setPlaceholderText(
             tr('paste the code - or the whole address from the browser'))
         self.verifier_edit.setToolTip(tr(
-            'If the browser shows a code after "Allow", paste it here. If it '
-            'instead jumps to a 127.0.0.1 address - even one that fails to '
-            'load - copy that entire address from the address bar and paste '
-            'it here; Cammello reads the confirmation out of it.'))
+            'If the browser jumps to a 127.0.0.1 address - even one that '
+            'fails to load - copy that entire address from the address bar '
+            'and paste it here; Cammello reads the confirmation out of it.'))
         self.verifier_edit.returnPressed.connect(self._finish_paste)
         vr.addWidget(self.verifier_edit, 1)
         self.finish_btn = QPushButton(tr('Finish'))
@@ -955,71 +901,52 @@ class OAuthLoginDialog(QDialog):
         buttons.rejected.connect(self.reject)
         v.addWidget(buttons)
 
-        # oob request token/secret, kept between the two phases.
-        self._oob_tokens = None
-        # 0.12.7: in manual mode a loopback server usually runs as well
-        # (see mw_oauth.begin_oob). The watcher completes the sign-in on its
-        # own if the browser redirect arrives; the user pasting something is
-        # the fallback, not the only way. Whichever finishes first wins.
-        self._watcher = None
-        self._manual_server = None
-
     # ── worker plumbing ──────────────────────────────────────────────────
 
     def _start(self):
-        # Deliberately NOT persisted (0.12.8): see the constructor. The two
-        # old keys are dropped so a later re-read cannot resurrect a state
-        # the user set once and forgot.
+        # Deliberately NOT persisted (0.12.8): see the constructor. The old
+        # keys are dropped so a later re-read cannot resurrect a state the
+        # user set once and forgot.
         self.settings.remove('oauth_show_only')
         self.settings.remove('oauth_oob')
         self.settings.sync()
+        # 0.18.22: a previous attempt may still have a worker on the wire -
+        # its loopback server holds port 8127, and it can deliver a late
+        # succeeded/failed into a dialog that has moved on. Harald's log of
+        # 2026-09-23 shows exactly that sequence: one attempt fails with
+        # HTTP 403, the next succeeds 15 seconds later, and the app dies
+        # right after. Stop the old one before starting a new one.
+        self._stop_worker()
         self.start_btn.setEnabled(False)
-        self.show_only_cb.setEnabled(False)
-        self.oob_cb.setEnabled(False)
-        self._log.info('OAuth sign-in started (mode: %s, browser opened '
-                       'automatically: %s).',
-                       'manual' if self.oob_cb.isChecked() else 'loopback',
-                       'no' if self.show_only_cb.isChecked() else 'yes')
-        if not self.oauth1_cb.isChecked():
-            self._start_oauth2()
-            return
-        if self.oob_cb.isChecked():
-            self._start_oob()
-            return
-        from .mw_oauth import OAuthAuthorizeWorker
-        self._set_status(tr('Waiting for authorization in the browser…'),
-                         'orange')
-        self._worker = OAuthAuthorizeWorker(
-            auto_open=not self.show_only_cb.isChecked(), parent=self)
-        self._worker.authorize_url_ready.connect(self._on_url)
-        self._worker.succeeded.connect(self._on_success)
-        self._worker.failed.connect(self._on_failure)
-        self._worker.start()
-
-    # ── OAuth 2.0 (PKCE) flow ────────────────────────────────────────────
+        self._set_status(tr('Starting…'), 'orange')
+        self._log.info('OAuth sign-in started.')
+        self._start_oauth2()
 
     def _start_oauth2(self):
-        from . import mw_oauth2
         self._set_status(tr('Waiting for authorization in the browser…'),
                          'orange')
-        self._worker = mw_oauth2.OAuth2AuthorizeWorker(parent=self)
+        # NO parent (0.18.23). With parent=self the worker was a CHILD of
+        # the dialog, so tearing the dialog down deleted the QThread - and
+        # Qt calls qFatal("QThread: Destroyed while thread is still
+        # running"), which is abort(), not an exception. That is exactly
+        # what Harald's crash log of 2026-09-23 shows. Python keeps it
+        # alive through self._worker and _LIVE_WORKERS instead.
+        self._worker = mw_oauth2.OAuth2AuthorizeWorker()
         self._worker.ready.connect(self._on_oauth2_url)
         self._worker.succeeded.connect(self._on_oauth2_success)
         self._worker.failed.connect(self._on_failure)
         self._worker.start()
 
     def _on_oauth2_url(self, url):
-        self._on_url(url)
-        if not self.show_only_cb.isChecked():
+        self._log.info('OAuth: authorization link ready (%s).',
+                       url.split('?', 1)[0] if url else '-')
+        if url:
             QDesktopServices.openUrl(QUrl(url))
-        # The paste field of the manual flow doubles as the fallback here:
-        # if the loopback catch fails, the code sits in the address bar and
-        # pasting the whole URL works (code_from_input).
         self.verifier_row.setVisible(True)
         self.verifier_edit.setPlaceholderText(
             tr('If nothing happens: paste the address bar line here'))
 
-    def _finish_oauth2_paste(self):
+    def _finish_paste(self):
         worker = self._worker
         if worker is not None and hasattr(worker, 'finish_with_code'):
             if not worker.finish_with_code(self.verifier_edit.text()):
@@ -1035,138 +962,14 @@ class OAuthLoginDialog(QDialog):
         self.username = username
         self.accept()
 
-    # ── oob (manual code) flow ───────────────────────────────────────────
-
-    def _start_oob(self):
-        from .mw_oauth import OAuthOOBBeginWorker
-        self._set_status(tr('Requesting an authorization link…'), 'orange')
-        self._worker = OAuthOOBBeginWorker(parent=self)
-        self._worker.ready.connect(self._on_oob_ready)
-        self._worker.failed.connect(self._on_failure)
-        self._worker.start()
-
-    def _on_oob_ready(self, request_token, request_secret, url,
-                      loopback_active=False):
-        self._log.info('OAuth manual: request token received (loopback '
-                       'server running: %s).',
-                       'yes' if loopback_active else 'no')
-        self._oob_tokens = (request_token, request_secret)
-        self._on_url(url)
-        if not self.show_only_cb.isChecked():
-            QDesktopServices.openUrl(QUrl(url))
-        self.verifier_row.setVisible(True)
-        self.verifier_edit.setFocus()
-        if loopback_active:
-            from .mw_oauth import OAuthCallbackWatchWorker
-            self._manual_server = getattr(self._worker, 'server', None)
-            if self._manual_server is not None:
-                self._watcher = OAuthCallbackWatchWorker(
-                    self._manual_server, request_token, request_secret,
-                    parent=self)
-                self._watcher.succeeded.connect(self._on_success)
-                self._watcher.expired.connect(self._on_watch_expired)
-                self._watcher.start()
-            self._set_status(tr('Open the link and click "Allow". If the '
-                                'browser returns on its own you are done. '
-                                'Otherwise paste the code shown - or the '
-                                'whole 127.0.0.1 address from the browser, '
-                                'even if the page failed to load.'),
-                             'orange')
-        else:
-            self._set_status(tr('Open the link and click "Allow". Then paste '
-                                'either the code shown, or - if the browser '
-                                'jumps to a 127.0.0.1 address, even a failing '
-                                'one - that whole address, and press Finish.'),
-                             'orange')
-
-    def _on_watch_expired(self, message):
-        # NOT an error path: the manual field is still there, and the user
-        # may be halfway through pasting. Log it and stay open.
-        self._log.info('OAuth manual: automatic return did not happen (%s); '
-                       'the manual entry stays available.', message)
-
-    def _finish_paste(self):
-        """Route the pasted text to whichever flow is running."""
-        if not self.oauth1_cb.isChecked():
-            self._finish_oauth2_paste()
-        else:
-            self._finish_oob()
-
-    def _finish_oob(self):
-        if self._oob_tokens is None:
-            return
-        from .mw_oauth import OAuthOOBFinishWorker
-        raw = self.verifier_edit.text().strip()
-        code = verifier_from_input(raw)
-        if not code:
-            self._log.warning(
-                'OAuth manual: no usable verifier in the pasted text '
-                '(%d characters, looks like a URL: %s).',
-                len(raw), 'yes' if '://' in raw else 'no')
-            self._set_status(
-                tr('No confirmation found in what was pasted. Paste either '
-                   'the code or the complete 127.0.0.1 address from the '
-                   'browser.'), 'red')
-            return
-        if code != raw:
-            self._log.info('OAuth manual: verifier extracted from a pasted '
-                           'URL.')
-        self.finish_btn.setEnabled(False)
-        self.verifier_edit.setEnabled(False)
-        self._set_status(tr('Completing sign-in…'), 'orange')
-        rt, rs = self._oob_tokens
-        self._worker = OAuthOOBFinishWorker(rt, rs, code, parent=self)
-        self._worker.succeeded.connect(self._on_success)
-        self._worker.failed.connect(self._on_oob_finish_failed)
-        self._worker.start()
-
-    def _on_oob_finish_failed(self, message):
-        self._log.warning('OAuth manual: exchanging the confirmation '
-                          'failed: %s', message)
-        # keep the verifier field so the user can correct the code
-        self.finish_btn.setEnabled(True)
-        self.verifier_edit.setEnabled(True)
-        self._set_status(message, 'red')
-
-    def _on_url(self, url):
-        self._log.info('OAuth: authorization link ready (%s).',
-                       url.split('?', 1)[0] if url else '-')
-        self.url_edit.setText(url)
-        self.url_edit.setCursorPosition(0)
-        self.copy_btn.setEnabled(True)
-        self.open_btn.setEnabled(True)
-
-    def _copy_url(self):
-        QApplication.clipboard().setText(self.url_edit.text())
-        self._set_status(tr('Link copied.'), 'green')
-
-    def _open_url(self):
-        QDesktopServices.openUrl(QUrl(self.url_edit.text()))
-
-    def _on_success(self, token, secret, username):
-        self._log.info('OAuth: authorization completed for user "%s".',
-                       username)
-        self._stop_watcher()
-        stored = store_oauth_tokens(token, secret)
-        if stored:
-            self.settings.remove('oauth_token')
-            self.settings.remove('oauth_secret')
-        else:
-            # no keyring backend: same trust level as the old plaintext
-            # BotPassword - degrade, do not fail
-            self.settings.setValue('oauth_token', token)
-            self.settings.setValue('oauth_secret', secret)
-        self.settings.setValue('oauth_username', username)
-        self.settings.sync()
-        self.username = username
-        self.accept()
-
     def _on_failure(self, message):
         self._log.warning('OAuth: authorization failed: %s', message)
         self._set_status(message, 'red')
+        # 0.18.22: the failed worker is stopped here, not left running.
+        # Before, it kept its loopback server (and the port) and could
+        # still deliver a late result after a second attempt had started.
+        self._stop_worker()
         self.start_btn.setEnabled(True)
-        self.show_only_cb.setEnabled(True)
-        self.oob_cb.setEnabled(True)
 
     def _set_status(self, text, color):
         self.status_label.setText(text)
@@ -1178,26 +981,64 @@ class OAuthLoginDialog(QDialog):
         self.use_botpassword = True
         self.reject()
 
-    def _stop_watcher(self):
-        """Stop the loopback watcher and release the port (idempotent)."""
-        if self._watcher is not None:
-            self._watcher.cancel()
-            self._watcher.wait(2000)
-            self._watcher = None
-        if self._manual_server is not None:
-            self._manual_server.close()
-            self._manual_server = None
+    def _stop_worker(self):
+        """Stop the authorize worker and release the port (idempotent).
+
+        Disconnects first: a worker that is being torn down must not be
+        able to fire succeeded/failed into a dialog that no longer expects
+        it. Then cancel/stop, then wait - the port stays bound until the
+        thread is really gone.
+
+        A thread that does NOT stop in time is parked in _LIVE_WORKERS
+        rather than dropped. Dropping it would let Python collect it, and
+        deleting a running QThread is a qFatal - the abort() in Harald's
+        crash log. Parked threads end on their own (the run loop has a
+        timeout) and are swept up on the next call.
+        """
+        _sweep_live_workers()
+        worker = self._worker
+        self._worker = None
+        if worker is None:
+            return
+        for signal in ('ready', 'succeeded', 'failed'):
+            sig = getattr(worker, signal, None)
+            if sig is not None:
+                try:
+                    sig.disconnect()
+                except TypeError:            # nothing was connected
+                    pass
+        for name in ('cancel', 'stop'):
+            fn = getattr(worker, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:            # pragma: no cover
+                    pass
+        if worker.isRunning():
+            worker.wait(2000)
+        if worker.isRunning():
+            self._log.warning('OAuth: the authorization thread did not stop '
+                              'in time; it is parked until it does.')
+            setter = getattr(worker, 'setParent', None)
+            if callable(setter):
+                setter(None)
+            _LIVE_WORKERS.append(worker)
+
+    def done(self, result):
+        """Every way out of this dialog goes through here.
+
+        accept(), reject(), Escape and the window's close button all call
+        done(), so this is the ONE place that is guaranteed to run before
+        the dialog is torn down - and the worker must be gone by then.
+        """
+        self._stop_worker()
+        super().done(result)
 
     def reject(self):
         if self._worker is not None and self._worker.isRunning():
             self._log.info('OAuth: sign-in cancelled by the user.')
-            cancel = getattr(self._worker, 'cancel', None)
-            if callable(cancel):
-                cancel()
-            self._worker.wait(2000)
-        # The port must not stay bound after a cancelled sign-in, or the
-        # next attempt cannot bind it.
-        self._stop_watcher()
+        # done() does the stopping; the port must not stay bound after a
+        # cancelled sign-in, or the next attempt cannot bind it.
         super().reject()
 
 

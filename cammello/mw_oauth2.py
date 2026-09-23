@@ -41,7 +41,16 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from .constants import APP_NAME, __version__
 from .i18n import tr
-from .mw_oauth import LOOPBACK_PORT, MWOAuthError
+# 0.18.22: both used to live in mw_oauth (the 1.0a module) and were
+# borrowed from here. That module is gone, so they live here now.
+# LOOPBACK_PORT is 8127 and MUST NOT change: the registered callback
+# http://127.0.0.1:8127/cammello/ is compared EXACTLY by the OAuth 2
+# endpoint, and the registration cannot be edited afterwards.
+LOOPBACK_PORT = 8127
+
+
+class MWOAuthError(Exception):
+    """An authorization step failed, with a message fit for the dialog."""
 
 # The public client id of the registered non-confidential OAuth 2.0 client
 # ("Cammello", proposed 06.08.2026). Public by design - do NOT add a client
@@ -188,7 +197,7 @@ def code_from_input(text):
     """Extract the authorization code from pasted text.
 
     Accepts the bare code or a full redirect URL out of the address bar -
-    the same courtesy verifier_from_input() taught the 1.0a flow: when the
+    the same courtesy the old 1.0a flow was taught: when the
     loopback catch fails (firewall), the code sits in the URL and pasting
     the whole line must work.
     """
@@ -350,3 +359,9 @@ class OAuth2AuthorizeWorker(QThread):
 
     def stop(self):
         self._stopped = True
+
+
+# 0.18.22 had a browser CHOICE here (open -a Vivaldi and friends). It did
+# not work on Harald's Mac and he asked for it to go again: the default
+# browser is the only way now, and the copyable link is what a second
+# browser gets. Do not bring it back without testing on a real Mac.

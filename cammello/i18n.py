@@ -5061,6 +5061,30 @@ TRANSLATIONS = {
               'Tutto il resto viene ripreso così com’è.\n'
               'Esempio: {text} {c} diventa Berlinale 2026 4711',
     },
+    'Show the link only - do not open a browser': {
+        'de': 'Nur den Link anzeigen – keinen Browser öffnen',
+        'es': 'Mostrar solo el enlace: no abrir ningún navegador',
+        'fr': 'Afficher seulement le lien – n’ouvrir aucun navigateur',
+        'it': 'Mostra solo il collegamento – non aprire alcun browser',
+    },
+    'Starting…': {
+        'de': 'Wird gestartet …',
+        'es': 'Iniciando…',
+        'fr': 'Démarrage…',
+        'it': 'Avvio…',
+    },
+    'If the browser jumps to a 127.0.0.1 address - even one that fails to load - copy that entire address from the address bar and paste it here; Cammello reads the confirmation out of it.': {
+        'de': 'Springt der Browser auf eine 127.0.0.1-Adresse – auch auf eine, die nicht lädt –, kopiere diese ganze Adresse aus der Adresszeile und füge sie hier ein; Cammello liest die Bestätigung daraus.',
+        'es': 'Si el navegador salta a una dirección 127.0.0.1 —incluso a una que no carga—, copia esa dirección completa de la barra de direcciones y pégala aquí; Cammello extrae de ella la confirmación.',
+        'fr': 'Si le navigateur saute vers une adresse 127.0.0.1 – même une qui ne se charge pas –, copiez cette adresse entière depuis la barre d’adresse et collez-la ici ; Cammello y lit la confirmation.',
+        'it': 'Se il browser passa a un indirizzo 127.0.0.1 – anche a uno che non si carica –, copia quell’indirizzo per intero dalla barra degli indirizzi e incollalo qui; Cammello ne ricava la conferma.',
+    },
+    'Cammello asks Wikimedia for permission to upload and edit on Commons in your name. No password is entered in Cammello. Your browser opens the Wikimedia page; confirm there with "Allow" and Cammello receives the confirmation automatically.': {
+        'de': 'Cammello bittet Wikimedia um die Erlaubnis, in deinem Namen auf Commons hochzuladen und zu bearbeiten. In Cammello wird kein Passwort eingegeben. Dein Browser öffnet die Wikimedia-Seite; bestätige dort mit „Allow“, und Cammello erhält die Bestätigung automatisch.',
+        'es': 'Cammello pide a Wikimedia permiso para subir y editar en Commons en tu nombre. En Cammello no se introduce ninguna contraseña. Tu navegador abre la página de Wikimedia; confirma allí con «Allow» y Cammello recibe la confirmación automáticamente.',
+        'fr': 'Cammello demande à Wikimedia l’autorisation de téléverser et de modifier sur Commons en votre nom. Aucun mot de passe n’est saisi dans Cammello. Votre navigateur ouvre la page Wikimedia ; confirmez-y avec « Allow » et Cammello reçoit la confirmation automatiquement.',
+        'it': 'Cammello chiede a Wikimedia il permesso di caricare e modificare su Commons a tuo nome. In Cammello non si inserisce alcuna password. Il tuo browser apre la pagina di Wikimedia; conferma lì con «Allow» e Cammello riceve la conferma automaticamente.',
+    },
     'Rename': {
         'de': 'Umbenennen',
         'es': 'Renombrar',

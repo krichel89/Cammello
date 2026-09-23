@@ -35,7 +35,7 @@ from .widgets import (stored_oauth2_tokens, store_oauth2_tokens,
 from .editors import *
 from .i18n import current_language
 from . import sdc
-from . import mw_oauth
+from . import mw_oauth2
 from . import channels
 from . import previews
 from . import geo
@@ -96,14 +96,14 @@ class MWFilesMixin:
         that only says "you are already authorized" would be a step
         backwards from 0.12.7.
         """
-        if mw_oauth.is_configured():
+        # 0.18.22: the gate is the OAuth 2.0 client, not the old 1.0a
+        # consumer key. It used to be mw_oauth.is_configured(), which meant
+        # removing 1.0a would have switched OAuth 2 off with it (QK finding
+        # of 2026-08-07).
+        if mw_oauth2.is_configured():
             access, refresh = stored_oauth2_tokens()
             if access and not force:
                 self._login_with_stored_oauth2(access)
-                return
-            token, secret = stored_oauth_tokens()
-            if token and secret and not force:
-                self._login_with_stored_oauth(token, secret)
                 return
             dlg = OAuthLoginDialog(self)
             result = dlg.exec()
@@ -118,10 +118,6 @@ class MWFilesMixin:
             access, refresh = stored_oauth2_tokens()
             if access:
                 self._login_with_stored_oauth2(access)
-            else:
-                token, secret = stored_oauth_tokens()
-                if token and secret:
-                    self._login_with_stored_oauth(token, secret)
             if hasattr(self, '_refresh_oauth_status'):
                 self._refresh_oauth_status()
             return
@@ -153,14 +149,6 @@ class MWFilesMixin:
         self._start_login_worker(api_url, username, '',
                                  bearer_token=access,
                                  bearer_refresher=_refresher)
-
-    def _login_with_stored_oauth(self, token, secret):
-        s = QSettings(APP_NAME, 'Login')
-        api_url = (s.value('api_url', '')
-                   or 'https://commons.wikimedia.org/w/api.php')
-        username = s.value('oauth_username', '') or 'OAuth'
-        self._start_login_worker(api_url, username, '',
-                                 oauth_token=token, oauth_secret=secret)
 
     def _login_with_botpassword(self):
         dlg = LoginDialog(self)

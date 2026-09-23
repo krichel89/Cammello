@@ -21,7 +21,7 @@ def main():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from PyQt5.QtWidgets import QApplication, QDialog
     import Cammello                                  # noqa: F401
-    from cammello import mw_files, mw_oauth
+    from cammello import mw_files, mw_oauth2
     from cammello.logging_setup import setup_logging
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -53,13 +53,17 @@ def main():
 
     mw_files.OAuthLoginDialog = FakeOAuthDialog
     mw_files.LoginDialog = FakeLoginDialog
+    # 0.18.22: OAuth 1.0a is gone, so a sign-in is a BEARER sign-in. The
+    # gate is the 2.0 client, and the stored pair is the 2.0 token pair.
     w._start_login_worker = lambda *a, **kw: calls.append(
-        'signed-in-with-oauth' if kw.get('oauth_token') else 'signed-in-with-pw')
+        'signed-in-with-oauth' if kw.get('bearer_token')
+        else 'signed-in-with-pw')
 
     configured = [True]
     tokens = ['', '']
-    mw_oauth.is_configured = lambda: configured[0]
-    mw_files.stored_oauth_tokens = lambda: (tokens[0], tokens[1])
+    mw_oauth2.is_configured = lambda: configured[0]
+    mw_files.mw_oauth2 = mw_oauth2
+    mw_files.stored_oauth2_tokens = lambda: (tokens[0], tokens[1])
 
     # 1. Link / Login button, never authorized -> the OAUTH window, not the
     #    bot-password one. This is the 0.12.7 complaint.
@@ -73,7 +77,7 @@ def main():
     #    not merely authorized.
     calls.clear()
     FakeOAuthDialog.outcome = 'accept'
-    tokens[0], tokens[1] = 'tok', 'sec'
+    tokens[0], tokens[1] = 'access', 'refresh'
     w.do_login.__self__  # noqa: B018  (mixin sanity)
     w.open_signin_dialog(force=True)
     check('authorizing signs in straight away',
