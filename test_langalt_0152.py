@@ -327,10 +327,20 @@ check('custom name + sequence numbers them', _scheme('text_seq')[0]
       == 'testI-1')
 check('x of y counts', _scheme('text_xofy')[0] == 'testI (1 of 3)')
 check('the original name can be kept', _scheme('orig')[0] == 'IMG_66330')
-check('date + original name', _scheme('date_orig')[0]
-      == '2026-07-29-IMG_66330')
-check('date + text + sequence', _scheme('date_text_seq')[0]
-      == '2026-07-29-testI-1')
+# 0.18.21: the two date schemes were dropped (Harald) - a capture date in
+# a Commons filename is noise. {date} lives on in the free template, which
+# is what is checked instead.
+check('no date scheme is offered any more',
+      not any(k.startswith('date_') for k, *_r in BulkRenameDialog.SCHEMES),
+      str([k for k, *_r in BulkRenameDialog.SCHEMES]))
+_dlg.scheme_combo.setCurrentIndex(_dlg.scheme_combo.findData('template'))
+_dlg.template_edit.setText('{date}-{name}')
+check('but {date} still works in the free template',
+      _dlg.names()[0] == '2026-07-29-IMG_66330', _dlg.names()[0])
+check('and the placeholders are explained in a tooltip',
+      all(ph in _dlg.template_edit.toolTip()
+          for ph in ('{name}', '{c}', '{n}', '{text}', '{date}')),
+      _dlg.template_edit.toolTip()[:50])
 
 # Inputs enable themselves per scheme, as Photos greys its start number.
 _scheme('text_orig')

@@ -386,19 +386,20 @@ class MainWindow(FlickrMixin,
         # stylesheet here would win over it and drift again.
         self.upload_btn.setProperty('cammelloPrimary', True)
 
-        # 0.18.19 (Harald): "eine Funktion, die vor dem Hochladen per
-        # Knopfdruck sinnvolle Dateinamen aus den Beschreibungen erzeugt".
-        # An ICON button, not a labelled one: this row is the one that used
-        # to paint over itself with long German labels, and a label here
-        # would undo what 0.18.18 just won in the culling toolbar.
-        self.names_btn = icon_button(
-            lucide('nametag', self.palette().buttonText().color()),
-            tr('Names from descriptions'))
-        self.names_btn.clicked.connect(self._names_from_descriptions)
+        # 0.18.21 (Harald): the two ways of renaming became one. The bar
+        # carries the WORD "Rename" - it is the entry point people look for
+        # - and F2 opens exactly the same dialog. The caption schemes that
+        # used to be a separate icon button live inside that dialog now.
+        self.rename_btn = QPushButton(tr('Rename'))
+        self.rename_btn.setToolTip(tr('Rename the selected files (F2)'))
+        self.rename_btn.clicked.connect(self._rename_selected)
+        # Kept under its old name as well: the colour-scheme repaint and
+        # the 0.18.19 tests reach for names_btn.
+        self.names_btn = self.rename_btn
 
         toolbar.addWidget(self.login_label)
         toolbar.addStretch()
-        toolbar.addWidget(self.names_btn)
+        toolbar.addWidget(self.rename_btn)
         toolbar.addWidget(self.open_folder_btn)
         toolbar.addWidget(self._workflow_label)
         toolbar.addWidget(self.workflow_combo)
@@ -429,8 +430,8 @@ class MainWindow(FlickrMixin,
             ht.setToolTip(tr('Name under which the file is stored on Commons '
                           '(without "File:"). The extension is taken from the '
                           'source file and cannot be changed. Empty = source filename.')
-                          + ' ' + tr('F2 renames; with several rows selected '
-                                     'F2 opens the bulk rename.'))
+                          + ' ' + tr('F2 and the Rename button open the '
+                                     'rename dialog.'))
         hs = self.table.horizontalHeaderItem(self.COL_FILENAME)
         if hs:
             hs.setToolTip(tr('Local source file (not modified).'))

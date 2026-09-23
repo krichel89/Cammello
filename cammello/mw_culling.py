@@ -1801,12 +1801,9 @@ class MWCullingMixin:
         self.cull_clear_filter_btn.setIcon(lucide('filter_off', ink))
         self.cull_open_btn.setIcon(lucide('folder', ink))
         self.cull_reload_btn.setIcon(lucide('reload', ink))
-        # 0.18.20: the MediaWiki tab's name button is inked from the same
-        # palette, so it has to be repainted here too - it used to keep the
-        # colour it was built with and vanished after a scheme change.
-        names = getattr(self, 'names_btn', None)
-        if names is not None:
-            names.setIcon(lucide('nametag', ink))
+        # 0.18.20 repainted the MediaWiki tab's name button here as well.
+        # 0.18.21 turned it into the labelled "Rename" button, which has no
+        # icon to ink - nothing to do for it any more.
         hidden = getattr(self, '_cull_filter_collapsed', False)
         marked = hidden and self._cull_filter_active()
         self.cull_filter_toggle.setIcon(

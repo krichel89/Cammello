@@ -68,6 +68,119 @@ class FilenameDelegate(QStyledItemDelegate):
 # ── Bulk rename dialog (F2 with several rows selected) ────────────────────────
 
 
+class CaptionNameOptions(QWidget):
+    """The three controls that shape a name built from a caption (0.18.21).
+
+    One widget, used by BOTH the naming button's preview and the rename
+    dialog, so the two cannot offer different options or remember different
+    things. It carries:
+
+      * the caption LANGUAGE (English preselected - a Commons filename is
+        English by convention),
+      * the ORDER of person and event,
+      * the CONNECTOR between them, free text with the last ones offered
+        as a list, the way the category history works in the SDC editor.
+
+    Everything is remembered in QSettings(APP_NAME, 'CaptionNames'), so it
+    is the same set of choices whichever of the two ways is used.
+    """
+
+    changed = pyqtSignal()
+    HISTORY_MAX = 8
+
+    def __init__(self, languages=(), parent=None):
+        super().__init__(parent)
+        self.settings = QSettings(APP_NAME, 'CaptionNames')
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        row.addWidget(QLabel(tr('Caption language:')))
+        self.lang_combo = QComboBox()
+        for code in (languages or ['en']):
+            self.lang_combo.addItem(code, code)
+        if self.lang_combo.count() == 0:
+            self.lang_combo.addItem('en', 'en')
+        # English first if the selection has it - see the class docstring.
+        # A remembered language only wins when this selection HAS it.
+        want = self.settings.value('lang', 'en')
+        idx = self.lang_combo.findData(want)
+        if idx < 0:
+            idx = self.lang_combo.findData('en')
+        self.lang_combo.setCurrentIndex(max(0, idx))
+        row.addWidget(self.lang_combo)
+
+        row.addSpacing(10)
+        row.addWidget(QLabel(tr('Order:')))
+        self.order_combo = QComboBox()
+        self.order_combo.addItem(tr('Person, then event'), True)
+        self.order_combo.addItem(tr('Event, then person'), False)
+        first = self.settings.value('person_first', True, type=bool)
+        self.order_combo.setCurrentIndex(0 if first else 1)
+        row.addWidget(self.order_combo)
+
+        row.addSpacing(10)
+        row.addWidget(QLabel(tr('Joined by:')))
+        self.conn_combo = QComboBox()
+        self.conn_combo.setEditable(True)
+        self.conn_combo.setMinimumWidth(90)
+        self.conn_combo.setToolTip(tr(
+            'What stands between the two, spaces and all. Examples: '
+            '" at ", " - ", ", ".'))
+        for text in self.history():
+            # Quoted in the LIST so the spaces are visible; the quotes are
+            # stripped again in connector().
+            self.conn_combo.addItem(f'"{text}"', text)
+        self.conn_combo.setCurrentIndex(0)
+        self.conn_combo.setEditText(self.history()[0])
+        row.addWidget(self.conn_combo)
+        row.addStretch(1)
+
+        self.lang_combo.currentIndexChanged.connect(
+            lambda _i: self.changed.emit())
+        self.order_combo.currentIndexChanged.connect(
+            lambda _i: self.changed.emit())
+        self.conn_combo.editTextChanged.connect(
+            lambda _t: self.changed.emit())
+
+    # ── values ───────────────────────────────────────────────────────────
+    def history(self):
+        """The remembered connectors, most recent first, never empty."""
+        stored = self.settings.value('connectors', None)
+        if isinstance(stored, str):
+            stored = [stored]
+        out = [c for c in (stored or []) if isinstance(c, str) and c]
+        for fallback in (sdc.NAME_CONNECTOR_DEFAULT, ' - ', ', '):
+            if fallback not in out:
+                out.append(fallback)
+        return out[:self.HISTORY_MAX]
+
+    def language(self):
+        return self.lang_combo.currentData() or 'en'
+
+    def person_first(self):
+        return bool(self.order_combo.currentData())
+
+    def connector(self):
+        """The connector as typed - a chosen list entry loses its quotes."""
+        text = self.conn_combo.currentText()
+        idx = self.conn_combo.findText(text)
+        if idx >= 0 and self.conn_combo.itemData(idx) is not None:
+            return self.conn_combo.itemData(idx)
+        if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+            return text[1:-1]
+        return text
+
+    def remember(self):
+        """Store the three choices. Call it when the dialog is accepted -
+        not while typing, or a half-typed connector would be learned."""
+        self.settings.setValue('lang', self.language())
+        self.settings.setValue('person_first', self.person_first())
+        conn = self.connector()
+        if conn:
+            hist = [conn] + [c for c in self.history() if c != conn]
+            self.settings.setValue('connectors', hist[:self.HISTORY_MAX])
+
+
 class NamesFromDescriptionDialog(QDialog):
     """Shows what the naming button would write, before it writes it.
 
@@ -75,48 +188,88 @@ class NamesFromDescriptionDialog(QDialog):
     not something to overwrite on a mis-click - so the old and the new name
     stand side by side and the run has to be confirmed. Rows without a
     caption are listed with an empty right-hand side and stay untouched.
+
+    0.18.21: the three caption options sit above the list and the list is
+    rebuilt while they are changed, so the effect of another order or
+    another connector is visible before anything is written.
     """
 
-    def __init__(self, pairs, without, parent=None):
+    def __init__(self, rows, parent=None, digits=0, exts=None):
         super().__init__(parent)
         self.setWindowTitle(tr('Names from descriptions') + f' - {APP_NAME}')
-        self.setMinimumSize(720, 420)
+        self.setMinimumSize(760, 460)
         self.setStyleSheet(current_input_style())
+        self._rows = list(rows or [])
+        self._digits = digits
+        self._exts = list(exts or [])
+        self._names = []
         layout = QVBoxLayout(self)
 
-        named = sum(1 for _old, new in pairs if new)
-        head = QLabel(tr('{n} of {total} file(s) get a name from their '
-                         'caption.').format(n=named, total=len(pairs)))
-        layout.addWidget(head)
+        self.options = CaptionNameOptions(
+            sdc.caption_languages([r.get('captions') or {}
+                                   for r in self._rows]), self)
+        layout.addWidget(self.options)
 
-        table = QTableWidget(len(pairs), 2, self)
-        table.setHorizontalHeaderLabels([tr('Now'), tr('New')])
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        for row, (old, new) in enumerate(pairs):
+        self.head = QLabel()
+        layout.addWidget(self.head)
+
+        self.table = QTableWidget(len(self._rows), 2, self)
+        self.table.setHorizontalHeaderLabels([tr('Now'), tr('New')])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch)
+        layout.addWidget(self.table, 1)
+
+        self.note = QLabel()
+        self.note.setStyleSheet('color: gray;')
+        layout.addWidget(self.note)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok
+                                        | QDialogButtonBox.Cancel)
+        self.buttons.button(QDialogButtonBox.Ok).setText(tr('Rename'))
+        self.buttons.accepted.connect(self._on_accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        self.options.changed.connect(self._refresh)
+        self._refresh()
+
+    def _refresh(self):
+        self._names = sdc.propose_names(
+            self._rows, lang=self.options.language(),
+            connector=self.options.connector(),
+            person_first=self.options.person_first(),
+            digits=self._digits)
+        named = sum(1 for n in self._names if n)
+        without = len(self._names) - named
+        self.head.setText(tr('{n} of {total} file(s) get a name from their '
+                             'caption.').format(n=named,
+                                                total=len(self._names)))
+        for row, new in enumerate(self._names):
+            old = self._rows[row].get('old') or ''
+            ext = self._exts[row] if row < len(self._exts) else ''
             left = QTableWidgetItem(old)
-            right = QTableWidgetItem(new or tr('(no caption - unchanged)'))
+            right = QTableWidgetItem((new + ext) if new
+                                     else tr('(no caption - unchanged)'))
             if not new:
                 for cell in (left, right):
                     cell.setForeground(QColor('#909090'))
-            table.setItem(row, 0, left)
-            table.setItem(row, 1, right)
-        layout.addWidget(table, 1)
+            self.table.setItem(row, 0, left)
+            self.table.setItem(row, 1, right)
+        self.note.setText(
+            tr('{n} file(s) have no caption and keep the name they have.')
+            .format(n=without) if without else '')
+        self.note.setVisible(bool(without))
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(bool(named))
 
-        if without:
-            note = QLabel(tr('{n} file(s) have no caption and keep the name '
-                             'they have.').format(n=without))
-            note.setStyleSheet('color: gray;')
-            layout.addWidget(note)
+    def names(self):
+        """The proposed base names, '' for a row that is to be left alone."""
+        return list(self._names)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok
-                                   | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText(tr('Rename'))
-        buttons.button(QDialogButtonBox.Ok).setEnabled(bool(named))
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+    def _on_accept(self):
+        self.options.remember()
+        self.accept()
 
 
 class BulkRenameDialog(QDialog):
@@ -154,24 +307,22 @@ class BulkRenameDialog(QDialog):
         # 0.18.19: built from the caption instead of from typed text. The
         # builder falls back on its own - no caption means no person, and
         # the row keeps the running number rather than a name of nothing.
-        ('caption_person_event', 'Person at event - original file number',
-         lambda c: sdc.name_from_caption(c['caption'], c['name'], c['seq'])
-         or c['name'] or c['seq'], False, True),
+        # 0.18.21: person from the caption, event from the file's own
+        # created_during field, joined by whatever the caption options say.
+        ('caption_person_event', 'Person and event - original file number',
+         lambda c: c['from_caption'] or c['name'] or c['seq'], False, True),
         ('caption_person', 'Person - original file number',
-         lambda c: sdc.name_from_caption(c['caption'], c['name'], c['seq'],
-                                         with_event=False)
-         or c['name'] or c['seq'], False, True),
+         lambda c: c['from_caption_only'] or c['name'] or c['seq'],
+         False, True),
         ('orig', 'Original file name',
          lambda c: c['name'] or c['seq'], False, False),
         ('orig_seq', 'Original file name - sequence',
          lambda c: f"{c['name']}-{c['seq']}" if c['name'] else c['seq'],
          False, True),
-        ('date_orig', 'Date - original file name',
-         lambda c: '-'.join(p for p in (c['date'], c['name'] or c['seq'])
-                            if p), False, False),
-        ('date_text_seq', 'Date - custom name - sequence',
-         lambda c: '-'.join(p for p in (c['date'], c['text'], c['seq'])
-                            if p), True, True),
+        # The two date schemes are gone (0.18.21, Harald): a capture date
+        # in a Commons filename is noise - the date is in the metadata and
+        # on the file page. {date} survives in the free template for
+        # anyone who does want it.
         ('template', 'Custom template\u2026', None, False, True),
     ]
 
@@ -182,7 +333,7 @@ class BulkRenameDialog(QDialog):
     DIGITS_MAX = 6
 
     def __init__(self, count, parent=None, sources=None, exts=None,
-                 dates=None, captions=None):
+                 dates=None, captions=None, caption_rows=None):
         super().__init__(parent)
         self.setWindowTitle(tr('Rename {count} files').format(count=count))
         self.setMinimumWidth(520)
@@ -193,6 +344,24 @@ class BulkRenameDialog(QDialog):
         self._dates = list(dates or [])
         # 0.18.19: the caption of each row, for the two caption schemes.
         self._captions = list(captions or [])
+        # 0.18.21: the full per-row material for the caption schemes -
+        # every language's caption plus the created_during field. Built
+        # from `captions` when a caller still passes only the plain text,
+        # so the older call sites keep working.
+        self._caption_rows = list(caption_rows or [
+            {'captions': {'en': c}, 'event': '', 'source': ''}
+            for c in self._captions])
+        # Padded to `count`: a caller may pass fewer caption rows than rows
+        # (or none at all - the dialog is used for schemes that never touch
+        # a caption), and _context() indexes this per row. Without the
+        # padding the caption schemes raised IndexError the moment the
+        # dialog was built without captions - caught by test_folder_0160.
+        while len(self._caption_rows) < count:
+            self._caption_rows.append({'captions': {}, 'event': '',
+                                       'source': ''})
+        for i, row in enumerate(self._caption_rows):
+            if not row.get('source') and i < len(self._sources):
+                row['source'] = self._sources[i]
         # Derived once from the selection, not asked for (0.16.0).
         self._digits = self.auto_digits(self._sources)
         self.settings = QSettings(APP_NAME, 'BulkRename')
@@ -220,12 +389,32 @@ class BulkRenameDialog(QDialog):
         self.template_edit = QLineEdit(self.settings.value('template', '')
                                        or '')
         self.template_edit.setPlaceholderText('{date} {text} {c}')
-        self.template_edit.setToolTip(tr(
-            'Free template. {n} running number, {c} original file number, '
-            '{name}\noriginal file name, {text} the custom text above, '
-            '{date} the capture date.'))
+        # 0.18.21 (Harald): the placeholders have to be explained where
+        # they are typed. On BOTH the field and its caption - a tooltip
+        # only on the field is missed by anyone who reads the label first.
+        # Dashes, not padded columns: a tooltip is drawn in the
+        # proportional interface font, where aligned columns fray.
+        tpl_help = tr(
+            'Placeholders for the free template:\n'
+            '{name} - the original file name, without extension\n'
+            '{c} - the number the camera wrote into that name\n'
+            '{n} - a running number, starting at the start number\n'
+            '{text} - whatever stands in the custom text field\n'
+            '{date} - the capture date, as YYYY-MM-DD\n'
+            'Anything else is taken over as it is.\n'
+            'Example: {text} {c} becomes Berlinale 2026 4711')
+        self.template_edit.setToolTip(tpl_help)
         self.template_row_label = QLabel(tr('Template:'))
+        self.template_row_label.setToolTip(tpl_help)
         form.addRow(self.template_row_label, self.template_edit)
+
+        # The three caption controls, the same widget the naming button
+        # shows - one place, one memory (0.18.21).
+        self.caption_options = CaptionNameOptions(
+            sdc.caption_languages([r.get('captions') or {}
+                                   for r in self._caption_rows]), self)
+        self.caption_row_label = QLabel(tr('From the caption:'))
+        form.addRow(self.caption_row_label, self.caption_options)
 
         self.preview_lbl = QLabel()
         self.preview_lbl.setWordWrap(True)
@@ -236,6 +425,7 @@ class BulkRenameDialog(QDialog):
         for w in (self.text_edit, self.template_edit):
             w.textChanged.connect(self._update_preview)
         self.start_spin.valueChanged.connect(self._update_preview)
+        self.caption_options.changed.connect(self._invalidate_names)
         self._update_enabled()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok |
@@ -261,7 +451,15 @@ class BulkRenameDialog(QDialog):
         self.start_spin.setEnabled(needs_start)
         self.template_edit.setVisible(is_template)
         self.template_row_label.setVisible(is_template)
-        self._update_preview()
+        from_caption = key.startswith('caption_')
+        self.caption_options.setVisible(from_caption)
+        self.caption_row_label.setVisible(from_caption)
+        # Only the two-part scheme has anything to join or to order.
+        self.caption_options.order_combo.setEnabled(key
+                                                    == 'caption_person_event')
+        self.caption_options.conn_combo.setEnabled(key
+                                                   == 'caption_person_event')
+        self._invalidate_names()
 
     @classmethod
     def auto_digits(cls, sources):
@@ -303,7 +501,42 @@ class BulkRenameDialog(QDialog):
             'text': self.text_edit.text().strip(),
             'caption': (self._captions[i]
                         if i < len(self._captions) else ''),
+            # Built by sdc.propose_names for the whole selection at once -
+            # it is what resolves the collisions, which cannot be decided
+            # one row at a time.
+            'from_caption': self._caption_names(True)[i],
+            'from_caption_only': self._caption_names(False)[i],
         }
+
+    def _invalidate_names(self):
+        """Forget the cached caption names and redraw the example."""
+        self._caption_cache = {}
+        self._update_preview()
+
+    def _caption_names(self, with_event):
+        """The caption-built names for the whole selection, cached.
+
+        Cached because _context() asks per row while the preview and
+        names() walk every row - without it the whole selection would be
+        recomputed once per row.
+        """
+        cache = getattr(self, '_caption_cache', None)
+        if cache is None:
+            cache = self._caption_cache = {}
+        key = (with_event, self.caption_options.language(),
+               self.caption_options.connector(),
+               self.caption_options.person_first(),
+               self.start_spin.value())
+        hit = cache.get(key)
+        if hit is None:
+            hit = cache[key] = sdc.propose_names(
+                self._caption_rows,
+                lang=self.caption_options.language(),
+                connector=self.caption_options.connector(),
+                person_first=self.caption_options.person_first(),
+                with_event=with_event, digits=self._digits,
+                start=self.start_spin.value())
+        return hit
 
     def names(self):
         """The final base names (without extension), one per selected row."""
@@ -354,6 +587,8 @@ class BulkRenameDialog(QDialog):
         self.settings.setValue('text', self.text_edit.text().strip())
         self.settings.setValue('template', self.template_edit.text().strip())
         self.settings.setValue('start', self.start_spin.value())
+        if key.startswith('caption_'):
+            self.caption_options.remember()
         self.accept()
 
 

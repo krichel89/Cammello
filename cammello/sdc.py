@@ -372,6 +372,118 @@ _PERCENT_RE = re.compile('%[0-9A-Fa-f]{2}')
 _ENTITY_RE = re.compile('&(?:[A-Za-z0-9\u0080-ÿ]+|#[0-9]+|#x[0-9A-Fa-f]+);')
 
 
+NAME_CONNECTOR_DEFAULT = ' at '
+
+
+def name_from_parts(person, event='', source_stem='', seq='',
+                    connector=NAME_CONNECTOR_DEFAULT, person_first=True,
+                    digits=0):
+    """Build one target filename stem from the two halves (0.18.21).
+
+    The older name_from_caption() cut the event out of the caption text,
+    which only worked when the caption actually said "at". This takes the
+    two halves as they are - the person from the caption, the event from
+    the file's own created_during field - and joins them with whatever
+    connector the user chose, in whichever order.
+
+    Either half may be empty; with both empty the result is ''. The number
+    is the camera's own counter when the source name has one, else `seq`.
+    """
+    person = normalize_title_spacing(person or '')
+    event = normalize_title_spacing(event or '')
+    if not person and not event:
+        return ''
+    if person and event:
+        conn = connector if connector is not None else NAME_CONNECTOR_DEFAULT
+        head, tail = ((person, event) if person_first else (event, person))
+        core = f'{head}{conn}{tail}'
+    else:
+        core = person or event
+    number = camera_number(source_stem, digits) or str(seq or '').strip()
+    if number:
+        core = f'{core} {number}'
+    # NOT normalize_title_spacing: that would eat a connector made only of
+    # spaces around a dash into a single space. Only the outer ends are
+    # tidied, and the halves were normalized above.
+    return core.strip()
+
+
+def caption_languages(rows):
+    """The caption languages present across `rows`, English first.
+
+    `rows` is a list of {lang: text} dicts. Sorted so the list is stable,
+    with 'en' pulled to the front because a Commons filename is English by
+    convention - it is what the caller preselects.
+    """
+    found = set()
+    for row in rows or []:
+        for code, text in (row or {}).items():
+            if (text or '').strip():
+                found.add(code)
+    ordered = sorted(found)
+    if 'en' in found:
+        ordered.remove('en')
+        ordered.insert(0, 'en')
+    return ordered
+
+
+def propose_names(rows, lang='en', connector=NAME_CONNECTOR_DEFAULT,
+                  person_first=True, with_event=True, digits=0, start=1):
+    """The proposed base names for a whole selection (0.18.21).
+
+    One pure function so the naming button and the rename dialog cannot
+    drift apart. `rows` is a list of dicts:
+        captions  {lang: text}
+        event     the created_during value, '' when there is none
+        source    the source file stem, for the camera's own number
+
+    Returns a list as long as `rows`; an entry is '' when that row has no
+    caption in any language and is therefore to be left alone.
+
+    Identical names collide on Commons, so every member of a colliding set
+    gets the running number - not just the second one, or the numbering
+    would look arbitrary.
+    """
+    rows = list(rows or [])
+    width = len(str(start + len(rows) - 1)) if rows else 1
+    out = []
+    for i, row in enumerate(rows):
+        captions = row.get('captions') or {}
+        caption = (captions.get(lang) or '').strip()
+        if not caption:
+            # The chosen language is empty for this row: any caption beats
+            # no name at all, English first.
+            for code in caption_languages([captions]):
+                caption = (captions.get(code) or '').strip()
+                if caption:
+                    break
+        if not caption:
+            out.append('')
+            continue
+        # Only the PERSON half comes out of the caption. The event is the
+        # file's own created_during field and nothing else (Harald's
+        # decision, 0.18.21): cutting it out of the caption text only ever
+        # worked when the caption happened to say "at". A file without that
+        # field therefore gets a name without an event, where 0.18.19 would
+        # have guessed one.
+        person, _event_in_caption = split_caption(caption)
+        event = (row.get('event') or '').strip() if with_event else ''
+        out.append(name_from_parts(person, event, row.get('source') or '',
+                                   str(start + i).zfill(width),
+                                   connector=connector,
+                                   person_first=person_first,
+                                   digits=digits))
+    named = [n for n in out if n]
+    if len(set(named)) != len(named):
+        seen = {}
+        for name in named:
+            seen[name] = seen.get(name, 0) + 1
+        out = [(f'{n} {str(start + i).zfill(width)}'
+                if n and seen.get(n, 0) > 1 else n)
+               for i, n in enumerate(out)]
+    return out
+
+
 def normalize_title_spacing(name):
     """Apply MediaWiki's own whitespace rules to `name`.
 

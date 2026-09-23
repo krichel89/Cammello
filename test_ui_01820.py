@@ -114,11 +114,10 @@ else:
               0 < len(btn.toolTip()) <= 40 and '\n' not in btn.toolTip(),
               repr(btn.toolTip()))
 
+    # 0.18.21 turned the tag icon into the labelled "Rename" button, so
+    # there is no icon left to compare - only the short tooltip rule holds.
     if hasattr(w, 'names_btn'):
-        mine = w.names_btn.icon().pixmap(18, 18).toImage()
-        want = widgets.lucide('nametag', ink, 18).pixmap(18, 18).toImage()
-        check('the name button shows the Lucide tag', mine == want)
-        check('and its tooltip is short too',
+        check('the name button keeps a short tooltip',
               len(w.names_btn.toolTip()) <= 40, repr(w.names_btn.toolTip()))
 
     # ── 6. the filter sits in a row of its own ──────────────────────────

@@ -4966,6 +4966,101 @@ TRANSLATIONS = {
         'fr': 'Personne à l’événement – numéro d’origine',
         'it': 'Persona all’evento – numero originale',
     },
+    'Rename the selected files (F2)': {
+        'de': 'Markierte Dateien umbenennen (F2)',
+        'es': 'Renombrar los archivos seleccionados (F2)',
+        'fr': 'Renommer les fichiers sélectionnés (F2)',
+        'it': 'Rinomina i file selezionati (F2)',
+    },
+    'Caption language:': {
+        'de': 'Sprache der Bildunterschrift:',
+        'es': 'Idioma del pie de foto:',
+        'fr': 'Langue de la légende :',
+        'it': 'Lingua della didascalia:',
+    },
+    'Person, then event': {
+        'de': 'Person, dann Veranstaltung',
+        'es': 'Persona, luego evento',
+        'fr': 'Personne, puis événement',
+        'it': 'Persona, poi evento',
+    },
+    'Event, then person': {
+        'de': 'Veranstaltung, dann Person',
+        'es': 'Evento, luego persona',
+        'fr': 'Événement, puis personne',
+        'it': 'Evento, poi persona',
+    },
+    'Joined by:': {
+        'de': 'Verbunden mit:',
+        'es': 'Unidos por:',
+        'fr': 'Reliés par :',
+        'it': 'Uniti da:',
+    },
+    'What stands between the two, spaces and all. Examples: " at ", " - ", ", ".': {
+        'de': 'Was zwischen beiden steht, Leerzeichen inbegriffen. Beispiele: " at ", " - ", ", ".',
+        'es': 'Lo que va entre ambos, espacios incluidos. Ejemplos: " at ", " - ", ", ".',
+        'fr': 'Ce qui sépare les deux, espaces compris. Exemples : " at ", " - ", ", ".',
+        'it': 'Ciò che sta fra i due, spazi compresi. Esempi: " at ", " - ", ", ".',
+    },
+    'From the caption:': {
+        'de': 'Aus der Bildunterschrift:',
+        'es': 'Del pie de foto:',
+        'fr': 'À partir de la légende :',
+        'it': 'Dalla didascalia:',
+    },
+    'Person and event - original file number': {
+        'de': 'Person und Veranstaltung – ursprüngliche Dateinummer',
+        'es': 'Persona y evento: número de archivo original',
+        'fr': 'Personne et événement – numéro de fichier d’origine',
+        'it': 'Persona ed evento – numero di file originale',
+    },
+    'F2 and the Rename button open the rename dialog.': {
+        'de': 'F2 und der Knopf „Umbenennen" öffnen denselben Dialog.',
+        'es': 'F2 y el botón Renombrar abren el mismo diálogo.',
+        'fr': 'F2 et le bouton Renommer ouvrent la même boîte de dialogue.',
+        'it': 'F2 e il pulsante Rinomina aprono la stessa finestra.',
+    },
+    'Placeholders for the free template:\n'
+    '{name} - the original file name, without extension\n'
+    '{c} - the number the camera wrote into that name\n'
+    '{n} - a running number, starting at the start number\n'
+    '{text} - whatever stands in the custom text field\n'
+    '{date} - the capture date, as YYYY-MM-DD\n'
+    'Anything else is taken over as it is.\n'
+    'Example: {text} {c} becomes Berlinale 2026 4711': {
+        'de': 'Platzhalter für die freie Vorlage:\n'
+              '{name} - der ursprüngliche Dateiname, ohne Endung\n'
+              '{c} - die Nummer, die die Kamera in diesen Namen geschrieben hat\n'
+              '{n} - eine laufende Nummer, ab der Startnummer\n'
+              '{text} - was im Feld „Eigener Text" steht\n'
+              '{date} - das Aufnahmedatum, als JJJJ-MM-TT\n'
+              'Alles andere wird unverändert übernommen.\n'
+              'Beispiel: {text} {c} wird zu Berlinale 2026 4711',
+        'es': 'Marcadores de la plantilla libre:\n'
+              '{name} - el nombre de archivo original, sin extensión\n'
+              '{c} - el número que la cámara escribió en ese nombre\n'
+              '{n} - un número correlativo, desde el número inicial\n'
+              '{text} - lo que haya en el campo de texto propio\n'
+              '{date} - la fecha de captura, como AAAA-MM-DD\n'
+              'Todo lo demás se copia tal cual.\n'
+              'Ejemplo: {text} {c} se convierte en Berlinale 2026 4711',
+        'fr': 'Variables du modèle libre :\n'
+              '{name} - le nom de fichier d’origine, sans extension\n'
+              '{c} - le numéro que l’appareil a inscrit dans ce nom\n'
+              '{n} - un numéro d’ordre, à partir du numéro de départ\n'
+              '{text} - ce qui figure dans le champ de texte personnalisé\n'
+              '{date} - la date de prise de vue, au format AAAA-MM-JJ\n'
+              'Tout le reste est repris tel quel.\n'
+              'Exemple : {text} {c} devient Berlinale 2026 4711',
+        'it': 'Segnaposto per il modello libero:\n'
+              '{name} - il nome di file originale, senza estensione\n'
+              '{c} - il numero che la fotocamera ha scritto in quel nome\n'
+              '{n} - un numero progressivo, a partire dal numero iniziale\n'
+              '{text} - ciò che sta nel campo di testo personalizzato\n'
+              '{date} - la data di scatto, come AAAA-MM-GG\n'
+              'Tutto il resto viene ripreso così com’è.\n'
+              'Esempio: {text} {c} diventa Berlinale 2026 4711',
+    },
     'Rename': {
         'de': 'Umbenennen',
         'es': 'Renombrar',

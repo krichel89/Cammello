@@ -247,11 +247,20 @@ from cammello.widgets import NamesFromDescriptionDialog
 
 app = QApplication.instance() or QApplication(sys.argv)
 
+# 0.18.21: the event half comes from created_during, not out of the
+# caption text - so the rows carry the field now. The expectations below
+# are unchanged; this is the same result by the supported route.
 dlg = BulkRenameDialog(
     3, None, sources=['IMG_4711', 'IMG_4712', 'IMG_4713'],
     exts=['.jpg'] * 3, dates=['2026-02-14'] * 3,
     captions=['Anna Mueller at the Berlinale 2026',
-              'Anna Mueller at the Berlinale 2026', ''])
+              'Anna Mueller at the Berlinale 2026', ''],
+    caption_rows=[
+        {'captions': {'en': 'Anna Mueller at the Berlinale 2026'},
+         'event': 'Berlinale 2026', 'source': 'IMG_4711'},
+        {'captions': {'en': 'Anna Mueller at the Berlinale 2026'},
+         'event': 'Berlinale 2026', 'source': 'IMG_4712'},
+        {'captions': {}, 'event': 'Berlinale 2026', 'source': 'IMG_4713'}])
 for key, want in (('caption_person_event', 'Anna Mueller at Berlinale 2026'),
                   ('caption_person', 'Anna Mueller')):
     idx = dlg.scheme_combo.findData(key)
@@ -268,9 +277,14 @@ dlg.deleteLater()
 
 from PyQt5.QtWidgets import QTableWidget
 
+# 0.18.21: the dialog builds the proposal itself from the material, so
+# that is what it is handed now instead of ready-made pairs.
 preview = NamesFromDescriptionDialog(
-    [('IMG_4711.jpg', 'Anna Mueller at Berlinale 2026 4711.jpg'),
-     ('IMG_4712.jpg', '')], 1, None)
+    [{'captions': {'en': 'Anna Mueller at the Berlinale 2026'},
+      'event': 'Berlinale 2026', 'source': 'IMG_4711',
+      'old': 'IMG_4711.jpg'},
+     {'captions': {}, 'event': '', 'source': 'IMG_4712',
+      'old': 'IMG_4712.jpg'}], None, digits=4, exts=['.jpg'] * 2)
 tbl = preview.findChild(QTableWidget)
 check('the preview shows a table', tbl is not None)
 check('with one row per file', tbl is not None and tbl.rowCount() == 2)
@@ -297,12 +311,13 @@ QMessageBox.information = staticmethod(lambda *a, **k: None)
 
 w = Cammello.MainWindow(logger, emitter, gui_handler, log_path)
 check('the toolbar has the naming button', hasattr(w, 'names_btn'))
-check('it is an icon, not a label',
-      w.names_btn.text() == '' and not w.names_btn.icon().isNull())
-check('its tooltip carries the wording',
-      'descriptions' in w.names_btn.toolTip().lower()
-      or 'beschreibungen' in w.names_btn.toolTip().lower(),
-      w.names_btn.toolTip()[:40])
+# 0.18.21: the icon button became the labelled "Rename" button, and the
+# naming schemes moved inside its dialog. The attribute stays as the alias.
+check('it is the labelled Rename button now',
+      bool(w.names_btn.text()) and w.names_btn is w.rename_btn,
+      repr(w.names_btn.text()))
+check('its tooltip names the shortcut',
+      'f2' in w.names_btn.toolTip().lower(), w.names_btn.toolTip()[:40])
 check('and the action exists', hasattr(w, '_names_from_descriptions'))
 check('as does the caption helper', hasattr(w, '_row_caption'))
 

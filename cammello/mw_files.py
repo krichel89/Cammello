@@ -661,8 +661,56 @@ class MWFilesMixin:
         fields, _cats = sdc.decompose_fields(text)
         return sdc.pick_caption(fields, [current_language()])
 
+    def _row_captions(self, row):
+        """Every language's caption of one row, base description merged in.
+
+        Same merge as _row_caption, but the whole {lang: text} table
+        instead of one pick, so the dialog can offer the languages the
+        selection actually has (0.18.21).
+        """
+        item = self.table.item(row, self.COL_DESC)
+        per_file = item.text() if item else ''
+        try:
+            text = self._effective_text(per_file)
+        except Exception:                        # pragma: no cover
+            text = per_file
+        fields, _cats = sdc.decompose_fields(text)
+        out = {}
+        for key, value in (fields or {}).items():
+            if key.startswith('caption_') and (value or '').strip():
+                out[key[len('caption_'):]] = value.strip()
+        return out
+
+    def _row_event(self, row):
+        """The created_during value of one row, '' when it has none."""
+        item = self.table.item(row, self.COL_DESC)
+        per_file = item.text() if item else ''
+        try:
+            text = self._effective_text(per_file)
+        except Exception:                        # pragma: no cover
+            text = per_file
+        fields, _cats = sdc.decompose_fields(text)
+        return ((fields or {}).get('created_during') or '').strip()
+
+    def _caption_rows(self, rows):
+        """The per-row material sdc.propose_names needs, in `rows` order."""
+        out = []
+        for row in rows:
+            path = self._row_path(row) if hasattr(self, '_row_path') else None
+            if not path:
+                item = self.table.item(row, self.COL_FILENAME)
+                path = (item.data(Qt.UserRole) or item.text()) if item else ''
+            out.append({
+                'captions': self._row_captions(row),
+                'event': self._row_event(row),
+                'source': os.path.splitext(os.path.basename(path or ''))[0],
+                'old': (self.table.item(row, self.COL_TITLE).text()
+                        if self.table.item(row, self.COL_TITLE) else ''),
+            })
+        return out
+
     def _names_from_descriptions(self):
-        """Fill the target-filename column from the captions (0.18.19).
+        """Fill the target-filename column from the captions.
 
         Harald: "eine Funktion, die vor dem Hochladen per Knopfdruck
         sinnvolle Dateinamen aus den Beschreibungen erzeugt".
@@ -671,56 +719,28 @@ class MWFilesMixin:
         Nothing is written before the user has seen the list: overwriting a
         column of hand-made names on a mis-click would be the kind of
         damage that is not undoable.
+
+        0.18.21: the proposal itself lives in sdc.propose_names and the
+        dialog recomputes it while the caption options are changed, so this
+        only collects the material and writes the result.
         """
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         if not rows:
             rows = list(range(self.table.rowCount()))
         if not rows:
             return
-        sources, captions = [], []
-        for row in rows:
-            path = self._row_path(row) if hasattr(self, '_row_path') else None
-            if not path:
-                item = self.table.item(row, self.COL_FILENAME)
-                path = (item.data(Qt.UserRole) or item.text()) if item else ''
-            sources.append(os.path.splitext(os.path.basename(path or ''))[0])
-            captions.append(self._row_caption(row))
-
-        digits = BulkRenameDialog.auto_digits(sources)
-        width = len(str(len(rows)))
-        proposals, without = [], 0
-        for i, row in enumerate(rows):
-            base = sdc.name_from_caption(captions[i], sources[i],
-                                         str(i + 1).zfill(width),
-                                         digits=digits)
-            if not base:
-                without += 1
-            old_item = self.table.item(row, self.COL_TITLE)
-            old = old_item.text() if old_item else ''
-            proposals.append((row, old, base))
-
-        # Same names collide on Commons. The running number is what tells
-        # two frames of the same person at the same event apart, so it is
-        # appended to ALL of a colliding set, not just the second one.
-        stems = [p[2] for p in proposals if p[2]]
-        if len(set(stems)) != len(stems):
-            seen = {}
-            for stem in stems:
-                seen[stem] = seen.get(stem, 0) + 1
-            proposals = [
-                (row, old,
-                 f'{base} {str(i + 1).zfill(width)}'
-                 if base and seen.get(base, 0) > 1 else base)
-                for i, (row, old, base) in enumerate(proposals)]
-
+        material = self._caption_rows(rows)
         dlg = NamesFromDescriptionDialog(
-            [(p[1], (p[2] + self._ext_for_row(p[0])) if p[2] else '')
-             for p in proposals], without, self)
+            material, self,
+            digits=BulkRenameDialog.auto_digits([m['source']
+                                                 for m in material]),
+            exts=[self._ext_for_row(r) for r in rows])
         if dlg.exec() != QDialog.Accepted:
             return
-        changed = 0
-        for row, _old, base in proposals:
+        changed = without = 0
+        for row, base in zip(rows, dlg.names()):
             if not base:
+                without += 1
                 continue                    # no caption: the row is left alone
             item = self.table.item(row, self.COL_TITLE)
             if item:
@@ -729,15 +749,12 @@ class MWFilesMixin:
         self.logger.info(
             'Named %d target filename(s) from the descriptions; %d row(s) '
             'had no caption and were left alone.', changed, without)
-        if without:
-            QMessageBox.information(self, tr('Names from descriptions'), tr(
-                '{n} file(s) have no caption to build a name from and were '
-                'left unchanged.').format(n=without))
 
     def _rename_selected(self):
-        """F2 in the file table (Lightroom habit): one selected row edits its
-        target filename inline (via the FilenameDelegate, extension fixed);
-        several rows open the bulk-rename dialog whose template names them all
+        """The one way to rename, from the toolbar button and from F2
+        (0.18.21 - "Umbenennen" is a word in the bar, and F2 does the same).
+
+        Opens the rename dialog whose scheme names every selected row
         with a running number, or with the camera's own number via {c}.
         Only the target Commons name changes - the source files on disk are
         never touched."""
@@ -746,12 +763,10 @@ class MWFilesMixin:
             rows = [self.table.currentRow()]
         if not rows:
             return
-        if len(rows) == 1:
-            item = self.table.item(rows[0], self.COL_TITLE)
-            if item:
-                self.table.setCurrentItem(item)
-                self.table.editItem(item)
-            return
+        # 0.18.21 (Harald): the dialog opens for ONE row as well. It used
+        # to start an inline edit there, which put the caption schemes out
+        # of reach for a single file - and typing a name directly is still
+        # one double-click into the cell away.
         # 0.16.0: the dialog needs the SOURCE names so {c} can take the
         # camera's own number from them.
         sources, exts, dates = [], [], []
@@ -766,7 +781,8 @@ class MWFilesMixin:
             dates.append(date_item.text().strip() if date_item else '')
         dlg = BulkRenameDialog(len(rows), self, sources=sources,
                                exts=exts, dates=dates,
-                               captions=[self._row_caption(r) for r in rows])
+                               captions=[self._row_caption(r) for r in rows],
+                               caption_rows=self._caption_rows(rows))
         if dlg.exec() != QDialog.Accepted:
             return
         for row, base in zip(rows, dlg.names()):

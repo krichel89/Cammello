@@ -4,6 +4,49 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.21 - 2026-09-23
+
+### Changed
+- The two ways of renaming became one. The MediaWiki toolbar carries the
+  WORD "Rename" where the tag icon used to be, F2 opens the same dialog,
+  and the caption-based schemes that used to sit behind their own icon
+  button live inside that dialog. The dialog now opens for a SINGLE row as
+  well - it used to start an inline edit there, which put the caption
+  schemes out of reach for one file; typing a name directly is still one
+  double-click into the cell away.
+- Names built from a caption get three controls, the same widget in the
+  rename dialog and in the naming button's preview: the caption LANGUAGE
+  (English preselected, because a Commons filename is English by
+  convention), the ORDER of person and event, and the CONNECTOR between
+  them - free text, with the last eight offered as a list. All three are
+  remembered, on confirmation rather than while typing.
+- "Names from descriptions" stays, menu entry and preview included, and
+  its list is now rebuilt live while those three controls are changed.
+- BEHAVIOUR CHANGE: the event half of a name now comes from the file's own
+  `created_during` field and from nowhere else. Until 0.18.19 it was cut
+  out of the caption text, which only worked when the caption happened to
+  say "at" - a file without the field now gets a name without an event
+  where 0.18.19 would have guessed one. The person half is still cut at
+  the "at", so the event does not appear twice.
+- The naming logic is pure and lives in `sdc.py` (`name_from_parts`,
+  `caption_languages`, `propose_names`), so both ways use literally the
+  same code and the whole of it is testable without a window. Collision
+  handling sits there too, because it is a decision about the whole
+  selection and cannot be made row by row.
+
+- The two date schemes are gone from the rename dialog (Harald): a capture
+  date in a Commons filename is noise - the date is in the metadata and on
+  the file page anyway. `{date}` survives in the free template.
+- The free template's placeholders are explained in a tooltip, on the field
+  AND on its caption, with an example. They were documented in a single
+  cramped line before, which nobody reads on a field they are typing in.
+
+### Fixed
+- `BulkRenameDialog` reached for per-row caption material even when the
+  caller passed none, and raised `IndexError` while merely opening - found
+  by the existing `test_folder_0160` and `test_langalt_0152`. The caption
+  rows are padded to the row count.
+
 ## 0.18.20 - 2026-09-23
 
 ### Changed
