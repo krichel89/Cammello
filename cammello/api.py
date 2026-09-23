@@ -137,6 +137,19 @@ class MediaWikiApi:
             return (f'badfilename: MediaWiki forbids {chars} in file names '
                     f'and would store "{stored}" instead of "{requested}". '
                     f'Please rename the file (e.g. ":" \u2192 " \u2013").')
+        # 0.18.19: name the whitespace rule too. It used to fall through to
+        # the generic sentence below, which only repeats the server's
+        # corrected name and leaves the user guessing what was wrong with
+        # theirs - and two spaces look exactly like one in a table cell.
+        # sdc normalizes these away before the upload now, so reaching this
+        # branch means a name came from somewhere that skipped it.
+        from .sdc import title_changes
+        changes = title_changes(requested)
+        if changes:
+            return ('badfilename: MediaWiki rewrites this name - '
+                    + '; '.join(changes)
+                    + f'. It would store "{stored}" instead of '
+                    f'"{requested}".')
         return (f'badfilename: MediaWiki would normalize the name to '
                 f'"{stored}" (requested: "{requested}"). Please adjust the '
                 f'target filename.')

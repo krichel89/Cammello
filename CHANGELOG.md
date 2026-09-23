@@ -4,6 +4,55 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.19 - 2026-09-23
+
+### Fixed
+- Target filenames with repeated spaces, underscores or non-breaking spaces
+  reached Commons unchanged and came back as a 'badfilename' warning whose
+  message named no cause - the server only reports what it WOULD have
+  stored, and two spaces look like one in a table cell. MediaWiki rewrites
+  a title before storing it (Title.php::secureAndSplit), so Cammello now
+  applies the same rules first: runs of spaces, underscores and the whole
+  family of Unicode spaces collapse to one, writing-direction marks go,
+  accents are composed (NFC), and the first letter is capitalized the way
+  MediaWiki capitalizes it. Silently - "Anna  Mueller.jpg" is obviously
+  meant to be "Anna Mueller.jpg".
+- The four things MediaWiki refuses outright rather than rewriting -
+  percent sequences, HTML character references, "~~~" and "."/".." paths -
+  now produce a message naming the offending piece instead of a server-side
+  "invalid title".
+- api._explain_badfilename knew only ':', '/', '\\'. It now says which rule
+  was hit ("repeated spaces collapse into one").
+- The rules were read off pywikibot 11.7.0, whose own comment marks them as
+  adapted from Title.php::secureAndSplit; Commons itself was unreachable
+  from the build sandbox.
+- Keychain prompts at every start: the two pre-0.14 OAuth slots were probed
+  on every run, even in installations that never had them, and each probe
+  is its own password prompt on macOS. They are now looked for once and the
+  answer is recorded, so a later start reads ONE slot instead of three.
+- The migration away from those slots deleted them without checking; a
+  delete that quietly failed left them in place to be probed for ever. The
+  return value is checked now, and the "gone" flag is never set
+  speculatively - a wrong flag would hide a real authorization.
+- The Settings page read the OAuth 1.0a entries even when an OAuth 2.0
+  token was present, although both answers produce the same line.
+
+### Added
+- "Names from descriptions": a toolbar button (and Metadata menu entry)
+  that builds the target filenames from the captions - person, event, and
+  the camera's own number, falling back to a running number. It shows the
+  old and the new name per row and writes nothing until confirmed; rows
+  without a caption are left alone.
+- Two matching schemes in the F2 bulk-rename dialog, which now receives the
+  captions alongside the sources, dates and extensions.
+- sdc.normalize_title_spacing / title_changes / split_caption /
+  pick_caption / name_from_caption, all Qt-free.
+
+### Changed
+- camera_number moved from widgets.BulkRenameDialog into sdc, with the
+  dialog delegating to it. Two hand-kept copies of the same logic is the
+  _ASSIGN_RE mistake.
+
 ## 0.18.18 - 2026-09-22
 
 ### Changed

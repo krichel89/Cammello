@@ -1,6 +1,7 @@
 """Structured-data (SDC) and wikitext text helpers (no GUI)."""
 import re
 import os
+import unicodedata
 from .constants import *
 from . import langcodes
 
@@ -222,8 +223,197 @@ def extract_name_from_caption(caption):
     return caption
 
 
+# ── Names built from the description (0.18.19) ───────────────────────────────
+#
+# Harald: "Einmal haette ich gerne eine Funktion, die vor dem Hochladen per
+# Knopfdruck sinnvolle Dateinamen aus den Beschreibungen erzeugt. Also vor
+# allen Dingen Personennamen, eventuell Person bei Veranstaltung plus die
+# Nummer aus der Kamera oder wenn nicht sinnvoll vorhanden, eine laufende
+# Nummer zur Unterscheidung."
+#
+# The caption is the source, not the depicts QID: a QID would mean one
+# Wikidata round trip per file for a button that is supposed to answer
+# instantly, and the caption already carries the name in the language the
+# photographer wrote it in. extract_name_from_caption above has been
+# splitting captions on " at "/" bei " since the early versions; this is the
+# other half of the same split.
+
+# Leading articles are grammar, not part of an event's name: "at THE
+# Berlinale 2026". Only a leading article word is dropped, and only when
+# something remains after it.
+_EVENT_ARTICLES = {
+    'the', 'der', 'die', 'das', 'dem', 'den', 'le', 'la', 'les', 'el',
+    'los', 'las', 'il', 'lo', 'i', 'gli',
+}
+
+
+def camera_number(source, digits=0):
+    """The trailing digits of a source file name, or '' if it has none.
+
+    IMG_4711 -> 4711; DSC00123 -> 00123. With `digits` > 0 only the last
+    that many are kept. Cameras put the counter at the END of the name, so
+    this is the piece worth keeping - it is what lets someone find the raw
+    file again from the Commons name.
+
+    Lives here rather than in the rename dialog since 0.18.19, because the
+    naming button needs it too and a second hand-kept copy is exactly the
+    _ASSIGN_RE mistake.
+    """
+    base = str(source or '')
+    tail = ''
+    for ch in reversed(base):
+        if not ch.isdigit():
+            break
+        tail = ch + tail
+    if digits > 0:
+        tail = tail[-digits:]
+    return tail
+
+
+def split_caption(caption):
+    """(person, event) for one caption. Either half may be ''.
+
+    "Anna Mueller at the Berlinale 2026" -> ("Anna Mueller", "Berlinale 2026")
+    "Anna Mueller"                       -> ("Anna Mueller", "")
+    """
+    text = normalize_title_spacing(caption or '')
+    if not text:
+        return '', ''
+    for sep in NAME_SEPARATORS:
+        if sep in text:
+            person, event = text.split(sep, 1)
+            person, event = person.strip(), event.strip()
+            head, _, rest = event.partition(' ')
+            if head.lower() in _EVENT_ARTICLES and rest.strip():
+                event = rest.strip()
+            return person, event
+    return text, ''
+
+
+def pick_caption(fields, languages=()):
+    """The caption to build a name from, out of a decompose_fields() dict.
+
+    `languages` is tried in order first (the interface language, then
+    English), then any caption_* there is - a photographer who captions only
+    in Italian should still get names.
+    """
+    for code in list(languages) + ['en']:
+        value = (fields.get(f'caption_{code}') or '').strip()
+        if value:
+            return value
+    for key in sorted(fields):
+        if key.startswith('caption_') and (fields[key] or '').strip():
+            return fields[key].strip()
+    return ''
+
+
+def name_from_caption(caption, source_stem='', seq='', with_event=True,
+                      digits=0):
+    """Build one target filename stem from a caption. '' when there is none.
+
+    Shape: "<person> at <event> <number>", falling back step by step -
+    without an event it is "<person> <number>", and the number is the
+    camera's own counter when the source name has one, else `seq`.
+
+    The separator between person and event is the ENGLISH " at " whatever
+    language the caption is in: the file name is a Commons-wide identifier,
+    and Commons is English-titled by convention.
+    """
+    person, event = split_caption(caption)
+    if not person:
+        return ''
+    parts = [person]
+    if with_event and event:
+        parts.append('at')
+        parts.append(event)
+    number = camera_number(source_stem, digits) or str(seq or '').strip()
+    if number:
+        parts.append(number)
+    return normalize_title_spacing(' '.join(parts))
+
+
 
 FORBIDDEN_TITLE_CHARS = set('#<>[]|{}')
+
+# ── MediaWiki title normalization (0.18.19) ──────────────────────────────────
+#
+# Harald: "Der Benutzer sagt, er haette zu viele Leerzeichen oder sowas in den
+# Dateinamen gehabt."
+#
+# MediaWiki does not take a title as given: Title.php::secureAndSplit()
+# rewrites it first, and an upload whose name survives that rewrite CHANGED
+# answers with a 'badfilename' warning. Until 0.18.18 Cammello only looked
+# for ':', '/', '\' and the forbidden title characters, so a name with two
+# spaces in it sailed through here and came back as a warning from the
+# server - with a message that named no cause, because the server only says
+# what it WOULD have stored.
+#
+# The rules below are not written from memory: they were read off
+# pywikibot 11.7.0 (pywikibot/page/_links.py, whose own comment says "This
+# code was adapted from Title.php : secureAndSplit()"). Commons itself could
+# not be reached from the build sandbox to confirm them live.
+
+# Every one of these collapses to a single plain space, and runs of them
+# collapse together: ASCII space, underscore, NO-BREAK SPACE, OGHAM SPACE
+# MARK, MONGOLIAN VOWEL SEPARATOR, EN QUAD..HAIR SPACE, LINE/PARAGRAPH
+# SEPARATOR, NARROW NO-BREAK SPACE, MEDIUM MATHEMATICAL SPACE, IDEOGRAPHIC
+# SPACE. The non-breaking one is the nasty one: it is invisible in the
+# table and arrives by copy-and-paste from a press release.
+_TITLE_SPACE_RE = re.compile(
+    '[ _  ᠎ -     　]+')
+
+# Removed outright rather than replaced (they are zero-width, so replacing
+# them with a space would invent one).
+_TITLE_DROP = ('‎', '‏')
+
+# Percent sequences and HTML character references are refused by MediaWiki
+# because a title containing them cannot be linked to round-trip.
+_PERCENT_RE = re.compile('%[0-9A-Fa-f]{2}')
+_ENTITY_RE = re.compile('&(?:[A-Za-z0-9\u0080-ÿ]+|#[0-9]+|#x[0-9A-Fa-f]+);')
+
+
+def normalize_title_spacing(name):
+    """Apply MediaWiki's own whitespace rules to `name`.
+
+    Separate from the checking half so the rename dialog can build names
+    that are already normalized instead of building them and then being
+    told they are wrong.
+    """
+    text = unicodedata.normalize('NFC', name or '')
+    for ch in _TITLE_DROP:
+        text = text.replace(ch, '')
+    return _TITLE_SPACE_RE.sub(' ', text).strip()
+
+
+def title_changes(name):
+    """What MediaWiki would change about `name`, in plain words.
+
+    -> list of strings, empty when the name survives untouched. Used for
+    the report the rename button shows and for the upload's error message,
+    so both say the same thing.
+    """
+    out = []
+    raw = name or ''
+    if raw != unicodedata.normalize('NFC', raw):
+        out.append('combining accents are rewritten (NFC)')
+    if any(ch in raw for ch in _TITLE_DROP):
+        out.append('writing-direction marks are removed')
+    if '_' in raw:
+        out.append('underscores become spaces')
+    body = _TITLE_SPACE_RE.sub(' ', raw)
+    if '  ' in raw.replace('_', ' '):
+        out.append('repeated spaces collapse into one')
+    if raw != raw.strip():
+        out.append('leading or trailing spaces are dropped')
+    if any(ch in raw for ch in
+           '  ᠎       '
+           '      　'):
+        out.append('non-breaking and typographic spaces become plain spaces')
+    stem = os.path.splitext(body.strip())[0]
+    if stem and stem[0].islower():
+        out.append(f'the first letter is capitalized ("{stem[0]}" → '
+                   f'"{stem[0].upper()}")')
+    return out
 
 # Characters MediaWiki forbids in FILE names specifically ($wgIllegalFileChars,
 # default ':', '/', '\'). They are legal in ordinary page titles - which is why
@@ -269,14 +459,29 @@ def normalize_commons_filename(target, source_path):
     if not name:
         raise ValueError('Empty target filename.')
 
+    # 0.18.19: do MediaWiki's whitespace rewriting HERE instead of letting
+    # the server do it and answer with a 'badfilename' warning. These are
+    # not errors the user has to fix - "Anna  Mueller.jpg" is obviously
+    # meant to be "Anna Mueller.jpg" - so the name is corrected silently
+    # and the upload goes through under the name the server would have
+    # chosen anyway.
+    name = normalize_title_spacing(name)
+    if not name:
+        raise ValueError('Empty target filename.')
+
     # Ensure the extension.
     src_ext = os.path.splitext(source_path)[1]
-    _, ext = os.path.splitext(name)
+    stem, ext = os.path.splitext(name)
     if ext.lower() not in IMAGE_EXTS:
         if not src_ext:
             raise ValueError('Source file has no extension; please specify an '
                              'extension in the target filename.')
         name = name + src_ext
+    elif stem != stem.rstrip():
+        # "Anna Mueller .jpg": MediaWiki would keep that space (it is not at
+        # the END of the title), so this one is Cammello's own tidy-up, not
+        # a server rule. Nobody means it.
+        name = stem.rstrip() + ext
 
     bad_file = sorted({c for c in name if c in ILLEGAL_FILENAME_CHARS})
     if bad_file:
@@ -297,6 +502,38 @@ def normalize_commons_filename(target, source_path):
             + ' '.join(repr(b) for b in bad)
             + ' (not allowed: # < > [ ] | { } and control characters).'
         )
+
+    # The three MediaWiki refuses outright rather than rewriting. Each gets
+    # its own message: "invalid title" from the server says nothing about
+    # which of them it was.
+    if '�' in name:
+        raise ValueError('Target filename contains the Unicode replacement '
+                         'character - the name was probably read with the '
+                         'wrong encoding somewhere.')
+    if _PERCENT_RE.search(name):
+        raise ValueError(
+            'Target filename contains a percent sequence (e.g. "%20"). '
+            'MediaWiki refuses these because such a title cannot be linked '
+            'to reliably. Please write the character itself.')
+    if _ENTITY_RE.search(name):
+        raise ValueError(
+            'Target filename contains an HTML character reference (e.g. '
+            '"&amp;"). MediaWiki refuses these. Please write the character '
+            'itself.')
+    if '~~~' in name:
+        raise ValueError('Target filename contains "~~~", which MediaWiki '
+                         'reserves for signatures.')
+    stem = os.path.splitext(name)[0]
+    if stem in ('.', '..') or stem.startswith(('./', '../')) \
+            or '/./' in stem or '/../' in stem \
+            or stem.endswith(('/.', '/..')):
+        raise ValueError('Target filename looks like a relative path '
+                         '("." / ".."), which MediaWiki refuses.')
+
+    # MediaWiki capitalizes the first letter of a title, so doing it here
+    # keeps the uploaded name and the requested name identical.
+    if name[:1].islower():
+        name = name[0].upper() + name[1:]
 
     if len(name.encode('utf-8')) > 240:
         raise ValueError('Target filename too long (max. ~240 bytes).')

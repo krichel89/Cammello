@@ -18,6 +18,7 @@ from PyQt5.QtGui import (QDesktopServices, QPixmap, QIcon, QPainter,
 from .constants import *
 from .i18n import tr
 from .sdc import *
+from . import sdc
 from . import credentials
 from . import channels
 from . import filters
@@ -60,6 +61,57 @@ class FilenameDelegate(QStyledItemDelegate):
 # ── Bulk rename dialog (F2 with several rows selected) ────────────────────────
 
 
+class NamesFromDescriptionDialog(QDialog):
+    """Shows what the naming button would write, before it writes it.
+
+    The button rewrites a whole column, and a column of hand-made names is
+    not something to overwrite on a mis-click - so the old and the new name
+    stand side by side and the run has to be confirmed. Rows without a
+    caption are listed with an empty right-hand side and stay untouched.
+    """
+
+    def __init__(self, pairs, without, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr('Names from descriptions') + f' - {APP_NAME}')
+        self.setMinimumSize(720, 420)
+        self.setStyleSheet(current_input_style())
+        layout = QVBoxLayout(self)
+
+        named = sum(1 for _old, new in pairs if new)
+        head = QLabel(tr('{n} of {total} file(s) get a name from their '
+                         'caption.').format(n=named, total=len(pairs)))
+        layout.addWidget(head)
+
+        table = QTableWidget(len(pairs), 2, self)
+        table.setHorizontalHeaderLabels([tr('Now'), tr('New')])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        for row, (old, new) in enumerate(pairs):
+            left = QTableWidgetItem(old)
+            right = QTableWidgetItem(new or tr('(no caption - unchanged)'))
+            if not new:
+                for cell in (left, right):
+                    cell.setForeground(QColor('#909090'))
+            table.setItem(row, 0, left)
+            table.setItem(row, 1, right)
+        layout.addWidget(table, 1)
+
+        if without:
+            note = QLabel(tr('{n} file(s) have no caption and keep the name '
+                             'they have.').format(n=without))
+            note.setStyleSheet('color: gray;')
+            layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok
+                                   | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText(tr('Rename'))
+        buttons.button(QDialogButtonBox.Ok).setEnabled(bool(named))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class BulkRenameDialog(QDialog):
     """Bulk rename for the target Commons filenames, in the shape macOS
     Photos and Lightroom use (0.16.0, Harald): you PICK A SCHEME instead of
@@ -92,6 +144,16 @@ class BulkRenameDialog(QDialog):
         ('text_xofy', 'Custom name (x of y)',
          lambda c: f"{c['text']} ({c['index']} of {c['total']})",
          True, False),
+        # 0.18.19: built from the caption instead of from typed text. The
+        # builder falls back on its own - no caption means no person, and
+        # the row keeps the running number rather than a name of nothing.
+        ('caption_person_event', 'Person at event - original file number',
+         lambda c: sdc.name_from_caption(c['caption'], c['name'], c['seq'])
+         or c['name'] or c['seq'], False, True),
+        ('caption_person', 'Person - original file number',
+         lambda c: sdc.name_from_caption(c['caption'], c['name'], c['seq'],
+                                         with_event=False)
+         or c['name'] or c['seq'], False, True),
         ('orig', 'Original file name',
          lambda c: c['name'] or c['seq'], False, False),
         ('orig_seq', 'Original file name - sequence',
@@ -113,7 +175,7 @@ class BulkRenameDialog(QDialog):
     DIGITS_MAX = 6
 
     def __init__(self, count, parent=None, sources=None, exts=None,
-                 dates=None):
+                 dates=None, captions=None):
         super().__init__(parent)
         self.setWindowTitle(tr('Rename {count} files').format(count=count))
         self.setMinimumWidth(520)
@@ -122,6 +184,8 @@ class BulkRenameDialog(QDialog):
         self._sources = list(sources or [])
         self._exts = list(exts or [])
         self._dates = list(dates or [])
+        # 0.18.19: the caption of each row, for the two caption schemes.
+        self._captions = list(captions or [])
         # Derived once from the selection, not asked for (0.16.0).
         self._digits = self.auto_digits(self._sources)
         self.settings = QSettings(APP_NAME, 'BulkRename')
@@ -212,24 +276,10 @@ class BulkRenameDialog(QDialog):
             return 0
         return max(cls.DIGITS_MIN, min(cls.DIGITS_MAX, min(runs)))
 
-    @staticmethod
-    def camera_number(source, digits=0):
-        """The trailing digits of a source file name, or '' if it has none.
-
-        IMG_4711 -> 4711; DSC00123 -> 00123. With `digits` > 0 only the
-        last that many are kept. Cameras put the counter at the END of the
-        name, so this is the piece worth keeping - it is what lets someone
-        find the raw file again from the Commons name.
-        """
-        base = str(source or '')
-        tail = ''
-        for ch in reversed(base):
-            if not ch.isdigit():
-                break
-            tail = ch + tail
-        if digits > 0:
-            tail = tail[-digits:]
-        return tail
+    # 0.18.19: the implementation moved to sdc.camera_number so the naming
+    # button can use it too. The name stays here - auto_digits and the
+    # schemes call it, and so do the tests from 0.16.0.
+    camera_number = staticmethod(sdc.camera_number)
 
     def _context(self, i):
         start = self.start_spin.value()
@@ -244,6 +294,8 @@ class BulkRenameDialog(QDialog):
             'cam': self.camera_number(name, self._digits),
             'date': (date or '')[:10],
             'text': self.text_edit.text().strip(),
+            'caption': (self._captions[i]
+                        if i < len(self._captions) else ''),
         }
 
     def names(self):
@@ -444,12 +496,35 @@ def store_oauth_tokens(token, secret):
     return credentials.store(credentials.mw_oauth_slot('tokens'), blob)
 
 
+# 0.18.19 (Harald, after an evening of keychain prompts): once the two
+# pre-0.14 slots have been looked for and are gone, stop looking. Each
+# lookup is a keychain prompt of its own on macOS, and an installation that
+# never had them - or was migrated years ago - paid two of them at every
+# single start. The flag is only set after a probe that actually found
+# nothing, or after a migration whose deletes were CONFIRMED; never
+# speculatively, because a wrong flag would hide a real authorization.
+LEGACY_OAUTH_KEY = 'oauth_legacy_slots_gone'
+
+
+def _legacy_slots_gone(settings=None):
+    s = settings or QSettings(APP_NAME, 'Login')
+    return bool(s.value(LEGACY_OAUTH_KEY, False, type=bool))
+
+
+def _mark_legacy_slots_gone(settings=None):
+    s = settings or QSettings(APP_NAME, 'Login')
+    s.setValue(LEGACY_OAUTH_KEY, True)
+    s.sync()
+
+
 def stored_oauth_tokens():
     """-> (access_token, access_secret), ('', '') if not authorized.
 
     0.14: both halves live in ONE keyring entry, so this costs a single
     prompt instead of two. Installations from before that still have the two
-    separate slots; they are read once and migrated.
+    separate slots; they are read once and migrated - and since 0.18.19 the
+    fact that they are gone is written down, so the next start does not ask
+    for them again.
     """
     blob = credentials.load(credentials.mw_oauth_slot('tokens'))
     if blob:
@@ -459,16 +534,31 @@ def stored_oauth_tokens():
                 return data['token'], data['secret']
         except ValueError:
             pass                    # corrupt entry: fall through and rebuild
+    s = QSettings(APP_NAME, 'Login')
+    if _legacy_slots_gone(s):
+        return (s.value('oauth_token', '') or '',
+                s.value('oauth_secret', '') or '')
     tok = credentials.load(credentials.mw_oauth_slot('token'))
     sec = credentials.load(credentials.mw_oauth_slot('secret'))
     if tok and sec:
         # Migrate to the combined entry, then drop the old slots so the next
-        # start only ever touches one.
+        # start only ever touches one. The deletes are CHECKED (0.18.19): a
+        # delete that quietly failed left the old slots in place, and they
+        # were probed again at every start for ever after - which is exactly
+        # what Harald ran into.
         if store_oauth_tokens(tok, sec):
-            credentials.delete(credentials.mw_oauth_slot('token'))
-            credentials.delete(credentials.mw_oauth_slot('secret'))
+            gone_tok = credentials.delete(credentials.mw_oauth_slot('token'))
+            gone_sec = credentials.delete(credentials.mw_oauth_slot('secret'))
+            if gone_tok and gone_sec:
+                _mark_legacy_slots_gone(s)
+            else:
+                logging.getLogger('Cammello').warning(
+                    'The pre-0.14 OAuth keyring entries could not be '
+                    'removed; they will be looked for again next time.')
         return tok, sec
-    s = QSettings(APP_NAME, 'Login')
+    # Nothing there - and nothing there is a permanent answer, because this
+    # process is the only writer of those slots.
+    _mark_legacy_slots_gone(s)
     return (s.value('oauth_token', '') or '',
             s.value('oauth_secret', '') or '')
 
@@ -479,12 +569,18 @@ def clear_stored_oauth():
     The server-side grant stays until the user revokes it on
     Special:OAuthManageMyGrants - worth mentioning in the docs."""
     credentials.delete(credentials.mw_oauth_slot('tokens'))
-    credentials.delete(credentials.mw_oauth_slot('token'))
-    credentials.delete(credentials.mw_oauth_slot('secret'))
+    gone_tok = credentials.delete(credentials.mw_oauth_slot('token'))
+    gone_sec = credentials.delete(credentials.mw_oauth_slot('secret'))
     credentials.clear_cache()
     s = QSettings(APP_NAME, 'Login')
     for key in ('oauth_token', 'oauth_secret', 'oauth_username'):
         s.remove(key)
+    # 0.18.19: removing the authorization also settles the legacy question -
+    # but only when both deletes actually reported success.
+    if gone_tok and gone_sec:
+        _mark_legacy_slots_gone(s)
+    else:
+        s.remove(LEGACY_OAUTH_KEY)
     s.sync()
 
 
@@ -1597,7 +1693,8 @@ TOOLBAR_SEPARATOR_NAME = 'cammelloToolbarSeparator'
 # swatches: no asset files, no font dependency, and they take the current
 # text colour so they stay legible in both schemes.
 
-PICTOGRAMS = ('camera', 'eject', 'filter', 'filter_dot', 'filter_off')
+PICTOGRAMS = ('camera', 'eject', 'filter', 'filter_dot', 'filter_off',
+              'nametag')
 
 
 def pictogram(kind, color, size=18):
@@ -1656,6 +1753,17 @@ def pictogram(kind, color, size=18):
             p.drawEllipse(QPointF(s * 0.80, s * 0.76), s * 0.14, s * 0.14)
         elif kind == 'filter_off':
             p.drawLine(QPointF(s * 0.16, s * 0.86), QPointF(s * 0.86, s * 0.16))
+    elif kind == 'nametag':
+        # A luggage tag: the shape of "this thing gets a name" (0.18.19).
+        tag = QPolygonF([QPointF(s * 0.10, s * 0.46),
+                         QPointF(s * 0.44, s * 0.12),
+                         QPointF(s * 0.88, s * 0.12),
+                         QPointF(s * 0.88, s * 0.56),
+                         QPointF(s * 0.54, s * 0.90),
+                         QPointF(s * 0.10, s * 0.46)])
+        p.drawPolygon(tag)
+        p.setBrush(ink)
+        p.drawEllipse(QPointF(s * 0.72, s * 0.28), s * 0.07, s * 0.07)
     else:                                    # pragma: no cover - guarded below
         p.end()
         raise ValueError(f'unknown pictogram: {kind}')

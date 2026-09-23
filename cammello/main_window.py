@@ -28,7 +28,8 @@ from .workers import *
 from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
-from .widgets import stored_oauth2_tokens, clear_stored_oauth2
+from .widgets import (stored_oauth2_tokens, clear_stored_oauth2,
+                      pictogram, icon_button)
 from .editors import *
 from .mw_settings import MWSettingsMixin
 from .mw_files import MWFilesMixin
@@ -385,8 +386,21 @@ class MainWindow(FlickrMixin,
         # stylesheet here would win over it and drift again.
         self.upload_btn.setProperty('cammelloPrimary', True)
 
+        # 0.18.19 (Harald): "eine Funktion, die vor dem Hochladen per
+        # Knopfdruck sinnvolle Dateinamen aus den Beschreibungen erzeugt".
+        # An ICON button, not a labelled one: this row is the one that used
+        # to paint over itself with long German labels, and a label here
+        # would undo what 0.18.18 just won in the culling toolbar.
+        self.names_btn = icon_button(
+            pictogram('nametag', self.palette().buttonText().color()),
+            tr('Names from descriptions - build the target filenames from '
+               'the captions:\nperson, event and the number from the '
+               'camera. Shows what it would do first.'))
+        self.names_btn.clicked.connect(self._names_from_descriptions)
+
         toolbar.addWidget(self.login_label)
         toolbar.addStretch()
+        toolbar.addWidget(self.names_btn)
         toolbar.addWidget(self.open_folder_btn)
         toolbar.addWidget(self._workflow_label)
         toolbar.addWidget(self.workflow_combo)
@@ -1975,7 +1989,10 @@ class MainWindow(FlickrMixin,
         if not hasattr(self, 'oauth_status_label'):
             return
         access, _refresh = stored_oauth2_tokens()
-        token, secret = stored_oauth_tokens()
+        # 0.18.19: only ask about the 1.0a entries when there is no 2.0
+        # token. Both answers lead to the same line on screen, so reading
+        # the second one was a keychain prompt spent on nothing.
+        token, secret = ('', '') if access else stored_oauth_tokens()
         if access or (token and secret):
             user = self._login_settings.value('oauth_username', '') or '?'
             self.oauth_status_label.setText(

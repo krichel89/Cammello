@@ -188,6 +188,13 @@ class MenusMixin:
             menu, tr('&Rename…'), '_rename_selected',
             QKeySequence('F2'),
             tr('Rename the selected files for Commons.')))
+        # 0.18.19: in the menu as well as on the toolbar button, because
+        # the toolbar is already the widest row in the window.
+        self._scope('mediawiki', self._act(
+            menu, tr('Names from &descriptions…'),
+            '_names_from_descriptions', None,
+            tr('Build target filenames from the captions: person, event '
+               'and the number from the camera.')))
         # Rating / colour actions mirror the culling keyboard (0-5, X, 6-9,
         # M toggles the digits to colours - purple is digit 5 in that mode).
         # Rating and colour actions are shown with their keyboard letter
