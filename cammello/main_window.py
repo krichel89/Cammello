@@ -29,7 +29,7 @@ from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
 from .widgets import (stored_oauth2_tokens, clear_stored_oauth2,
-                      pictogram, icon_button)
+                      pictogram, lucide, icon_button)
 from .editors import *
 from .mw_settings import MWSettingsMixin
 from .mw_files import MWFilesMixin
@@ -392,10 +392,8 @@ class MainWindow(FlickrMixin,
         # to paint over itself with long German labels, and a label here
         # would undo what 0.18.18 just won in the culling toolbar.
         self.names_btn = icon_button(
-            pictogram('nametag', self.palette().buttonText().color()),
-            tr('Names from descriptions - build the target filenames from '
-               'the captions:\nperson, event and the number from the '
-               'camera. Shows what it would do first.'))
+            lucide('nametag', self.palette().buttonText().color()),
+            tr('Names from descriptions'))
         self.names_btn.clicked.connect(self._names_from_descriptions)
 
         toolbar.addWidget(self.login_label)

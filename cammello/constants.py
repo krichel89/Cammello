@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.18.19'
+__version__ = '0.18.20'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -320,6 +320,11 @@ ABOUT_STYLE = (
     'QWidget#aboutPage QLabel { color: #e9eff6; background: transparent; }')
 
 
+TOOLTIP_STYLE = (
+    'QToolTip { font-size: 11pt; padding: 4px 7px; }'
+)
+
+
 def app_style():
     """The ONE application-wide stylesheet: input fields (light/dark
     variant) + the collapsible-group chrome + the About page.
@@ -346,7 +351,13 @@ def app_style():
             # on Windows - see _apply_color_scheme.
             'QMenu::item:disabled { color: #888; }'
             'QMenu::item:disabled:selected { color: #888;'
-            ' background: transparent; }')
+            ' background: transparent; }'
+            # 0.18.20 (Harald): the toolbar labels moved into the tooltips
+            # when the buttons became icons, so the tooltip IS the label
+            # now - and a label wants to be readable. Bigger than the
+            # system default, with room around it. Point size, not pixels:
+            # a pixel size ignores the display scaling.
+            + TOOLTIP_STYLE)
 
 
 def group_title_style(dark=False):

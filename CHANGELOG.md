@@ -4,6 +4,33 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.20 - 2026-09-23
+
+### Changed
+- One icon set for the whole app. All toolbar symbols were drawn by hand
+  with QPainter, each one on its own, and it showed: different stroke
+  weights, different optical sizes, and two buttons that borrowed the
+  platform's own icons (Open folder, Reload) and looked foreign beside
+  them. Every symbol now comes from Lucide - single-colour 24x24 stroke
+  icons on `currentColor`, the set RapidRaw uses, ISC licence. Only the
+  icons in use ship, as SVG files under `cammello/assets/icons/` together
+  with their licence; they are inked from the window's own text colour, so
+  they stay legible in the light and the dark scheme alike. The hand-drawn
+  `pictogram()` stays as the fallback for a build without QtSvg or without
+  the assets, so a button is never empty.
+- The filter has a ROW OF ITS OWN below the toolbar, opened and closed by
+  the funnel. Folding it in place made the toolbar change width and pushed
+  the hand-off buttons around; the row keeps the toolbar still. The funnel
+  still carries a dot when the row is closed while a filter is active, and
+  the state is still remembered between sessions.
+- The toolbar labels moved into the tooltips when the buttons became icons
+  in 0.18.18, which made the tooltip the label - but they still carried
+  whole explanatory paragraphs. They are now the label and nothing else
+  ("Ordner öffnen", "Karte auswerfen", "Von Kamera importieren", "Filter
+  aufheben", "Ordner neu laden", "Namen aus Beschreibungen"), and tooltips
+  are set two points larger with a little padding, because a label wants to
+  be read. The dropped explanations go into the manual, not into the bin.
+
 ## 0.18.19 - 2026-09-23
 
 ### Fixed

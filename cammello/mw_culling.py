@@ -45,7 +45,7 @@ from . import channels, previews, edits, camera
 from .edit_panel import EditPanel
 from .culling_view import CullImageView
 from .widgets import (UploadProgressDialog, toolbar_separator,
-                      pictogram, icon_button,
+                      pictogram, lucide, icon_button,
                       slim_toolbar)
 from .i18n import tr
 
@@ -1095,48 +1095,36 @@ class MWCullingMixin:
         # 0.18.18 (Harald): the toolbar had grown too wide, so the four
         # widest labels became icons. The words are not lost - each one is
         # the tooltip, and all four actions are in the menus as well.
-        open_btn = icon_button(
-            self.style().standardIcon(QStyle.SP_DirOpenIcon),
-            tr('Open…') + ' - ' + tr('Open a folder of images for culling.'))
-        if open_btn.icon().isNull():          # a style without that icon
+        # 0.18.20: the platform's own SP_DirOpenIcon looked foreign next to
+        # the drawn ones - every symbol in the bar now comes from Lucide.
+        open_btn = icon_button(lucide('folder', self._cull_ink()),
+                               tr('Open folder'))
+        if open_btn.icon().isNull():          # assets lost in a bad build
             open_btn.setText(tr('Open…'))
         open_btn.clicked.connect(self._cull_open_folder)
         bar.addWidget(open_btn)
         self.cull_open_btn = open_btn
         # Reload sits right next to Open as a compact icon button. The ⟳ glyph
         # is tiny at the default font size, so scale it up to button height.
-        self.cull_reload_btn = QToolButton()
-        # The "⟳" glyph rendered as a barely-visible hairline (and as tofu in
-        # some font fallbacks), so use the platform's own reload icon and keep
-        # a text label as the fallback when a style has no such icon.
-        _reload_icon = self.style().standardIcon(QStyle.SP_BrowserReload)
-        if _reload_icon.isNull():
+        self.cull_reload_btn = icon_button(lucide('reload', self._cull_ink()),
+                                           tr('Reload folder'))
+        if self.cull_reload_btn.icon().isNull():
             self.cull_reload_btn.setText(tr('Reload'))
-        else:
-            self.cull_reload_btn.setIcon(_reload_icon)
-            self.cull_reload_btn.setIconSize(QSize(18, 18))
-        self.cull_reload_btn.setMinimumSize(32, 28)
-        self.cull_reload_btn.setToolTip(tr('Read the current folder again from disk.'))
         self.cull_reload_btn.clicked.connect(self._cull_reload_folder)
         bar.addWidget(self.cull_reload_btn)
         # 0.18.3: Canon bodies speak PTP, so the card never becomes a volume
         # and "Open…" has nothing to point at. This is the backup path for a
         # missing card reader: copy off the camera, then open the copy.
-        cam_btn = icon_button(pictogram('camera', self._cull_ink()), tr(
-            'From camera… - copy pictures straight off a connected camera '
-            'into a folder and\nopen that folder. Meant as the backup when '
-            'no card reader is at hand -\na reader is considerably faster.'))
+        cam_btn = icon_button(lucide('camera', self._cull_ink()),
+                              tr('Import from camera'))
         cam_btn.clicked.connect(self._cull_import_from_camera)
         bar.addWidget(cam_btn)
         self.cull_camera_btn = cam_btn
         # 0.18.16 (Harald): eject the card from inside Cammello. Enabled
         # only while the open folder actually sits on a removable volume -
         # a button that could unmount the system disk would be a poor idea.
-        self.cull_eject_btn = icon_button(
-            pictogram('eject', self._cull_ink()), tr(
-                'Eject card - close the card and unmount it. Ratings still '
-                'waiting to be written\nare written first; the card is only '
-                'reported as safe when it is really gone.'))
+        self.cull_eject_btn = icon_button(lucide('eject', self._cull_ink()),
+                                          tr('Eject card'))
         self.cull_eject_btn.setEnabled(False)
         self.cull_eject_btn.clicked.connect(self._cull_eject_card)
         bar.addWidget(self.cull_eject_btn)
@@ -1211,21 +1199,29 @@ class MWCullingMixin:
         # otherwise a filter could hide images with nothing on screen to say
         # why. When it is folded and something IS filtered, the funnel
         # carries a dot (see _cull_update_icons).
+        # 0.18.20 (Harald): the filter no longer folds away INSIDE the
+        # toolbar, it has a ROW OF ITS OWN below it. The toolbar keeps a
+        # fixed width that way - opening the filter no longer pushes the
+        # hand-off buttons around - and the row has space for full labels.
         self._cull_filter_widgets = []
+        self.cull_filter_row = QWidget()
+        frow = QHBoxLayout(self.cull_filter_row)
+        frow.setContentsMargins(0, 0, 0, 2)
+        frow.setSpacing(6)
         # NOT checkable: a checked QToolButton is painted blue by
         # BUTTON_STYLE, and a permanently blue funnel would read as "a
         # filter is on" in exactly the state where nothing is filtered. The
         # state lives in a flag, and the icon and tooltip say which it is.
         self._cull_filter_collapsed = False
         self.cull_filter_toggle = icon_button(
-            pictogram('filter', self._cull_ink()), tr('Hide the filter'))
+            lucide('filter', self._cull_ink()), tr('Hide the filter'))
         self.cull_filter_toggle.clicked.connect(
             lambda _c: self._cull_set_filter_collapsed(
                 not self._cull_filter_collapsed, remember=True))
         bar.addWidget(self.cull_filter_toggle)
         filter_lbl = QLabel(tr('Filter:'))
         self._cull_filter_widgets.append(filter_lbl)
-        bar.addWidget(filter_lbl)
+        frow.addWidget(filter_lbl)
         # Minimum rating as STARS, not a dropdown (Harald): click a star to
         # show that rating and up, click the active star again for "all".
         self._cull_minrating = 0
@@ -1244,7 +1240,7 @@ class MWCullingMixin:
             b.clicked.connect(lambda _c, n=n: self._cull_set_min_rating(n))
             self.cull_star_btns.append(b)
             self._cull_filter_widgets.append(b)
-            bar.addWidget(b)
+            frow.addWidget(b)
         self._cull_update_stars()
         # 0.12.7 (Harald's decision): rejects stay VISIBLE by default - grey
         # with a red X, courtesy of _LabelBarDelegate - instead of vanishing
@@ -1258,11 +1254,11 @@ class MWCullingMixin:
                'this to hide them completely.'))
         self.cull_hide_rejects_cb.stateChanged.connect(self._cull_apply_filter)
         self._cull_filter_widgets.append(self.cull_hide_rejects_cb)
-        bar.addWidget(self.cull_hide_rejects_cb)
+        frow.addWidget(self.cull_hide_rejects_cb)
         # Colour filter: multi-select swatches, part of the same filter cluster.
         # None active = all colours; any active = only those colours (grey
         # swatch = "no label"). Each swatch's tooltip names the colour.
-        bar.addSpacing(8)
+        frow.addSpacing(8)
         self._cull_color_btns = []
         swatches = list(culling.LABEL_COLORS) + ['#888']   # last = no label
         for i, col in enumerate(swatches):
@@ -1286,19 +1282,16 @@ class MWCullingMixin:
             b.clicked.connect(self._cull_apply_filter)
             self._cull_color_btns.append(b)
             self._cull_filter_widgets.append(b)
-            bar.addWidget(b)
+            frow.addWidget(b)
         # 0.18.14: one switch that undoes the whole filter cluster - stars,
         # rejects and colours together. Disabled while nothing is filtered,
         # so it doubles as the answer to "is anything hidden right now?".
         self.cull_clear_filter_btn = icon_button(
-            pictogram('filter_off', self._cull_ink()), tr(
-                'Clear filter - show every image again: no star limit, no '
-                'colour limit,\nrejects visible. Opening a folder or a card '
-                'does this by itself.'))
+            lucide('filter_off', self._cull_ink()), tr('Clear filter'))
         self.cull_clear_filter_btn.setEnabled(False)   # nothing filtered yet
         self.cull_clear_filter_btn.clicked.connect(self._cull_clear_filter)
         self._cull_filter_widgets.append(self.cull_clear_filter_btn)
-        bar.addWidget(self.cull_clear_filter_btn)
+        frow.addWidget(self.cull_clear_filter_btn)
         bar.addWidget(toolbar_separator())
         bar.addStretch(1)      # second half of the centring pair
         # "Apply" (Übernehmen) hands the selection (or all filtered images) to
@@ -1331,6 +1324,11 @@ class MWCullingMixin:
         bar.addWidget(move_btn)
         slim_toolbar(bar)
         outer.addLayout(bar)
+        # The filter row sits directly under the toolbar and is slimmed the
+        # same way, so opening it costs one short line and not a block.
+        frow.addStretch(1)
+        slim_toolbar(frow)
+        outer.addWidget(self.cull_filter_row)
 
         split = QSplitter(Qt.Vertical)
         self.cull_view = CullImageView()
@@ -1798,13 +1796,21 @@ class MWCullingMixin:
         if not hasattr(self, 'cull_filter_toggle'):
             return
         ink = self._cull_ink()
-        self.cull_camera_btn.setIcon(pictogram('camera', ink))
-        self.cull_eject_btn.setIcon(pictogram('eject', ink))
-        self.cull_clear_filter_btn.setIcon(pictogram('filter_off', ink))
+        self.cull_camera_btn.setIcon(lucide('camera', ink))
+        self.cull_eject_btn.setIcon(lucide('eject', ink))
+        self.cull_clear_filter_btn.setIcon(lucide('filter_off', ink))
+        self.cull_open_btn.setIcon(lucide('folder', ink))
+        self.cull_reload_btn.setIcon(lucide('reload', ink))
+        # 0.18.20: the MediaWiki tab's name button is inked from the same
+        # palette, so it has to be repainted here too - it used to keep the
+        # colour it was built with and vanished after a scheme change.
+        names = getattr(self, 'names_btn', None)
+        if names is not None:
+            names.setIcon(lucide('nametag', ink))
         hidden = getattr(self, '_cull_filter_collapsed', False)
         marked = hidden and self._cull_filter_active()
         self.cull_filter_toggle.setIcon(
-            pictogram('filter_dot' if marked else 'filter', ink))
+            lucide('filter_dot' if marked else 'filter', ink))
         self.cull_filter_toggle.setToolTip(
             tr('A filter is active - click to show it') if marked
             else (tr('Show the filter') if hidden else tr('Hide the filter')))
@@ -1820,6 +1826,13 @@ class MWCullingMixin:
         if toggle is None:
             return
         self._cull_filter_collapsed = bool(collapsed)
+        # 0.18.20: one row shows or hides instead of a dozen widgets. The
+        # children are set as well, because the existing checks (and the
+        # 0.18.18 test) ask the widgets themselves - and a child of a hidden
+        # parent reports isVisible() False either way.
+        row = getattr(self, 'cull_filter_row', None)
+        if row is not None:
+            row.setVisible(not collapsed)
         for w in self._cull_filter_widgets:
             w.setVisible(not collapsed)
         if remember:

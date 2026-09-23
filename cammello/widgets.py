@@ -15,6 +15,13 @@ from PyQt5.QtCore import (Qt, QEvent, pyqtSignal, QUrl, QSize, QSettings,
                           QObject, QRect, QPoint)
 from PyQt5.QtGui import (QDesktopServices, QPixmap, QIcon, QPainter,
                          QPen, QColor, QPolygonF)
+try:
+    # Only needed for the Lucide icons. Guarded because a frozen build
+    # that failed to bundle QtSvg must still start - lucide() then falls
+    # back to the hand-drawn pictograms below.
+    from PyQt5.QtSvg import QSvgRenderer
+except Exception:                       # pragma: no cover - platform issue
+    QSvgRenderer = None
 from .constants import *
 from .i18n import tr
 from .sdc import *
@@ -1692,6 +1699,87 @@ TOOLBAR_SEPARATOR_NAME = 'cammelloToolbarSeparator'
 # fallback font had no such character. So these are PAINTED, like the colour
 # swatches: no asset files, no font dependency, and they take the current
 # text colour so they stay legible in both schemes.
+
+# ── Lucide icons (0.18.20) ───────────────────────────────────────────────
+# One drawn set instead of the hand-made pictograms below, so every symbol
+# in the app comes from the same hand. Lucide is the set RapidRaw uses:
+# single-colour 24x24 strokes on `currentColor`, ISC licence (the licence
+# file ships next to the SVGs). Only the icons actually used are in the
+# repo - a few hundred bytes each, no new dependency beyond PyQt5.QtSvg.
+LUCIDE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'assets', 'icons')
+# name used in the code -> file name in assets/icons
+LUCIDE_NAMES = {
+    'camera': 'camera',
+    'eject': 'eject',
+    'filter': 'funnel',
+    'filter_dot': 'funnel',          # same funnel, plus a drawn dot
+    'filter_off': 'funnel-x',
+    'nametag': 'tag',
+    'folder': 'folder-open',
+    'reload': 'refresh-cw',
+}
+_LUCIDE_CACHE = {}
+
+
+def lucide(kind, color, size=18):
+    """A QIcon from the bundled Lucide SVG, inked in `color`.
+
+    Falls back to pictogram() when QtSvg is missing or the file cannot be
+    read, so a build that lost the assets still shows a symbol instead of
+    an empty button. Results are cached: the icons are repainted on every
+    colour-scheme change and on every filter toggle.
+    """
+    key = (kind, QColor(color).name(), int(size))
+    hit = _LUCIDE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    icon = _lucide_draw(kind, color, size)
+    if icon is None:
+        icon = pictogram(kind if kind in PICTOGRAMS else 'camera', color, size)
+    _LUCIDE_CACHE[key] = icon
+    return icon
+
+
+def _lucide_draw(kind, color, size):
+    """The actual render; None when it cannot be done."""
+    if QSvgRenderer is None:
+        return None
+    fname = LUCIDE_NAMES.get(kind)
+    if not fname:
+        return None
+    try:
+        with open(os.path.join(LUCIDE_DIR, fname + '.svg'),
+                  encoding='utf-8') as fh:
+            svg = fh.read()
+    except OSError:
+        logging.debug('Lucide icon %s not readable', fname)
+        return None
+    ink = QColor(color)
+    # The SVG paints with `currentColor`, which QSvgRenderer does not
+    # resolve - substituting the literal colour is what inks the icon, and
+    # it is what lets the same file serve the light and the dark scheme.
+    svg = svg.replace('currentColor', ink.name())
+    renderer = QSvgRenderer(svg.encode('utf-8'))
+    if not renderer.isValid():
+        return None
+    scale = 4
+    pm = QPixmap(int(size * scale), int(size * scale))
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    renderer.render(p, QRectF(0, 0, size * scale, size * scale))
+    if kind == 'filter_dot':
+        # "folded away AND something is filtered" - see _cull_update_icons.
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(ink)
+        r = size * scale
+        p.drawEllipse(QPointF(r * 0.78, r * 0.78), r * 0.20, r * 0.20)
+    p.end()
+    pm.setDevicePixelRatio(float(scale))
+    return QIcon(pm)
+
 
 PICTOGRAMS = ('camera', 'eject', 'filter', 'filter_dot', 'filter_off',
               'nametag')
