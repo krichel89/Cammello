@@ -273,6 +273,185 @@ class NamesFromDescriptionDialog(QDialog):
         self.accept()
 
 
+class GenerateCaptionsDialog(QDialog):
+    """Review the captions before they are written (0.18.24).
+
+    Captions in a whole column are like target names: not something to
+    overwrite on a mis-click, so the run is shown and confirmed first. The
+    dialog is where the per-event, per-language conjunction is seen and
+    corrected - the connector ("bei der") and the event's inflected form
+    ("Berlinale") sit in two editable columns, prefilled from what was
+    learned before and from the captions already in the selection. A
+    language left without a conjunction falls back to the caseless "Name,
+    Event", which is shown in the example so nothing is a surprise.
+
+    The dialog computes nothing itself: every caption comes from
+    captions.build_caption, so what is previewed is exactly what is written.
+    """
+
+    def __init__(self, entities, rows, table, langs, parent=None):
+        super().__init__(parent)
+        from . import captions as _cap
+        self._cap = _cap
+        self.setWindowTitle(tr('Generate captions') + f' - {APP_NAME}')
+        self.setMinimumSize(820, 560)
+        self.setStyleSheet(current_input_style())
+        self._entities = entities or {}
+        self._rows = list(rows or [])
+        self._table = table                       # a captions.FuegungTable
+        self._all_langs = list(langs or [])
+        self._building = False
+        # event QID -> the depicts of the first row that carries it, so an
+        # example name and the subject for a language can be shown.
+        self._event_depicts = {}
+        for row in self._rows:
+            ev = (row.get('event') or '').strip()
+            if ev and ev not in self._event_depicts:
+                self._event_depicts[ev] = row.get('depicts') or []
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            tr('A caption is built for each ticked language from the '
+               'depicts and the event. Where a conjunction is known the '
+               'caption reads as a sentence; otherwise it is the plain '
+               '"Name, Event".')))
+
+        # ── language picker ──────────────────────────────────────────────
+        lang_box = QGroupBox(tr('Languages'))
+        grid = QHBoxLayout(lang_box)
+        self._lang_boxes = {}
+        col = QVBoxLayout()
+        grid.addLayout(col)
+        for i, code in enumerate(self._all_langs):
+            cb = QCheckBox(code)
+            cb.setChecked(True)
+            cb.stateChanged.connect(self._refresh)
+            self._lang_boxes[code] = cb
+            col.addWidget(cb)
+            if (i + 1) % 7 == 0:               # a fresh column every 7
+                col = QVBoxLayout()
+                grid.addLayout(col)
+        grid.addStretch(1)
+        layout.addWidget(lang_box)
+
+        # ── the conjunctions, editable ───────────────────────────────────
+        layout.addWidget(QLabel(tr('Conjunctions (edit to correct a '
+                                   'sentence; leave blank for "Name, '
+                                   'Event"):')))
+        self.conj = QTableWidget(0, 5, self)
+        self.conj.setHorizontalHeaderLabels(
+            [tr('Event'), tr('Lang'), tr('Connector'), tr('Event form'),
+             tr('Example')])
+        self.conj.verticalHeader().setVisible(False)
+        self.conj.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.conj.cellChanged.connect(self._on_cell_changed)
+        layout.addWidget(self.conj, 1)
+
+        self.links_cb = QCheckBox(
+            tr('Also write linked descriptions (Information templates with '
+               'Wikipedia links)'))
+        layout.addWidget(self.links_cb)
+
+        self.note = QLabel()
+        self.note.setStyleSheet('color: gray;')
+        layout.addWidget(self.note)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok
+                                        | QDialogButtonBox.Cancel)
+        self.buttons.button(QDialogButtonBox.Ok).setText(tr('Write captions'))
+        self.buttons.accepted.connect(self._on_accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        self._refresh()
+
+    # The (event, lang) pairs to show: every event in the selection crossed
+    # with the ticked languages. An event of '' (a picture with no event) has
+    # no conjunction to learn, so it is not listed.
+    def languages(self):
+        return [c for c in self._all_langs if self._lang_boxes[c].isChecked()]
+
+    def _example_subject(self, event_qid, lang):
+        depicts = self._event_depicts.get(event_qid) or []
+        return self._cap.subject_name(depicts, self._entities, lang)
+
+    def _refresh(self):
+        self._building = True
+        langs = self.languages()
+        events = sorted(self._event_depicts)
+        pairs = [(ev, lang) for ev in events for lang in langs]
+        self.conj.setRowCount(len(pairs))
+        self._pairs = pairs
+        for r, (ev, lang) in enumerate(pairs):
+            ev_label = self._cap.entity_label(self._entities.get(ev), lang) \
+                or ev
+            pair = self._table.get(ev, lang)
+            conn = pair[0] if pair else ''
+            form = pair[1] if pair else ''
+            ev_item = QTableWidgetItem(ev_label)
+            lang_item = QTableWidgetItem(lang)
+            for it in (ev_item, lang_item):
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+            self.conj.setItem(r, 0, ev_item)
+            self.conj.setItem(r, 1, lang_item)
+            self.conj.setItem(r, 2, QTableWidgetItem(conn))
+            self.conj.setItem(r, 3, QTableWidgetItem(form))
+            ex = QTableWidgetItem(self._example_for(r))
+            ex.setFlags(ex.flags() & ~Qt.ItemIsEditable)
+            ex.setForeground(QColor('#909090'))
+            self.conj.setItem(r, 4, ex)
+        self._building = False
+        # A count of what will be written. The table is read from the grid
+        # ONCE, not per row - _effective_table walks the whole grid.
+        eff = self._effective_table()
+        total = sum(len(self._cap.all_captions(
+            row.get('depicts') or [], (row.get('event') or '').strip(),
+            self._entities, eff, langs))
+            for row in self._rows)
+        self.note.setText(tr('{n} caption(s) across {f} file(s) and {l} '
+                             'language(s).').format(
+            n=total, f=len(self._rows), l=len(langs)))
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(bool(langs))
+
+    def _effective_table(self):
+        """A FuegungTable built from what is currently typed in the grid,
+        so the preview and the write use the edited values, not the ones the
+        dialog opened with."""
+        table = self._cap.FuegungTable()
+        for r, (ev, lang) in enumerate(getattr(self, '_pairs', [])):
+            conn = self.conj.item(r, 2).text() if self.conj.item(r, 2) else ''
+            form = self.conj.item(r, 3).text() if self.conj.item(r, 3) else ''
+            if conn.strip() or form.strip():
+                table.learn(ev, lang, conn, form)
+        return table
+
+    def _example_for(self, r):
+        ev, lang = self._pairs[r]
+        subject = self._example_subject(ev, lang) or tr('(name)')
+        ev_label = self._cap.entity_label(self._entities.get(ev), lang) or ev
+        return self._cap.build_caption(subject, ev, ev_label, lang,
+                                       self._effective_table())
+
+    def _on_cell_changed(self, row, col):
+        if self._building or col not in (2, 3):
+            return
+        self._building = True
+        ex = self.conj.item(row, 4)
+        if ex is not None:
+            ex.setText(self._example_for(row))
+        self._building = False
+
+    def result_table(self):
+        """The FuegungTable to remember: the edited values."""
+        return self._effective_table()
+
+    def with_links(self):
+        return self.links_cb.isChecked()
+
+    def _on_accept(self):
+        self.accept()
+
+
 class BulkRenameDialog(QDialog):
     """Bulk rename for the target Commons filenames, in the shape macOS
     Photos and Lightroom use (0.16.0, Harald): you PICK A SCHEME instead of

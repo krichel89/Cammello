@@ -609,6 +609,95 @@ class EditHistory:
         return self._stack[-1][0] if self._stack else None
 
 
+# ── Action history (0.18.23) ─────────────────────────────────────────────
+# A user's complaint made this necessary: "I was doing a lot of rejecting
+# when I accidentally bulk-rejected the whole thing". Ctrl+Z existed since
+# 0.15.0 but covered image edits ONLY - ratings and colour labels were
+# deliberately left off that stack, which is exactly what he needed back.
+#
+# This class is bookkeeping and nothing else: it stores a LABEL and a list
+# of opaque steps per action, and knows nothing about what a step means.
+# Reading and writing the actual values stays in the culling module, which
+# is the only place that knows about items, sidecars and the strip. That
+# is what keeps this testable without Qt.
+#
+# One ACTION is one undo step. Rejecting 200 images in one keypress is one
+# entry, not two hundred - undoing it must give all 200 back at once, or
+# the feature does not answer the complaint it was built for.
+ACTION_DEPTH = 10
+
+
+class ActionHistory:
+    """Bounded undo/redo of labelled actions. Qt-free on purpose."""
+
+    def __init__(self, depth=ACTION_DEPTH):
+        self._depth = max(1, int(depth))
+        self._undo = []
+        self._redo = []
+
+    def __len__(self):
+        return len(self._undo)
+
+    def clear(self):
+        self._undo.clear()
+        self._redo.clear()
+
+    def push(self, label, steps):
+        """Remember an action that HAS happened. `steps` describe how to get
+        back; their shape is the caller's business.
+
+        A fresh action invalidates the redo branch - the usual rule, and the
+        honest one: redoing something that was recorded against a different
+        state would put back values that no longer fit.
+        """
+        steps = list(steps or [])
+        if not steps:
+            return None
+        entry = (str(label), steps)
+        self._undo.append(entry)
+        if len(self._undo) > self._depth:
+            del self._undo[0]
+        self._redo.clear()
+        return entry
+
+    def can_undo(self):
+        return bool(self._undo)
+
+    def can_redo(self):
+        return bool(self._redo)
+
+    def undo_label(self):
+        return self._undo[-1][0] if self._undo else ''
+
+    def redo_label(self):
+        return self._redo[-1][0] if self._redo else ''
+
+    def pop_undo(self):
+        """-> (label, steps) or None. The caller applies them and hands the
+        CURRENT values back through push_redo, so the two stacks can never
+        drift apart."""
+        return self._undo.pop() if self._undo else None
+
+    def push_redo(self, label, steps):
+        steps = list(steps or [])
+        if steps:
+            self._redo.append((str(label), steps))
+            if len(self._redo) > self._depth:
+                del self._redo[0]
+
+    def pop_redo(self):
+        return self._redo.pop() if self._redo else None
+
+    def push_undo_only(self, label, steps):
+        """Put an entry back on the undo stack WITHOUT clearing redo - used
+        while redoing, where the redo branch must survive."""
+        steps = list(steps or [])
+        if steps:
+            self._undo.append((str(label), steps))
+            if len(self._undo) > self._depth:
+                del self._undo[0]
+
+
 def apply_record(edits, path, record):
     """Put a whole record back (undo). Returns True when something changed."""
     key = norm(path)

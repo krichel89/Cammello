@@ -315,6 +315,11 @@ class MainWindow(FlickrMixin,
         # Native menu bar (0.12.3). Built last: it enumerates the pages that
         # exist, and hides the now-redundant tab bar.
         self._build_menus()
+        # 0.18.23: the Edit menu starts greyed out and only the culling
+        # page knows whether there is anything to undo, so ask it once the
+        # menu exists.
+        if hasattr(self, '_cull_update_edit_menu'):
+            self._cull_update_edit_menu()
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)

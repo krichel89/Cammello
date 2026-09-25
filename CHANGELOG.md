@@ -4,6 +4,70 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.24 - 2026-09-25
+
+### Added
+- Structured-data CAPTIONS are generated in every configured language at
+  once, from the file's depicts (P180) and created-during (P10408), using
+  the labels Wikidata already holds - one wbgetentities call for the whole
+  selection. Metadata → "Generate captions…". The conjunction between the
+  name and the event ("bei der", "at the") is grammatical, not mechanical,
+  so it is learned PER EVENT and PER LANGUAGE and remembered; a language
+  without a learned conjunction falls back to the caseless "Name, Event",
+  which reads correctly everywhere. A hand-captioned file in the selection
+  teaches the rest. The caption is plain text capped at 250 characters (a
+  Wikibase label carries no markup); interwiki links (`[[:de:Article|Text]]`
+  from the sitelinks) are offered separately, for the Information-template
+  DESCRIPTION, never for the caption. The whole rulebook is Qt-free in
+  captions.py, so what the preview shows is exactly what is written.
+- The default caption languages are en, de, fr, es, it, nl, pt, pl, ru, uk,
+  sv, ja, zh, ar - a broad, editable set (QSettings key
+  Captions/languages), not "every language Wikidata has".
+- Multi-select in the LOUPE view, the same as the grid always had: Ctrl+A /
+  Cmd+A selects every image passing the filter, and Ctrl/Cmd-click in the
+  filmstrip adds or removes one. The selection drives BOTH rating and the
+  three send targets (add to tabs, save to folder, move). Select all sits
+  in the Edit menu; it is culling-scoped, so its shortcut is inert on the
+  other pages and never swallows a text field's own select-all.
+
+### Notes
+- Ctrl/Cmd-click multi-select was already native to the filmstrip (Qt
+  ExtendedSelection) and needed no new code; only Ctrl+A did, because the
+  strip is focus-less so its built-in select-all could never fire.
+
+## 0.18.23 - 2026-09-25
+
+### Added
+- Ctrl+Z takes back RATINGS and COLOUR LABELS, not just image edits. From a
+  user's report: "I was doing a lot of rejecting when I accidentally
+  bulk-rejected the whole thing which meant I had to redo the whole thing
+  again." A bulk action is ONE undo step - rejecting 200 images in one
+  keypress comes back in one Ctrl+Z, which is the whole point. Ten steps
+  deep, and every image gets its OWN previous value back, not a common one.
+- Redo, on the binding Qt picks per platform (Ctrl+Y on Windows,
+  Cmd+Shift+Z on macOS) via QKeySequence.Redo rather than a hard-coded
+  string.
+- A classic Edit menu, right after File, with Undo and Redo. Both entries
+  NAME what they would do ("Undo Reject (200 images)"), so the menu answers
+  "what would Ctrl+Z do here" without pressing it, and both are greyed out
+  while there is nothing on the stack. The page-level shortcuts stand down
+  in favour of the menu actions: two owners for one key sequence make Qt
+  fire neither.
+- The status bar reports every undo and redo by name, and says so when some
+  of the images are no longer in this folder instead of silently doing
+  less than the label promises.
+
+### Notes
+- Renames are still NOT undoable, as before: by the time one would be
+  undone it has already touched the file system, which is a different
+  problem and needs a different answer.
+- An action that changes nothing is not remembered. Pressing the same
+  rating twice would otherwise fill the ten slots with no-ops and push the
+  step the user actually wants out of reach.
+- The bookkeeping (`edits.ActionHistory`) is Qt-free and knows nothing
+  about what a step means; reading and writing values stays in the culling
+  page. That is what makes the whole of it testable without a window.
+
 ## 0.18.22 - 2026-09-23
 
 ### Changed

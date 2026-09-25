@@ -417,6 +417,54 @@ def fetch_coordinates(qids, timeout=8):
     return out
 
 
+def fetch_caption_entities(qids, timeout=8):
+    """Everything caption generation needs about a set of items, in ONE
+    wbgetentities call (0.18.24).
+
+    Returns the normalized shape captions.py works on:
+
+        { qid: { 'labels':    {lang: value},        # every language
+                 'sitelinks': {wiki: title},        # e.g. 'dewiki'
+                 'human':     bool } }               # P31 contains Q5
+
+    Labels are fetched in every language (no `languages` filter) so a caption
+    can be built in any of them; sitelinks give the interwiki links for the
+    description; the P31 claim tells a depicted person from a depicted thing.
+    """
+    qids = [q for q in qids if q]
+    if not qids:
+        return {}
+    out = {}
+    # wbgetentities takes up to 50 ids at a time; a large selection may span
+    # several batches, but each is still ONE round trip.
+    for start in range(0, len(qids), 50):
+        batch = qids[start:start + 50]
+        r = requests.get(
+            'https://www.wikidata.org/w/api.php',
+            params={'action': 'wbgetentities', 'ids': '|'.join(batch),
+                    'props': 'labels|sitelinks|claims', 'format': 'json'},
+            headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
+        r.raise_for_status()
+        for qid, ent in (r.json().get('entities') or {}).items():
+            labels = {code: (v or {}).get('value', '')
+                      for code, v in (ent.get('labels') or {}).items()
+                      if (v or {}).get('value', '').strip()}
+            sitelinks = {wiki: (v or {}).get('title', '')
+                         for wiki, v in (ent.get('sitelinks') or {}).items()
+                         if (v or {}).get('title', '').strip()}
+            human = False
+            for claim in (ent.get('claims', {}).get(INSTANCE_OF_PROPERTY)
+                          or []):
+                val = (claim.get('mainsnak', {}).get('datavalue', {})
+                       .get('value') or {})
+                if isinstance(val, dict) and val.get('id') == HUMAN_ITEM:
+                    human = True
+                    break
+            out[qid] = {'labels': labels, 'sitelinks': sitelinks,
+                        'human': human}
+    return out
+
+
 _YEAR_RE = re.compile(r'\b(19|20)\d{2}\b')
 
 

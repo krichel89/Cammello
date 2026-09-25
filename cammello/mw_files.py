@@ -3,6 +3,7 @@ that combines these mixins. Mixins are plain classes holding grouped methods;
 they rely on attributes created in MainWindow.__init__ / _build_* and on the
 COL_* / COLS class attributes defined on MainWindow."""
 import os
+import re
 import sys
 import traceback
 from PyQt5.QtWidgets import (
@@ -31,10 +32,11 @@ from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
 from .widgets import (stored_oauth2_tokens, store_oauth2_tokens,
-                      NamesFromDescriptionDialog)
+                      NamesFromDescriptionDialog, GenerateCaptionsDialog)
 from .editors import *
 from .i18n import current_language
 from . import sdc
+from . import captions as captions_mod
 from . import mw_oauth2
 from . import channels
 from . import previews
@@ -679,6 +681,130 @@ class MWFilesMixin:
             text = per_file
         fields, _cats = sdc.decompose_fields(text)
         return ((fields or {}).get('created_during') or '').strip()
+
+    def _row_depicts(self, row):
+        """The depicts QIDs of one row (base merged), deduped, in order."""
+        item = self.table.item(row, self.COL_DESC)
+        per_file = item.text() if item else ''
+        try:
+            text = self._effective_text(per_file)
+        except Exception:                        # pragma: no cover
+            text = per_file
+        fields, _cats = sdc.decompose_fields(text)
+        raw = (fields or {}).get('depicts') or ''
+        out, seen = [], set()
+        for qid in re.split(r'[;,]', raw):
+            qid = qid.strip()
+            if re.fullmatch(r'Q\d+', qid) and qid not in seen:
+                out.append(qid)
+                seen.add(qid)
+        return out
+
+    def _caption_langs(self):
+        """The languages captions are generated in: the stored list, or the
+        default set. Stored as a '|'-joined string under QSettings 'Captions'
+        so it survives editing the constant."""
+        raw = QSettings(APP_NAME, 'Captions').value('languages', '', type=str)
+        langs = [c.strip() for c in raw.split('|') if c.strip()]
+        return langs or list(CAPTION_LANGS_DEFAULT)
+
+    def _generate_captions(self):
+        """Fill the structured-data captions in every configured language
+        from each file's depicts and created-during (0.18.24).
+
+        Harald: "die caption soll in allen sprachen gleichzeitig verfügbar
+        sein … die sollen erzeugt werden … eigenständig." One Wikidata call
+        for the whole selection; a review dialog where the per-event, per-
+        language conjunction can be corrected and is remembered; then the
+        captions are written into the descriptions, the file overriding the
+        base as captions always do. Nothing is written before the dialog is
+        confirmed - a column of hand-written captions is not to be lost on a
+        mis-click.
+        """
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if not rows:
+            rows = list(range(self.table.rowCount()))
+        if not rows:
+            return
+        material = []
+        qids = []
+        seen = set()
+        for row in rows:
+            depicts = self._row_depicts(row)
+            event = self._row_event(row)
+            material.append({'row': row, 'depicts': depicts, 'event': event,
+                             'captions': self._row_captions(row)})
+            for qid in depicts + ([event] if event else []):
+                if qid and qid not in seen:
+                    qids.append(qid)
+                    seen.add(qid)
+        if not qids:
+            QMessageBox.information(
+                self, tr('Generate captions'),
+                tr('No depicts or "created during" found - fill those '
+                   'first, then generate the captions.'))
+            return
+        result, exc, cancelled = fetch_in_background(
+            self, tr('Asking Wikidata…'), fetch_caption_entities, qids)
+        if cancelled:
+            return
+        if exc is not None:
+            self.logger.error('Caption generation: Wikidata failed: %s', exc)
+            QMessageBox.warning(self, tr('Generate captions'),
+                                tr('Wikidata request failed: {e}').format(
+                                    e=exc))
+            return
+        entities = result or {}
+        langs = self._caption_langs()
+        # Start from what was learned before, then fill any gap from the
+        # captions already in this selection - a hand-captioned file teaches
+        # the rest. The dialog may correct either.
+        settings = QSettings(APP_NAME, 'Captions')
+        table = captions_mod.FuegungTable.from_json(
+            settings.value('fuegungen', '', type=str))
+        table.merge_from(captions_mod.derive_table(material, entities, langs))
+
+        dlg = GenerateCaptionsDialog(entities, material, table, langs, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        chosen_langs = dlg.languages()
+        final_table = dlg.result_table()
+        with_links = dlg.with_links()
+        # Remember the conjunctions for next time (gaps filled, dialog wins).
+        stored = captions_mod.FuegungTable.from_json(
+            settings.value('fuegungen', '', type=str))
+        stored.merge_from(final_table, overwrite=True)
+        settings.setValue('fuegungen', stored.to_json())
+
+        written = 0
+        for m in material:
+            caps = captions_mod.all_captions(
+                m['depicts'], m['event'], entities, final_table, chosen_langs)
+            if not caps:
+                continue
+            changes = {f'caption_{lang}': text for lang, text in caps.items()}
+            if with_links:
+                for lang in chosen_langs:
+                    linked = captions_mod.linked_description(
+                        m['depicts'], m['event'], entities, final_table,
+                        lang, [lang, 'en', 'de'])
+                    if linked:
+                        changes[f'info:{lang}'] = linked
+            row = m['row']
+            item = self.table.item(row, self.COL_DESC)
+            if item is None:
+                continue
+            item.setText(apply_field_changes(item.text(), changes))
+            if hasattr(self, '_refresh_effective'):
+                self._refresh_effective(row)
+            written += 1
+        self.logger.info(
+            'Generated captions for %d file(s) in %d language(s)%s.',
+            written, len(chosen_langs),
+            ' with linked descriptions' if with_links else '')
+        self.status_bar.showMessage(
+            tr('Captions written for {f} file(s) in {l} language(s).').format(
+                f=written, l=len(chosen_langs)), 5000)
 
     def _caption_rows(self, rows):
         """The per-row material sdc.propose_names needs, in `rows` order."""

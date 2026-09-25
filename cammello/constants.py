@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.18.22'
+__version__ = '0.18.24'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -612,6 +612,30 @@ WD_USER_AGENT = (
     f'{APP_NAME}/{__version__} '
     f'(Python {sys.version_info.major}.{sys.version_info.minor}; PyQt5)'
 )
+
+# Caption generation (0.18.24). "instance of" and "human" are the two most
+# widely used identifiers on Wikidata (millions of items); they are the
+# standard, long-stable IDs, not recalled guesses, and can be checked on
+# wikidata.org. Used only to tell a depicted PERSON apart from a depicted
+# thing, so the caption reads "Person at Event" and not "Building at Event".
+INSTANCE_OF_PROPERTY = 'P31'
+HUMAN_ITEM = 'Q5'
+
+# The maximum length of a Wikimedia structured-data caption (a Wikibase
+# label): 250 characters. A generated caption is clamped to this.
+CAPTION_MAX_LEN = 250
+
+# The languages a caption is generated in (0.18.24). Deliberately a broad,
+# editable set rather than "every language Wikidata has" (that would be
+# hundreds): the point Harald asked for is that the caption is available in
+# many languages at once, and for a language without a learned conjunction
+# the caseless "Name, Event" form still reads correctly. Change this list -
+# or the QSettings(APP_NAME, 'Captions') key 'languages' that overrides it -
+# to add or drop languages; nothing else depends on the exact set.
+CAPTION_LANGS_DEFAULT = [
+    'en', 'de', 'fr', 'es', 'it', 'nl', 'pt', 'pl', 'ru', 'uk', 'sv', 'ja',
+    'zh', 'ar',
+]
 # A single, complete QID.
 QID_RE = re.compile(r'^Q\d+$')
 

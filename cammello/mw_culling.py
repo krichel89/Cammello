@@ -80,6 +80,17 @@ def rating_marks(rating, empty=False):
     return '★' * value + ('☆' * (5 - value) if empty else '')
 
 
+def _menu_safe(text):
+    """Escape a menu item's variable part.
+
+    Qt reads a single "&" in an action's text as the mnemonic marker and
+    swallows it. A colour label may legitimately contain one - a labelset
+    named "Fashion & Beauty" would show up as "Fashion  Beauty" with the B
+    underlined. Doubling it prints the ampersand (0.18.23 QK finding).
+    """
+    return str(text).replace('&', '&&')
+
+
 class _LabelBarDelegate(QStyledItemDelegate):
     """Filmstrip/grid cell painting, scheme-aware:
 
@@ -1075,6 +1086,11 @@ class MWCullingMixin:
         # Every writing path calls _cull_remember_edit() BEFORE it changes
         # anything, so the stack holds the state to go back to.
         self._cull_undo = edits.EditHistory()
+        # 0.18.23: ratings and colour labels join the undo, on a stack of
+        # their own kind - one entry per ACTION, so a bulk rejection comes
+        # back in one step. See edits.ActionHistory for why it is separate
+        # from the per-file EditHistory above.
+        self._cull_actions = edits.ActionHistory()
 
         w = _CullTab(self)
         # 0.15.0: Ctrl+Z / Cmd+Z for the image edits. Scoped to the culling
@@ -1083,7 +1099,13 @@ class MWCullingMixin:
         # tabs. QKeySequence.Undo already means Cmd+Z on macOS.
         self._cull_undo_sc = QShortcut(QKeySequence.Undo, w)
         self._cull_undo_sc.setContext(Qt.WidgetWithChildrenShortcut)
-        self._cull_undo_sc.activated.connect(self._cull_undo_edit)
+        self._cull_undo_sc.activated.connect(self._cull_undo_action)
+        # 0.18.23: redo, with the binding Qt picks for the platform -
+        # Ctrl+Y on Windows, Cmd+Shift+Z on macOS. Hard-coding one of them
+        # would be wrong on the other.
+        self._cull_redo_sc = QShortcut(QKeySequence.Redo, w)
+        self._cull_redo_sc.setContext(Qt.WidgetWithChildrenShortcut)
+        self._cull_redo_sc.activated.connect(self._cull_redo_action)
         outer = QVBoxLayout(w)
 
         # Toolbar - deliberately slim (0.12.4): tight margins and a fixed,
@@ -2894,14 +2916,102 @@ class MWCullingMixin:
         changed. Called by every writing path - crop, exposure, white
         balance, reset."""
         self._cull_undo.push(path, edits.get_edit(self._cull_edits, path))
+        # 0.18.23 QK finding: without this the Edit menu's Undo entry
+        # stayed greyed out after an image edit, even though Ctrl+Z would
+        # have worked - the menu lied about what was possible.
+        self._cull_update_edit_menu()
+
+    @staticmethod
+    def _cull_action_label(what, count):
+        """"Reject" + 37 -> "Reject (37 images)". One image says so too -
+        the message has to tell the user WHAT came back, and a bare verb
+        does not."""
+        if count == 1:
+            return tr('{what} (1 image)').format(what=what)
+        return tr('{what} ({n} images)').format(what=what, n=count)
+
+    def _cull_undo_action(self):
+        """Ctrl+Z: one step back.
+
+        0.18.23: ratings and colour labels first, image edits after. Two
+        stacks, one key - the rating stack is asked first because that is
+        the one the complaint was about ("I accidentally bulk-rejected the
+        whole thing"), and an action there is always newer than an edit
+        that is still on the other stack would be in the same breath.
+        """
+        entry = self._cull_actions.pop_undo()
+        if entry is None:
+            return self._cull_undo_edit()
+        label, steps = entry
+        now, touched = self._cull_restore_snapshot(steps)
+        self._cull_actions.push_redo(label, now)
+        self._cull_update_edit_menu()
+        self.logger.info('Undo: %s (%d of %d row(s) still visible).',
+                         label, len(touched), len(steps))
+        if not touched:
+            self.statusBar().showMessage(
+                tr('Nothing to undo here - those images are not in this '
+                   'folder any more.'), 5000)
+            return
+        missing = len(steps) - len(touched)
+        if missing:
+            self.statusBar().showMessage(
+                tr('Undone: {what} - {n} image(s) were not reachable.')
+                .format(what=label, n=missing), 6000)
+        else:
+            self.statusBar().showMessage(
+                tr('Undone: {what}').format(what=label), 4000)
+
+    def _cull_redo_action(self):
+        """Ctrl+Y / Cmd+Shift+Z: put the undone action back."""
+        entry = self._cull_actions.pop_redo()
+        if entry is None:
+            self.statusBar().showMessage(tr('Nothing left to redo.'), 3000)
+            return
+        label, steps = entry
+        now, touched = self._cull_restore_snapshot(steps)
+        # push_undo_only, NOT push: push clears the redo branch, which
+        # would make a second Ctrl+Y impossible after the first one.
+        self._cull_actions.push_undo_only(label, now)
+        self._cull_update_edit_menu()
+        self.logger.info('Redo: %s (%d row(s)).', label, len(touched))
+        self.statusBar().showMessage(
+            tr('Redone: {what}').format(what=label) if touched
+            else tr('Nothing to redo here - those images are not in this '
+                    'folder any more.'), 4000)
+
+    def _cull_update_edit_menu(self):
+        """Keep the Edit menu's two entries in step with the stacks.
+
+        The METHOD comes from the mixin and therefore exists even in a
+        build without the culling page, while the STACKS are created when
+        that page is built - so a plain hasattr() on the method is not
+        enough to call it. Caught by test_0110 and test_iptc, both of
+        which run with culling switched off.
+        """
+        if not hasattr(self, '_cull_actions'):
+            return
+        act = getattr(self, 'act_undo', None)
+        if act is not None:
+            can = self._cull_actions.can_undo() or len(self._cull_undo) > 0
+            act.setEnabled(can)
+            what = self._cull_actions.undo_label()
+            act.setText(tr('&Undo {what}').format(what=_menu_safe(what))
+                        if what else tr('&Undo'))
+        act = getattr(self, 'act_redo', None)
+        if act is not None:
+            act.setEnabled(self._cull_actions.can_redo())
+            what = self._cull_actions.redo_label()
+            act.setText(tr('&Redo {what}').format(what=_menu_safe(what))
+                        if what else tr('&Redo'))
 
     def _cull_undo_edit(self):
-        """One step back in the image edits (Ctrl+Z / Cmd+Z, 0.15.0).
+        """One step back in the IMAGE EDITS (Ctrl+Z / Cmd+Z, 0.15.0).
 
-        Deliberately limited to image edits: ratings, renames and
-        coordinates are NOT on this stack. A rename has already touched the
-        file system by the time it would be undone, which is a different
-        problem and needs a different answer.
+        Reached from _cull_undo_action once the rating stack is empty.
+        Renames and coordinates are still NOT undoable: a rename has
+        already touched the file system by the time it would be undone,
+        which is a different problem and needs a different answer.
         """
         if self._cull_edits_locked():
             self._cull_say_locked()
@@ -2916,6 +3026,7 @@ class MWCullingMixin:
             self._cull_save_edits_soon()
         self.logger.info('Undo: image edits of %s restored.',
                          os.path.basename(path))
+        self._cull_update_edit_menu()
         # Jump to the file the undo belongs to, or the user sees nothing.
         visible = False
         for i, it in enumerate(self._cull_visible):
@@ -3175,23 +3286,117 @@ class MWCullingMixin:
             return [self._cull_index]
         return []
 
+    def _cull_select_all(self):
+        """Ctrl+A / Cmd+A: select every visible image, so a rating or a send
+        then applies to all of them - the same multi-select the grid always
+        had, now reachable in the loupe too (0.18.24).
+
+        The filmstrip is Qt.NoFocus ("keys stay with the tab"), so its own
+        built-in Ctrl+A can never fire; this is the only way in. Scoped to
+        the Edit menu action, which is greyed out on the other pages, so it
+        cannot reach their text fields (the 0.12 lesson). A text field on
+        THIS page - there is none today, but a future one - keeps its own
+        select-all: the focus is checked and handed back to it.
+        """
+        # The method lives on the mixin, so it exists even in a build with no
+        # culling page; its menu action is greyed out there, but guard the
+        # attributes anyway (the 0.18.23 _cull_update_edit_menu lesson).
+        if not hasattr(self, 'cull_strip'):        # pragma: no cover
+            return
+        fw = QApplication.focusWidget()
+        if isinstance(fw, QLineEdit):
+            fw.selectAll()
+            return
+        if isinstance(fw, QComboBox) and fw.isEditable() and fw.lineEdit():
+            fw.lineEdit().selectAll()
+            return
+        if not self._cull_visible:
+            return
+        # selectAll() marks every row in the strip, which holds exactly the
+        # visible (filtered) items; focus is left where it was so the rating
+        # keys keep reaching _cull_key.
+        self.cull_strip.selectAll()
+        self._cull_set_status()
+
     def _cull_set_rating(self, rating):
-        self._cull_apply_to_targets(lambda it: setattr(it, 'rating', rating))
+        if rating == -1:
+            what = tr('Reject')
+        elif rating == 0:
+            what = tr('Clear rating')
+        else:
+            what = tr('Rating {n}').format(n=rating)
+        self._cull_apply_to_targets(lambda it: setattr(it, 'rating', rating),
+                                    what)
 
     def _cull_set_label(self, color_index):
         text = ('' if color_index is None else culling.label_text(
             color_index, self.cull_labelset_combo.currentText()))
-        self._cull_apply_to_targets(lambda it: setattr(it, 'label', text))
+        what = tr('Clear colour') if not text else tr('Colour {name}').format(
+            name=text)
+        self._cull_apply_to_targets(lambda it: setattr(it, 'label', text),
+                                    what)
 
-    def _cull_apply_to_targets(self, change):
+    # ── Undo bookkeeping for ratings and labels (0.18.23) ────────────────
+    # Snapshots are (path, rating, label) triples. They are read from the
+    # ITEMS, which are the same objects the strip and the writeback queue
+    # use - so an undo puts back exactly what was on screen, and the
+    # sidecar follows through the same queue as any other change.
+
+    def _cull_snapshot_rows(self, rows):
+        out = []
+        for r in rows:
+            if 0 <= r < len(self._cull_visible):
+                item = self._cull_visible[r]
+                out.append((item.display_path, item.rating, item.label))
+        return out
+
+    def _cull_restore_snapshot(self, steps):
+        """Put a snapshot back. -> (current_state_before_restoring, rows).
+
+        The state it finds is returned so the caller can put it on the
+        other stack: that is what makes undo and redo mirror images of each
+        other without a second bookkeeping path.
+        """
+        by_path = {}
+        for i, item in enumerate(self._cull_visible):
+            by_path.setdefault(item.display_path, i)
+        now, touched = [], []
+        for path, rating, label in steps:
+            row = by_path.get(path)
+            if row is None:
+                # The folder changed, or a filter hides the row. Skipped
+                # rather than guessed - see the message in the caller.
+                continue
+            item = self._cull_visible[row]
+            now.append((path, item.rating, item.label))
+            item.rating = rating
+            item.label = label
+            self._cull_wb.enqueue(item)
+            self._cull_decorate_row(row)
+            touched.append(row)
+        if touched:
+            self._cull_set_status()
+        return now, touched
+
+    def _cull_apply_to_targets(self, change, what=''):
         rows = self._cull_target_rows()
         if not rows:
             return
+        before = self._cull_snapshot_rows(rows) if what else []
         for r in rows:
             item = self._cull_visible[r]
             change(item)
             self._cull_wb.enqueue(item)
             self._cull_decorate_row(r)
+        if before:
+            # Only a real change is worth an undo step - re-pressing the
+            # same key would otherwise fill the stack with no-ops and push
+            # the step the user actually wants to undo out of reach.
+            after = self._cull_snapshot_rows(rows)
+            if after != before:
+                self._cull_actions.push(
+                    self._cull_action_label(what, len(before)), before)
+                self._cull_update_edit_menu()
         self._cull_set_status()
         # Auto-advance only for single-image rating; after rating a
         # multi-selection, jumping away would be disorienting.

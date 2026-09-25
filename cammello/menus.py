@@ -114,6 +114,11 @@ class MenusMixin:
         # macOS only merges roles correctly for a non-native-looking bar when
         # it is the window's own menu bar - which menuBar() gives us.
         self._build_file_menu(bar.addMenu(tr('&File')))
+        # 0.18.23: a classic Edit menu, in the place people look for it -
+        # right after File. It holds Undo and Redo and nothing else for
+        # now; the two entries NAME the action they would undo, so the
+        # menu answers "what would Ctrl+Z do" without pressing it.
+        self._build_edit_menu(bar.addMenu(tr('&Edit')))
         self._build_metadata_menu(bar.addMenu(tr('&Metadata')))
         self._build_view_menu(bar.addMenu(tr('&View')))
         self._build_location_menu(bar.addMenu(tr('&Location')))
@@ -130,6 +135,49 @@ class MenusMixin:
         # The module strip is THE visible page picker now; the Qt tab bar
         # must stay hidden so it does not double up (0.12.6 bug).
         self.tabs.tabBar().setVisible(False)
+
+    def _build_edit_menu(self, menu):
+        """Undo / Redo. Culling-only, so both are greyed out on the other
+        pages by _update_menu_state, like every other page-bound action.
+
+        The shortcuts come from QKeySequence, not from a typed string:
+        Redo is Ctrl+Y on Windows and Cmd+Shift+Z on macOS, and Qt knows
+        which is which.
+        """
+        self.act_undo = self._act(
+            menu, tr('&Undo'), '_cull_undo_action', QKeySequence.Undo,
+            tr('Take back the last action - a bulk rejection comes back in '
+               'one step.'))
+        self.act_redo = self._act(
+            menu, tr('&Redo'), '_cull_redo_action', QKeySequence.Redo,
+            tr('Put the action back that was just taken back.'))
+        for act in (self.act_undo, self.act_redo):
+            if act is not None:
+                # Disabled until there is something on the stack; the
+                # culling page keeps them in step (_cull_update_edit_menu).
+                act.setEnabled(False)
+                self._menu_scope['culling'].append(act)
+        # 0.18.24: Select all, for the loupe too. Culling-scoped, so its
+        # Ctrl+A / Cmd+A is inert on the other pages and cannot swallow a
+        # text field's own select-all there. The filmstrip is NoFocus, so
+        # this menu action is the ONLY owner of the sequence - no ambiguity
+        # with a built-in list shortcut (the trap Undo/Redo had to dodge).
+        menu.addSeparator()
+        self.act_select_all = self._act(
+            menu, tr('Select &all'), '_cull_select_all',
+            QKeySequence.SelectAll,
+            tr('Select every image passing the filter, to rate or send them '
+               'all at once (also with Ctrl/Cmd-click in the filmstrip).'))
+        if self.act_select_all is not None:
+            self._menu_scope['culling'].append(self.act_select_all)
+        # The window-level shortcuts in the culling page use the SAME keys.
+        # Two owners for one sequence make Qt fire neither ("ambiguous
+        # shortcut overload"), so the menu actions are the ones that keep
+        # the shortcut and the page-level QShortcuts stand down.
+        for name in ('_cull_undo_sc', '_cull_redo_sc'):
+            sc = getattr(self, name, None)
+            if sc is not None:
+                sc.setEnabled(False)
 
     def _build_file_menu(self, menu):
         # Open folder works from ANY page and takes you to Culling - the
@@ -195,6 +243,13 @@ class MenusMixin:
             '_names_from_descriptions', None,
             tr('Build target filenames from the captions: person, event '
                'and the number from the camera.')))
+        # 0.18.24: generate the structured-data captions in every configured
+        # language from depicts and created-during, one Wikidata call for the
+        # whole selection.
+        self._scope('mediawiki', self._act(
+            menu, tr('&Generate captions…'), '_generate_captions', None,
+            tr('Fill the captions in every language from the depicts and '
+               'the event, using the labels Wikidata already holds.')))
         # Rating / colour actions mirror the culling keyboard (0-5, X, 6-9,
         # M toggles the digits to colours - purple is digit 5 in that mode).
         # Rating and colour actions are shown with their keyboard letter
