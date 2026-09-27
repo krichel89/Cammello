@@ -4,6 +4,52 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.26 - 2026-09-27
+
+### Added
+- Templates in the WRONG FIELD are caught before the upload starts. A licence
+  template outside the "License" field, a page template ({{Do not crop}},
+  {{WikiPortraits …}}, {{Location …}} …) inside a field that becomes an
+  {{Information}} parameter (author, source, permission, other fields), a
+  category in one of those fields, a language template {{xx|1=…}} in "Other
+  templates", and templates or links in an SDC caption are listed field by
+  field with where they belong. "Fix first" (the default) stops the upload,
+  "Upload anyway" goes ahead. The rules are Qt-free in
+  sdc.misplaced_template_problems; findings are also written to the log.
+
+### Changed
+- The selection frame in grid and filmstrip is blue (#9fd3ff on the dark
+  scheme, #0a3a8c on the light one) instead of medium gray. Against the
+  medium-gray culling surround the old frame reached only 1.5:1 (dark) and
+  1.2:1 (light); the new one reaches 3.2:1 and 3.7:1. The current-image
+  frame (white/black) is unchanged.
+
+### Fixed
+- The heading "== {{int:filedesc}} ==" now always sits right: the photo path
+  writes it directly above {{Information}} (it wrote none before; the music
+  path already had one). A filedesc or licence heading TYPED into any field
+  is removed, so each heading appears exactly once and never inside a
+  parameter.
+
+### Notes
+- Ctrl/Cmd-click to add or remove single files already worked in grid and
+  filmstrip (Qt ExtendedSelection); it is now covered by a test with real
+  mouse events in both views.
+
+## 0.18.25 - 2026-09-27
+
+### Fixed
+- Only the language templates {{xx|1=…}} now go into the Information
+  |description=. Standalone page templates entered in the description or the
+  extra field - {{Do not crop}}, {{WikiPortraits …}} and the like - were
+  landing inside |description= next to {{en|1=…}}, where they do not belong
+  (Harald's report). They are now hoisted out and placed AFTER the
+  {{Information}} block, in the same spot as the global "Other templates",
+  and deduplicated - a template entered in both the description and the extra
+  field, or also set globally, appears once. Templates nested inside a
+  language template, plain prose and links are left untouched, and a
+  description with no page templates is byte-for-byte unchanged.
+
 ## 0.18.24 - 2026-09-25
 
 ### Added

@@ -772,6 +772,205 @@ def split_lang_templates(text):
     return infos, remaining
 
 
+def _top_level_template_spans(text):
+    """(start, end) of every TOP-LEVEL {{…}} in text, nesting-aware.
+
+    A template inside another template (a nested {{tl|…}} in a {{en|1=…}})
+    is NOT top-level and is left alone; only the outer braces count. Stray
+    unbalanced braces are ignored rather than raising."""
+    spans = []
+    i, n, depth, start = 0, len(text), 0, None
+    while i < n - 1:
+        pair = text[i:i + 2]
+        if pair == '{{':
+            if depth == 0:
+                start = i
+            depth += 1
+            i += 2
+        elif pair == '}}' and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                spans.append((start, i + 2))
+                start = None
+            i += 2
+        else:
+            i += 1
+    return spans
+
+
+def _is_language_template(inner):
+    """True for {{<langcode>|…}} - the ONLY templates that belong in the
+    Information |description= (Harald, 0.18.25). `inner` is the text between
+    the outer braces. A bare {{de}} with no parameter is not a description."""
+    name = inner.split('|', 1)[0].strip()
+    return bool(re.fullmatch(_LANG_CODE, name)) and '|' in inner
+
+
+def hoist_nonlang_templates(text):
+    """Split a description's free wikitext into (description, hoisted).
+
+    Standalone templates that are NOT language templates - {{Do not crop}},
+    {{WikiPortraits …}} and the like - are pulled out into `hoisted` (a list,
+    in order, without duplicates). Language templates {{xx|1=…}}, plain prose
+    and links stay in `description`. Harald's rule (0.18.25): only the
+    language templates belong inside the Information |description=; everything
+    else is a page template and goes outside the box.
+    """
+    text = text or ''
+    kept, hoisted, last = [], [], 0
+    for start, end in _top_level_template_spans(text):
+        inner = text[start + 2:end - 2]
+        if _is_language_template(inner):
+            continue                      # stays in the description, untouched
+        kept.append(text[last:start])
+        hoisted.append(text[start:end])
+        last = end
+    kept.append(text[last:])
+    description = ''.join(kept)
+    # Tidy the holes the removed templates left: trailing spaces before a
+    # newline, and runs of blank lines.
+    description = re.sub(r'[ \t]+\n', '\n', description)
+    description = re.sub(r'\n{3,}', '\n\n', description).strip()
+    # Deduplicate the hoisted templates (they are often entered in both the
+    # base description and the extra field), ignoring only whitespace.
+    seen, unique = set(), []
+    for tmpl in hoisted:
+        key = re.sub(r'\s+', '', tmpl)
+        if key not in seen:
+            seen.add(key)
+            unique.append(tmpl)
+    return description, unique
+
+
+# 0.18.26 (Harald): "Die Ueberschrift == {{int:filedesc}} == muss IMMER
+# richtig sitzen." Cammello writes both section headings itself - filedesc
+# above {{Information}}, license-header above the licence. A heading the user
+# typed into a field would land INSIDE a parameter (|description=, |other
+# fields=) or appear twice, so typed copies are removed and Cammello's own
+# heading is the only one on the page.
+_SECTION_HEADING_RE = re.compile(
+    r'^[ \t]*=+[ \t]*\{\{[ \t]*int[ \t]*:[ \t]*(?:filedesc|license-header)'
+    r'[ \t]*\}\}[ \t]*=+[ \t]*$\n?',
+    re.IGNORECASE | re.MULTILINE)
+
+
+def strip_section_headings(text):
+    """Remove typed '== {{int:filedesc}} ==' / '== {{int:license-header}} =='
+    lines. Returns (text, removed_count). Text without such a line comes back
+    byte-for-byte unchanged."""
+    text = text or ''
+    new, count = _SECTION_HEADING_RE.subn('', text)
+    if not count:
+        return text, 0
+    new = re.sub(r'\n{3,}', '\n\n', new).strip()
+    return new, count
+
+
+# 0.18.26 (Harald): "Nutzer davon abhalten, Vorlagen in die falschen Felder zu
+# posten." Qt-free rulebook, checked before the upload starts. Each finding
+# is (field, snippet, advice) with field/advice as i18n keys, so the dialog
+# can translate them and a test can read them without a window.
+_LICENSE_TMPL_RE = re.compile(
+    r'^(?:cc-|cc0|self$|pd-|gfdl|fal$|attribution$|copyrighted free use|'
+    r'free art license|lgpl|gpl$|bsd$|mit$|licenseReview)', re.IGNORECASE)
+# Page templates that belong OUTSIDE the {{Information}} box (the "Other
+# templates" field). Matched on the start of the template name.
+_PAGE_TMPL_PREFIXES = (
+    'do not crop', 'wikiportraits', 'personality rights', 'location',
+    'object location', 'uncategorized', 'check categories', 'information',
+    'watermark', 'retouched picture', 'panorama', 'photographs by',
+    'user page image', 'consent', 'trademarked', 'quality image',
+    'wiki loves', 'wlm', 'wle',
+)
+
+FIELD_AUTHOR = 'Author:'
+FIELD_SOURCE = 'Source:'
+FIELD_PERMISSION = 'Permission:'
+FIELD_LICENSE = 'License:'
+FIELD_OTHER_FIELDS = 'Other fields:'
+FIELD_OTHER_TEMPLATES = 'Other templates:'
+FIELD_DESCRIPTION = 'Description'
+FIELD_CAPTION = 'Caption'
+
+ADVICE_LICENSE = 'A licence template belongs in the "License" field.'
+ADVICE_PAGE = ('A page template belongs in the "Other templates" field, not '
+               'inside the {{Information}} box.')
+ADVICE_CATEGORY = ('A category belongs in the description (or its category '
+                   'list).')
+ADVICE_LANG = ('A language template {{xx|1=…}} is a description and belongs '
+               'in the description.')
+ADVICE_CAPTION = ('A caption is plain text: templates and links are shown '
+                  'literally on Commons.')
+
+# Fields that become PARAMETERS of {{Information}}.
+_INFO_PARAM_FIELDS = (FIELD_AUTHOR, FIELD_SOURCE, FIELD_PERMISSION,
+                      FIELD_OTHER_FIELDS)
+
+
+def _template_name(tmpl):
+    inner = tmpl[2:-2]
+    return inner.split('|', 1)[0].strip()
+
+
+def _snippet(text, limit=60):
+    text = ' '.join(text.split())
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def misplaced_template_problems(fields, descriptions=()):
+    """Find templates and categories typed into a field where they break
+    or do not belong.
+
+    fields        {FIELD_*: text} for the global, batch-wide fields.
+    descriptions  iterable of (row_label, description_all) - the effective
+                  per-file text, used for the caption check and for licence
+                  templates in the description.
+
+    Returns a list of (row_label_or_'', field, snippet, advice), in field
+    order, each (field, snippet) once. Reports only - changes nothing.
+    """
+    out, seen = [], set()
+
+    def add(row, field, snippet, advice):
+        key = (row, field, snippet)
+        if key not in seen:
+            seen.add(key)
+            out.append((row, field, snippet, advice))
+
+    for field, text in fields.items():
+        text = text or ''
+        for start, end in _top_level_template_spans(text):
+            tmpl = text[start:end]
+            name = _template_name(tmpl)
+            low = name.lower()
+            if field != FIELD_LICENSE and _LICENSE_TMPL_RE.match(name):
+                add('', field, _snippet(tmpl), ADVICE_LICENSE)
+            elif field in _INFO_PARAM_FIELDS and low.startswith(
+                    _PAGE_TMPL_PREFIXES):
+                add('', field, _snippet(tmpl), ADVICE_PAGE)
+            elif (field == FIELD_OTHER_TEMPLATES
+                  and _is_language_template(tmpl[2:-2])):
+                add('', field, _snippet(tmpl), ADVICE_LANG)
+        if field in _INFO_PARAM_FIELDS + (FIELD_LICENSE,):
+            for cat in re.findall(r'\[\[\s*Category\s*:[^\]]*\]\]', text,
+                                  re.IGNORECASE):
+                add('', field, _snippet(cat), ADVICE_CATEGORY)
+
+    for row, text in descriptions:
+        text = text or ''
+        for m in re.finditer(r'(?m)^caption_(' + _LANG_CODE + r')=(.*)$',
+                             text):
+            value = m.group(2)
+            if '{{' in value or '[[' in value:
+                add(row, f'{FIELD_CAPTION} ({m.group(1)})', _snippet(value),
+                    ADVICE_CAPTION)
+        for start, end in _top_level_template_spans(text):
+            tmpl = text[start:end]
+            if _LICENSE_TMPL_RE.match(_template_name(tmpl)):
+                add(row, FIELD_DESCRIPTION, _snippet(tmpl), ADVICE_LICENSE)
+    return out
+
+
 # ── Merging the base description with a per-file description ────────────────────
 #
 # Up to 0.9.12 the two texts were simply concatenated and parsed as one blob,

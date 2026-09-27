@@ -204,6 +204,27 @@ class UploadWorker(QThread):
                 other_templates = row.get('other_templates', '')
                 license_text = row.get('license_text', '')
 
+                # 0.18.26 (Harald): the two section headings must always sit
+                # right. Cammello writes them itself; a copy typed into any
+                # field would land inside a parameter or twice, so it goes.
+                row = dict(row)
+                stripped = 0
+                for _key in ('author', 'source', 'permission',
+                             'other_fields'):
+                    row[_key], _n = strip_section_headings(row.get(_key, ''))
+                    stripped += _n
+                clean_desc, _n = strip_section_headings(clean_desc)
+                stripped += _n
+                other_templates, _n = strip_section_headings(other_templates)
+                stripped += _n
+                license_text, _n = strip_section_headings(license_text)
+                stripped += _n
+                if stripped:
+                    self.log.info('File "%s": %d typed section heading(s) '
+                                  'removed - Cammello places '
+                                  '{{int:filedesc}} and {{int:license-header}}'
+                                  ' itself.', fname, stripped)
+
                 # Collect categories (deduplicated) from the description.
                 cats_seen = set()
                 cats = []
@@ -213,6 +234,24 @@ class UploadWorker(QThread):
                         cats_seen.add(cat)
                 clean_desc = re.sub(r'\[\[Category:[^\]]+\]\]\n?', '',
                                     clean_desc).strip()
+
+                # 0.18.25 (Harald): only the language templates {{xx|1=…}}
+                # belong in the Information |description=. Standalone page
+                # templates entered in the description or the extra field -
+                # {{Do not crop}}, {{WikiPortraits …}} - are hoisted out and
+                # placed after the {{Information}} block, next to the global
+                # "Other templates".
+                clean_desc, hoisted_templates = hoist_nonlang_templates(
+                    clean_desc)
+                if hoisted_templates:
+                    packed = re.sub(r'\s+', '', other_templates)
+                    additions = [t for t in hoisted_templates
+                                 if re.sub(r'\s+', '', t) not in packed]
+                    if additions:
+                        joined = '\n'.join(additions)
+                        other_templates = (
+                            (other_templates.rstrip() + '\n' + joined).strip()
+                            if other_templates.strip() else joined)
 
                 # Always add the tracking category (deduplicated).
                 if TRACKING_CATEGORY_WIKITEXT not in cats_seen:
@@ -264,7 +303,10 @@ class UploadWorker(QThread):
 
                     cats_str = '\n'.join(cats)
 
-                    parts = [info]
+                    # 0.18.26 (Harald): the file page opens with the
+                    # description heading, directly above {{Information}} -
+                    # the photo path used to write none at all.
+                    parts = ['== {{int:filedesc}} ==\n' + info]
                     # 0.12.15: camera position. {{Location dec}} takes decimal
                     # degrees and is the wikitext half; the P1259 claim below is
                     # the structured half of the same fact.

@@ -120,6 +120,60 @@ class MWUploadMixin:
                     sd.get('created_during', ''))
         return problems
 
+    def _misplaced_problems(self, upload_rows):
+        """0.18.26: templates/categories typed into a field where they do
+        not belong - the Qt-free rules live in sdc.misplaced_template_problems.
+        """
+        fields = {
+            FIELD_AUTHOR: self.author_edit.text(),
+            FIELD_SOURCE: self.source_edit.text(),
+            FIELD_PERMISSION: self.permission_edit.text(),
+            FIELD_LICENSE: self.license_edit.text(),
+            FIELD_OTHER_FIELDS: self.other_fields_edit.text(),
+            FIELD_OTHER_TEMPLATES: self.other_templates_edit.text(),
+        }
+        descriptions = []
+        for r in upload_rows:
+            name_item = self.table.item(r, self.COL_FILENAME)
+            desc_item = self.table.item(r, self.COL_DESC)
+            combined = self._effective_text(
+                desc_item.text() if desc_item else '')
+            descriptions.append((name_item.text() if name_item
+                                 else f'#{r + 1}', combined))
+        return misplaced_template_problems(fields, descriptions)
+
+    def _misplaced_message(self, problems, limit=12):
+        """The dialog text, one line per finding, field names translated."""
+        lines = []
+        for row_label, field, snippet, advice in problems[:limit]:
+            if field.startswith(FIELD_CAPTION + ' ('):
+                shown = tr(FIELD_CAPTION) + field[len(FIELD_CAPTION):]
+            else:
+                shown = tr(field).rstrip(':')
+            where = f'{row_label} - {shown}' if row_label else shown
+            lines.append(f'• {where}: {snippet}\n   → {tr(advice)}')
+        if len(problems) > limit:
+            lines.append(tr('… (+{n} more)').format(n=len(problems) - limit))
+        return '\n'.join(lines)
+
+    def _confirm_misplaced(self, problems):
+        """Ask whether to fix the fields first (default) or upload anyway.
+        True = upload anyway."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(tr('Templates in the wrong field'))
+        # User-typed snippets are shown as they are - never as rich text.
+        box.setTextFormat(Qt.PlainText)
+        box.setText(tr('Some entries are in a field where they do not '
+                       'belong. On Commons they would end up in the wrong '
+                       'place or show up as plain text.'))
+        box.setInformativeText(self._misplaced_message(problems))
+        fix_btn = box.addButton(tr('Fix first'), QMessageBox.RejectRole)
+        box.addButton(tr('Upload anyway'), QMessageBox.AcceptRole)
+        box.setDefaultButton(fix_btn)
+        box.exec()
+        return box.clickedButton() is not fix_btn
+
     def _depicts_problems(self, upload_rows):
         """Rows without depicts AND without an override checkbox.
 
@@ -198,6 +252,22 @@ class MWUploadMixin:
                    'of the overrides ("No Wikidata item", "Not applicable", '
                    '"Unidentified") for these files:') + '\n\n' + shown)
             return
+
+        # 0.18.26 (Harald): stop templates in the wrong fields BEFORE they
+        # reach Commons. Not a hard block - Commons accepts the page - but
+        # the user sees what goes where and decides.
+        misplaced = self._misplaced_problems(upload_rows)
+        if misplaced:
+            self.logger.info('Upload paused: %d template(s)/categor(ies) in '
+                             'the wrong field.', len(misplaced))
+            for row_label, field, snippet, advice in misplaced:
+                self.logger.warning('Wrong field%s: %s %s - %s',
+                                    f' ({row_label})' if row_label else '',
+                                    field, snippet, advice)
+            if not self._confirm_misplaced(misplaced):
+                self.logger.info('Upload aborted by the user to fix the '
+                                 'fields.')
+                return
 
         self._save_settings()
         # Apply the timeout to the active session in case it was changed.

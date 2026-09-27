@@ -488,16 +488,16 @@ check('dark palette applied',
       pal.color(QPalette.Window).lightness() < 128,
       str(pal.color(QPalette.Window).name()))
 check('delegate knows dark', w8._cull_delegate.dark is True)
-check('dark: gray SELECTION FRAME, current frame very light (white-ish)',
-      w8._cull_delegate.sel_frame.name() == '#8a8a8a'
+check('dark: accent-blue SELECTION FRAME (0.18.26), current frame very light',
+      w8._cull_delegate.sel_frame.name() == '#9fd3ff'
       and w8._cull_delegate.frame_color.lightness() > 220)
 
 # Light scheme: inverted.
 w8.scheme_combo.setCurrentText('light')
 check('light palette applied',
       QApplication.instance().palette().color(QPalette.Window).lightness() > 128)
-check('light: gray SELECTION FRAME, current frame very dark (black-ish)',
-      w8._cull_delegate.sel_frame.name() == '#8a8a8a'
+check('light: accent-blue SELECTION FRAME (0.18.26), current frame very dark',
+      w8._cull_delegate.sel_frame.name() == '#0a3a8c'
       and w8._cull_delegate.frame_color.lightness() < 40)
 
 # Persistence of the scheme.

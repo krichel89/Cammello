@@ -94,9 +94,11 @@ def _menu_safe(text):
 class _LabelBarDelegate(QStyledItemDelegate):
     """Filmstrip/grid cell painting, scheme-aware:
 
-      * SELECTED cells get a medium-gray background (instead of the theme's
-        blue highlight), so a multi-selection is recognizable at a glance in
-        the grid AND in the filmstrip.
+      * SELECTED cells get a blue frame (instead of the theme's highlight),
+        so a multi-selection is recognizable at a glance in the grid AND in
+        the filmstrip. 0.18.26 (Harald: "Markierungsrahmen deutlicher"): the
+        frame was medium gray up to 0.18.25 and nearly vanished against the
+        medium-gray culling surround of both schemes.
       * The CURRENT image additionally carries a frame: very light on the
         dark scheme, very dark on the light scheme.
       * A label paints a discreet color bar (6 px) along the bottom edge
@@ -105,7 +107,15 @@ class _LabelBarDelegate(QStyledItemDelegate):
 
     BAR = 6
     FRAME_W = 5                          # frame stroke width ("breiter")
-    SEL_FRAME = QColor('#8a8a8a')        # medium-gray SELECTION frame
+    # 0.18.26: SELECTION frame in blue, one shade per scheme. Measured
+    # against the culling surround (CULL_BG_DARK #6E6E6E / CULL_BG_LIGHT
+    # #9A9A9A), where the old #8a8a8a reached only 1.5:1 and 1.2:1: light
+    # blue 3.2:1 on the dark surround, navy 3.7:1 on the light one. Blue is
+    # not the current-image frame (white/black), not a reject (red) and not
+    # a channel dot (teal/orange).
+    SEL_FRAME_DARK = QColor('#9fd3ff')
+    SEL_FRAME_LIGHT = QColor('#0a3a8c')
+    SEL_FRAME = SEL_FRAME_LIGHT          # kept for callers reading the class
     FRAME_DARK = QColor('#f5f5f5')       # current image: very light (dark)
     FRAME_LIGHT = QColor('#1c1c1c')      # current image: very dark (light)
 
@@ -123,7 +133,7 @@ class _LabelBarDelegate(QStyledItemDelegate):
 
     @property
     def sel_frame(self):
-        return self.SEL_FRAME
+        return self.SEL_FRAME_DARK if self.dark else self.SEL_FRAME_LIGHT
 
     @property
     def frame_color(self):
