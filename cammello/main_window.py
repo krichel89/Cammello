@@ -1289,7 +1289,8 @@ class MainWindow(FlickrMixin,
             'quelle': [getattr(self, 'source_edit', None)],
             'genehmigung': [getattr(self, 'permission_edit', None)],
             'lizenz': [getattr(self, 'license_edit', None)],
-            'zeigt': [getattr(per_file, 'depicts', None)],
+            'zeigt': [getattr(per_file, '_depicts_row_widget', None)
+                      or getattr(per_file, 'depicts', None)],
             'falls_kein_depicts': [getattr(per_file, 'override_combo', None)],
             'kategorien': [getattr(base, 'categories', None),
                            getattr(per_file, 'categories', None)],
@@ -1378,11 +1379,21 @@ class MainWindow(FlickrMixin,
         parent carries a QVBoxLayout, the form sits deeper - asking only
         the parent's layout returned None and left the captions standing
         (Harald's report, 0.15.0)."""
+        # 0.18.27: a field may sit inside a row wrapper (depicts + "New
+        # item"): the label then belongs to the wrapper, one level up.
+        candidates = [widget]
+        parent = widget.parentWidget() if widget is not None else None
+        if parent is not None and parent is not struct:
+            candidates.append(parent)
         for lay in struct.findChildren(QFormLayout):
-            try:
-                lbl = lay.labelForField(widget)
-            except (RuntimeError, TypeError):
-                continue
+            lbl = None
+            for cand in candidates:
+                try:
+                    lbl = lay.labelForField(cand)
+                except (RuntimeError, TypeError):
+                    lbl = None
+                if lbl is not None:
+                    break
             if lbl is None:
                 continue
             if isinstance(lbl, QLabel):

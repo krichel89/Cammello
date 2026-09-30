@@ -168,8 +168,11 @@ felder_aus = ["entstanden_waehrend", "zeigt"]
           w.other_templates_edit.text())
 
     w.workflow_combo.setCurrentIndex(w.workflow_combo.findData('denkmal'))
+    # 0.18.27: depicts is hidden through its row wrapper (field + "New
+    # item" button go together).
     check('any field can be hidden now, not just the coordinates',
-          w.file_struct.depicts.isHidden())
+          w.file_struct._depicts_row_widget.isHidden()
+          and not w.file_struct.depicts.isVisibleTo(w))
     check('and the event field with it',
           w.base_struct.created_during.isHidden())
     check('the button that fills the event follows the field',

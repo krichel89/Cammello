@@ -4,6 +4,20 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.27 - 2026-09-29
+
+### Added
+- "New item" next to depicts (P180) in the per-file editor of the MediaWiki
+  module: for a person who has no Wikidata item yet. A menu of occupations
+  (actor, film director, film producer, screenwriter, musician, singer,
+  composer, writer, journalist, politician, athlete, other person) opens the
+  new-q5 tool on Toolforge with the properties that fit that occupation -
+  for actors IMDb ID, occupation and educated at
+  (https://new-q5.toolforge.org/?property=P345%7CP106%7CP69). The tool takes
+  no values from the address, so the name from the caption ("X at Y" -> "X")
+  is copied to the clipboard. Address and property sets live in the new
+  Qt-free module new_person.py. Only https addresses reach the browser.
+
 ## 0.18.26 - 2026-09-27
 
 ### Added

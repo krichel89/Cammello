@@ -4,11 +4,14 @@ import re
 from PyQt5.QtWidgets import (QInputDialog, QMessageBox, QWidget, QLabel, QLineEdit, QPushButton,
                              QTextEdit, QVBoxLayout, QHBoxLayout,
                              QFormLayout)
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import pyqtSignal, QUrl
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtWidgets import QApplication, QMenu, QToolButton
 from .constants import *
 from .constants import _caption_extra_langs, MUSIC_SEL_FIELDS
 from .sdc import *
-from .i18n import tr
+from .i18n import tr, current_language
+from . import new_person
 from . import langcodes
 from .wikidata import *
 from .wikidata import _style_wd_field
@@ -661,7 +664,19 @@ class StructuredDescriptionEditor(QWidget):
 
         # Rows.
         if not self.is_base:
-            form.addRow(tr('Depicts (P180):'), self.depicts)
+            # 0.18.27: "New item" to the RIGHT of the field, like "from
+            # EXIF"/"from Wikidata" - in the label column it was squeezed
+            # to an unreadable stub next to the two-line caption.
+            # A wrapper WIDGET, not a bare layout: the form label must stay
+            # findable (red attention mark, workflow hiding) - same pattern
+            # as the coordinate rows.
+            depicts_row = QHBoxLayout()
+            depicts_row.setContentsMargins(0, 0, 0, 0)
+            depicts_row.addWidget(self.depicts, 1)
+            depicts_row.addWidget(self._build_new_person_button(), 0)
+            self._depicts_row_widget = QWidget()
+            self._depicts_row_widget.setLayout(depicts_row)
+            form.addRow(tr('Depicts (P180):'), self._depicts_row_widget)
             form.addRow(tr('If no depicts:'), self.override_combo)
             # 0.18.1: the music side of the selection. Hidden in every
             # workflow that does not switch the music fields on, so a
@@ -700,14 +715,18 @@ class StructuredDescriptionEditor(QWidget):
             form.addRow(tr('Gallery page:'), self.gallery_suffix)
         # The row LABELS carry the same tooltip as their field: someone who
         # wonders what "P180" means points at the label, not the input.
-        for w in (self.depicts, self.override_combo, self.categories,
+        for w in (getattr(self, '_depicts_row_widget', None),
+                  self.override_combo, self.categories,
                   self.created_during, self.gallery_suffix,
                   self._coords_row_widget if not self.is_base else None,
                   self._object_row_widget if not self.is_base else None):
             if w is not None:
                 lbl = form.labelForField(w)
                 if lbl is not None:
-                    lbl.setToolTip(w.toolTip())
+                    lbl.setToolTip(w.toolTip() or (
+                        self.depicts.toolTip()
+                        if w is getattr(self, '_depicts_row_widget', None)
+                        else ''))
         apply_form_ratio(form)
         layout.addLayout(form)
 
@@ -725,6 +744,53 @@ class StructuredDescriptionEditor(QWidget):
         self.extra.installEventFilter(self)
         layout.addWidget(self.extra)
         layout.addWidget(_VGrip(self.extra, two_lines))
+
+    # ── New Wikidata item for a person (0.18.27) ────────────────────────────
+    def _build_new_person_button(self):
+        """'New item' next to depicts: a menu of occupations that opens the
+        new-q5 tool with the properties that fit that occupation.
+
+        It sits HERE because this is where the gap shows: the person in the
+        picture has no item yet. The tool takes no values from the address,
+        so the caption's name goes to the clipboard. The address and the
+        property sets live in new_person.py.
+        """
+        btn = QToolButton()
+        btn.setText(tr('New item'))
+        btn.setToolTip(tr(
+            'The person has no Wikidata item yet? Create one: pick the '
+            'occupation,\nand the form opens in the browser with the fitting '
+            'properties\n(for actors e.g. IMDb ID, occupation, educated at). '
+            'The name from the\ncaption is copied to the clipboard - paste '
+            'it there.\n\nAfterwards type the name into depicts and pick '
+            'the new item.'))
+        btn.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(btn)
+        for key, label, _props in new_person.NEW_PERSON_ROLES:
+            act = menu.addAction(tr(label))
+            act.setData(key)
+            act.triggered.connect(
+                lambda _checked=False, k=key: self._open_new_person(k))
+        btn.setMenu(menu)
+        self.new_person_btn = btn
+        self.new_person_menu = menu
+        return btn
+
+    def _new_person_name(self):
+        return new_person.name_from_captions(
+            self.captions_editor.get_captions(),
+            prefer=(current_language(), 'en'),
+            split=extract_name_from_caption)
+
+    def _open_new_person(self, role_key):
+        url = new_person.new_person_url(role_key)
+        # Only ever hand an https address to the system browser.
+        if not url.startswith('https://'):
+            return
+        name = self._new_person_name()
+        if name:
+            QApplication.clipboard().setText(name)
+        QDesktopServices.openUrl(QUrl(url))
 
     def _on_override_changed(self, _index):
         """The override dropdown commits immediately (no editingFinished)."""

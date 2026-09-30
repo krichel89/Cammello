@@ -41,7 +41,9 @@ def main():
           'Berlinale' in ed.categories.toolTip())
 
     form = ed.findChild(QFormLayout)
-    lbl = form.labelForField(ed.depicts)
+    # 0.18.27: depicts shares its row with "New item", so the form field
+    # is the row wrapper - the label hangs on that.
+    lbl = form.labelForField(ed._depicts_row_widget)
     check('the row label answers too',
           lbl is not None and lbl.toolTip() == ed.depicts.toolTip())
 
