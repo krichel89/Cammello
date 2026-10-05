@@ -1421,10 +1421,18 @@ class MWCullingMixin:
         self.cull_strip.itemSelectionChanged.connect(self._cull_set_status)
         # Thumbs are loaded lazily for the visible range only (3000 eager
         # decode jobs at folder open starved the GUI).
+        # 0.18.28: a scrollbar drag or a page jump fires valueChanged dozens
+        # of times; one request per tick queued thumbs for every page the
+        # drag passed over. Coalesce the ticks into one request.
+        self._cull_scroll_timer = QTimer(self)
+        self._cull_scroll_timer.setSingleShot(True)
+        self._cull_scroll_timer.setInterval(30)
+        self._cull_scroll_timer.timeout.connect(
+            self._cull_request_visible_thumbs)
         self.cull_strip.horizontalScrollBar().valueChanged.connect(
-            lambda _v: self._cull_request_visible_thumbs())
+            lambda _v: self._cull_scroll_timer.start())
         self.cull_strip.verticalScrollBar().valueChanged.connect(
-            lambda _v: self._cull_request_visible_thumbs())
+            lambda _v: self._cull_scroll_timer.start())
         split.addWidget(self.cull_strip)
         split.setSizes([620, 172])
         self._cull_split = split
@@ -1634,23 +1642,50 @@ class MWCullingMixin:
     def _cull_visible_range(self):
         """(first, last) row currently intersecting the viewport, or
         (None, None). Split out in 0.18.4 because two callers need it now:
-        the thumbnail request and the lazy row decoration."""
+        the thumbnail request and the lazy row decoration.
+
+        0.18.28: binary search instead of a scan from row 0. The scan cost
+        one visualItemRect per row ABOVE the viewport on every scroll tick,
+        i.e. more the further down the grid you jump. Rows are laid out in
+        reading order (left to right, wrapping downwards in the grid; one
+        row in the filmstrip), so "entirely before the viewport" and
+        "entirely after it" are both monotonic over the row index.
+        """
         n = self.cull_strip.count()
         if not n:
             return None, None
-        vp = self.cull_strip.viewport().rect()
-        first = last = None
-        for i in range(n):
-            if self.cull_strip.visualItemRect(
-                    self.cull_strip.item(i)).intersects(vp):
-                if first is None:
-                    first = i
-                last = i
-            elif first is not None:
-                break
-        if first is None:
+        strip = self.cull_strip
+        vp = strip.viewport().rect()
+
+        def rect(i):
+            return strip.visualItemRect(strip.item(i))
+
+        def before(i):
+            r = rect(i)
+            return r.bottom() < vp.top() or r.right() < vp.left()
+
+        def after(i):
+            r = rect(i)
+            return r.top() > vp.bottom() or r.left() > vp.right()
+
+        lo, hi = 0, n
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if before(mid):
+                lo = mid + 1
+            else:
+                hi = mid
+        first = lo
+        if first >= n or after(first):
             return None, None
-        return first, last
+        lo, hi = first, n
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if after(mid):
+                hi = mid
+            else:
+                lo = mid + 1
+        return first, lo - 1
 
     def _cull_decorate_visible(self, margin=24):
         """Decorate the rows on screen (plus a margin) that are not
@@ -1675,18 +1710,39 @@ class MWCullingMixin:
 
     def _cull_request_visible_thumbs(self, margin=24):
         """Request thumbs for the on-screen filmstrip/grid range plus a
-        margin - never for the whole folder at once."""
+        margin - never for the whole folder at once.
+
+        0.18.28 (grid slow on large folders, Windows):
+          * the wanted set is handed to the loader, which DROPS queued thumb
+            jobs that are no longer in it. Before, a jump of several pages
+            left every skipped page's thumbs queued ahead of the page you
+            landed on (equal priority = first in, first out).
+          * rows on screen go in at a higher priority than the margin.
+          * a row that is decorated and already cached is not requested
+            again: the cache hit used to emit `loaded` for every one of them
+            on every scroll tick, and each signal re-decorated its row.
+        """
         first, last = self._cull_visible_range()
         if first is None:
             return
         n = self.cull_strip.count()
+        lo, hi = max(0, first - margin), min(n, last + 1 + margin)
         # Rows scrolled into view need their stars as much as their thumb,
         # and both callers fire from the same scroll signal.
         self._cull_decorate_visible(margin)
-        for i in range(max(0, first - margin), min(n, last + 1 + margin)):
-            self._cull_loader.request(self._cull_visible[i].display_path,
-                                      'thumb',
-                                      previews.PreviewLoader.P_THUMBS)
+        loader = self._cull_loader
+        wanted = {self._cull_visible[i].display_path for i in range(lo, hi)}
+        loader.set_wanted_thumbs(wanted)
+        pending = getattr(self, '_cull_screenful', None)
+        decorated = getattr(self, '_cull_decorated', ())
+        for i in range(lo, hi):
+            path = self._cull_visible[i].display_path
+            if (not pending and i in decorated
+                    and loader.cache.get('thumb', path) is not None):
+                continue
+            loader.request(path, 'thumb',
+                           loader.P_THUMBS_NEAR if first <= i <= last
+                           else loader.P_THUMBS)
 
     # ── Filter and filmstrip ──────────────────────────────────────────────────
 

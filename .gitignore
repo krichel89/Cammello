@@ -12,3 +12,4 @@ icon_padded.png
 *.icns
 verteile-cammello.command
 wikidata_version.js
+.venv/

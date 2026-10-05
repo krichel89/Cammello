@@ -4,6 +4,24 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.28 - 2026-10-05
+
+### Fixed
+- Culling grid: scrolling and page jumps in large folders were slow on
+  Windows (FastRawViewer builds the same pages at once). Three causes on the
+  scroll path, all fixed:
+  - The visible range was found by scanning from row 0, one query per row
+    above the viewport on every scroll tick. It is now a binary search.
+  - Every tick of a scrollbar drag or page jump queued thumbnails for the page
+    it passed over, and the queue is first in, first out, so the page you
+    landed on waited behind all of them. Scroll ticks are now coalesced (30
+    ms), queued thumbnail jobs that are no longer on screen (plus margin) are
+    dropped before they run, and thumbnails on screen are decoded before the
+    margin.
+  - A row that was already decorated and cached was requested again on every
+    tick; the cache hit emitted a signal and re-decorated the row each time.
+    Settled rows are skipped.
+
 ## 0.18.27 - 2026-09-29
 
 ### Added

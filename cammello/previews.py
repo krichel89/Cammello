@@ -484,6 +484,11 @@ class _LoadJob(QRunnable):
         if self.generation != ld.generation:
             ld._done(self.key, self.level)
             return                          # stale prefetch: folder changed
+        if self.level == 'thumb':
+            wanted = ld._wanted_thumbs
+            if wanted is not None and self.key not in wanted:
+                ld._done(self.key, self.level)
+                return                      # scrolled away before it ran
         if ld.cache.get(self.level, self.key) is not None:
             ld._done(self.key, self.level)
             ld.signals.loaded.emit(self.key, self.level)
@@ -507,6 +512,7 @@ class PreviewLoader:
     change. prefetch_around() implements the browsing-direction strategy."""
 
     P_CURRENT, P_PREFETCH, P_THUMBS = 100, 50, 10
+    P_THUMBS_NEAR = 20      # 0.18.28: thumbs on screen beat the margin
 
     def __init__(self, cache=None, screen_edge=2560, threads=None):
         self.cache = cache or PreviewCache()
@@ -518,10 +524,17 @@ class PreviewLoader:
             self._pool.setMaxThreadCount(threads)
         self._inflight = {}          # (key, level) -> highest queued priority
         self._lock = threading.Lock()
+        # 0.18.28: paths whose THUMB is still wanted (on screen + margin).
+        # None = no restriction. Queued thumb jobs outside it are dropped.
+        self._wanted_thumbs = None
+
+    def set_wanted_thumbs(self, paths):
+        self._wanted_thumbs = paths
 
     def new_generation(self):
         self.generation += 1
         clear_orientation_cache()       # paths may point at new files now
+        self._wanted_thumbs = None
         with self._lock:
             self._inflight.clear()
 
