@@ -4,6 +4,18 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.31 - 2026-10-13
+
+### Fixed
+- OAuth sign-in on Linux (Fedora): "Start authorization" opened no browser.
+  `QDesktopServices.openUrl` can silently do nothing there. The link is now
+  opened through `xdg-open`/`gio`/`sensible-browser` with the original
+  (un-bundled) library environment, then Qt, then `webbrowser`. If none
+  works, the dialog shows the authorization link for copying, plus a hint
+  to paste the result into the confirmation field.
+- `test_0100` / `test_0110` made current (tab list, removed culling FTP
+  button; in-memory keyring instead of the sandbox's missing one).
+
 ## 0.18.30 - 2026-10-13
 
 ### Changed

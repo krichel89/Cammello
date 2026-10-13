@@ -4642,6 +4642,12 @@ TRANSLATIONS = {
         'fr': 'Utiliser l’autorisation classique (OAuth 1.0a)',
         'it': 'Usa l’autorizzazione classica (OAuth 1.0a)',
     },
+    'Could not open the browser. Copy the link below into a browser, then paste the result here.': {
+        'de': 'Der Browser konnte nicht geöffnet werden. Den Link unten in einen Browser kopieren und das Ergebnis hier einfügen.',
+        'es': 'No se pudo abrir el navegador. Copia el enlace de abajo en un navegador y pega aquí el resultado.',
+        'fr': 'Impossible d’ouvrir le navigateur. Copiez le lien ci-dessous dans un navigateur, puis collez le résultat ici.',
+        'it': 'Impossibile aprire il browser. Copia il link qui sotto in un browser e incolla qui il risultato.',
+    },
     'If nothing happens: paste the address bar line here': {
         'de': 'Wenn nichts passiert: die Zeile aus der Adressleiste hier einfügen',
         'es': 'Si no pasa nada: pega aquí la línea de la barra de direcciones',

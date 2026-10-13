@@ -984,6 +984,58 @@ def _sweep_live_workers():
             _LIVE_WORKERS.remove(worker)
 
 
+def open_in_browser(url, log=None):
+    """Open `url` in the default browser; return True if one was started.
+
+    QDesktopServices.openUrl alone is not enough on Linux: it can return
+    without anything happening (no xdg-open, or a bundled-library
+    environment that breaks the browser launcher). So on Linux the
+    launchers are tried with the original (un-bundled) environment first,
+    then Qt, then the standard library.
+    """
+    import shutil
+    import subprocess
+    import sys
+    if sys.platform.startswith('linux'):
+        env = dict(os.environ)
+        for key in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'QT_PLUGIN_PATH',
+                    'QT_QPA_PLATFORM_PLUGIN_PATH', 'PYTHONHOME',
+                    'PYTHONPATH'):
+            orig = env.pop(key + '_ORIG', None)
+            if orig is not None:
+                env[key] = orig
+            else:
+                env.pop(key, None)
+        for cmd in (['xdg-open'], ['gio', 'open'], ['sensible-browser'],
+                    ['x-www-browser']):
+            if not shutil.which(cmd[0]):
+                continue
+            try:
+                r = subprocess.run(cmd + [url], env=env, timeout=5,
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                if r.returncode == 0:
+                    return True
+                if log:
+                    log.info('OAuth: %s exited with %s.', cmd[0],
+                             r.returncode)
+            except subprocess.TimeoutExpired:
+                return True  # launcher is waiting on the browser: started
+            except Exception as exc:
+                if log:
+                    log.info('OAuth: %s failed: %s', cmd[0], exc)
+    try:
+        if QDesktopServices.openUrl(QUrl(url)):
+            return True
+    except Exception:
+        pass
+    try:
+        import webbrowser
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
+
+
 class OAuthLoginDialog(QDialog):
     """Browser-based OAuth 2.0 sign-in with a copyable authorize link.
 
@@ -1061,6 +1113,11 @@ class OAuthLoginDialog(QDialog):
         self.finish_btn.clicked.connect(self._finish_paste)
         vr.addWidget(self.finish_btn)
         self.verifier_row.setVisible(False)
+        # Only shown when no browser could be started (see _on_oauth2_url).
+        self.link_edit = QLineEdit()
+        self.link_edit.setReadOnly(True)
+        self.link_edit.setVisible(False)
+        v.addWidget(self.link_edit)
         v.addWidget(self.verifier_row)
 
         self.status_label = QLabel('')
@@ -1119,8 +1176,15 @@ class OAuthLoginDialog(QDialog):
     def _on_oauth2_url(self, url):
         self._log.info('OAuth: authorization link ready (%s).',
                        url.split('?', 1)[0] if url else '-')
-        if url:
-            QDesktopServices.openUrl(QUrl(url))
+        opened = open_in_browser(url, self._log) if url else False
+        if url and not opened:
+            # 0.18.31: nothing could start a browser (seen on Fedora: the
+            # button did nothing). Show the link so it can be copied by hand.
+            self.link_edit.setText(url)
+            self.link_edit.setVisible(True)
+            self._set_status(tr('Could not open the browser. Copy the link '
+                                'below into a browser, then paste the '
+                                'result here.'), 'red')
         self.verifier_row.setVisible(True)
         self.verifier_edit.setPlaceholderText(
             tr('If nothing happens: paste the address bar line here'))

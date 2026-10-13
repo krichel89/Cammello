@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.18.30"
-NOTES_FILE="notes_01830.md"
+VERSION="0.18.31"
+NOTES_FILE="notes_01831.md"
 REPO_URL="https://github.com/krichel89/Cammello"
 
 # 30.09.2026: the repo is the folder this script lives in - on the Mac as on
