@@ -6,7 +6,7 @@ import threading
 from PyQt5.QtCore import QRegExp, QStandardPaths
 
 
-__version__ = '0.18.28'
+__version__ = '0.18.29'
 
 # On-wiki manual (0.13). The pages are manually maintained /xx subpages, one
 # per UI language - the same five codes as i18n.UI_LANGUAGES, so the current
@@ -608,9 +608,14 @@ _WD_LIST_RE = QRegExp(r'^\s*(Q\d+(\s*[;,]\s*Q\d+)*\s*[;,]?\s*)?$')
 # Wikidata entity search (verified: action=wbsearchentities returns a "search"
 # array with id/label/description). Public, unauthenticated endpoint.
 WD_API_ENDPOINT = 'https://www.wikidata.org/w/api.php'
+# 0.18.29: the Wikimedia User-Agent policy asks every tool to name itself AND
+# say where its author can be reached. A bare "Cammello/x (Python; PyQt5)"
+# is the kind of client that gets throttled first (HTTP 429).
 WD_USER_AGENT = (
     f'{APP_NAME}/{__version__} '
-    f'(Python {sys.version_info.major}.{sys.version_info.minor}; PyQt5)'
+    f'(https://github.com/krichel89/Cammello; '
+    f'https://commons.wikimedia.org/wiki/User:Seewolf) '
+    f'Python/{sys.version_info.major}.{sys.version_info.minor} PyQt5'
 )
 
 # Caption generation (0.18.24). "instance of" and "human" are the two most
@@ -625,26 +630,22 @@ HUMAN_ITEM = 'Q5'
 # label): 250 characters. A generated caption is clamped to this.
 CAPTION_MAX_LEN = 250
 
-# The languages a caption is generated in (0.18.24). Deliberately a broad,
-# editable set rather than "every language Wikidata has" (that would be
-# hundreds): the point Harald asked for is that the caption is available in
-# many languages at once, and for a language without a learned conjunction
-# the caseless "Name, Event" form still reads correctly. Change this list -
-# or the QSettings(APP_NAME, 'Captions') key 'languages' that overrides it -
-# to add or drop languages; nothing else depends on the exact set.
-CAPTION_LANGS_DEFAULT = [
-    'en', 'de', 'fr', 'es', 'it', 'nl', 'pt', 'pl', 'ru', 'uk', 'sv', 'ja',
-    'zh', 'ar',
-]
+# The languages a caption is generated in (0.18.29): the four defaults below
+# plus every language the user added through "Other (ISO code)..." in the
+# caption-language dropdown. Added languages are persisted (QSettings key
+# caption_extra_langs) and stay until the user removes them with "Remove
+# saved language...". The QSettings(APP_NAME, 'Captions') key 'languages',
+# if set by hand, still overrides the whole list.
+CAPTION_LANGS_DEFAULT = ['en', 'de', 'fr', 'it']
 # A single, complete QID.
 QID_RE = re.compile(r'^Q\d+$')
 
-# The caption-language dropdown shows FOUR default languages; every other
+# The caption-language dropdown shows the FOUR default languages; every other
 # ISO code can be typed via the "Other (ISO code)..." entry and is then
 # PERSISTED (QSettings key caption_extra_langs) so the dropdown grows with
 # the codes the user actually uses. LANGUAGES below stays as the lookup
 # table for display names.
-CAPTION_BASE_LANGS = ['en', 'de', 'es', 'fr']
+CAPTION_BASE_LANGS = list(CAPTION_LANGS_DEFAULT)
 
 
 def _caption_extra_langs():

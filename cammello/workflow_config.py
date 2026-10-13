@@ -31,6 +31,20 @@ Design decisions:
   * A workflow PRESETS, it never locks: `vorbelegung` fills a field that
     is still empty, `beispiel` only sets the grey placeholder and is never
     uploaded.
+  * 0.18.29: `setzen` is the third kind - it REPLACES the field, filled or
+    not, when the workflow is picked in the dropdown. That is what an event
+    needs (templates, categories, "created during" of ONE event): a fill-
+    if-empty rule would keep last year's event the moment anything stood
+    there. Only a pick by the user applies it - never the start-up restore
+    and never "Reload workflows".
+
+  * 0.18.29: workflows can be PASSED ON as small text files with the
+    extension .cammello (same TOML, one or more [[workflow]] blocks).
+    Loading one copies it into ~/Cammello/workflows.d/ - the user's own
+    workflows.toml is never touched, a newer version of the same file
+    replaces the older one, and removing a workflow is deleting the file.
+    Everything in such a file is DATA: field names from the registry and
+    plain text, nothing is executed.
 
 Qt-free apart from what .constants drags in (QRegExp/QStandardPaths at
 import time, no QApplication needed), so plain logic tests can use it.
@@ -63,6 +77,7 @@ DEFAULT_KEY = 'portraits'
 FIELDS = [
     ('vorlagen',             'Other templates:',                    True,  True),
     ('basisbeschreibung',    'Base description:',                   True,  True),
+    ('captions_basis',       'Captions (all files):',               False, True),
     ('autor',                'Author:',                             True,  True),
     ('ersteller',            'Creator (Q-number):',                 True,  True),
     ('quelle',               'Source:',                             True,  True),
@@ -112,9 +127,10 @@ BUILTIN = [
     {
         'key': 'portraits',
         'label': 'Events/Portraits',
-        'hide': ['kamerastandort', 'objektstandort'],
+        'hide': ['kamerastandort', 'objektstandort', 'captions_basis'],
         'show': [],
         'preset': {},
+        'set': {},
         'example': {},
     },
     {
@@ -123,6 +139,7 @@ BUILTIN = [
         'hide': ['entstanden_waehrend'],
         'show': [],
         'preset': {},
+        'set': {},
         'example': {},
     },
     # 0.18.0: audio uploads. This is the only workflow that switches the
@@ -137,6 +154,7 @@ BUILTIN = [
                  'zeigt', 'galerieseite'],
         'show': list(DEFAULT_OFF),
         'preset': {'quelle': ''},
+        'set': {},
         'example': {
             'komponist': '[[:en:Felix Mendelssohn|Felix Mendelssohn]]',
             'lizenz_komposition': '{{PD-old-auto-expired}}',
@@ -158,6 +176,15 @@ def user_dir():
 
 
 ENV_OVERRIDE = 'CAMMELLO_WORKFLOWS'
+
+# Passed-on workflow files (0.18.29).
+EXT = '.cammello'
+DIRNAME = 'workflows.d'
+MAX_FILE_BYTES = 64 * 1024      # a workflow is a few lines; this is generous
+# Fields whose change a recipient should SEE before accepting a file: they
+# end up in the description of every upload.
+SENSITIVE_FIELDS = ('lizenz', 'autor', 'ersteller', 'quelle', 'genehmigung')
+ORIGINS = {}    # schluessel -> file name in workflows.d, for those entries
 
 
 def path():
@@ -207,8 +234,9 @@ def template_text(translate=None):
         f'#   felder_aus  {tr("fields to HIDE - anything not listed stays visible")}',
         f'#   felder_an   {tr("fields to SHOW that are off by default (marked below)")}',
         '#',
-        f'# {tr("Two optional sections per workflow:")}',
+        f'# {tr("Three optional sections per workflow:")}',
         f'#   [workflow.vorbelegung]  {tr("fills the field if it is still empty")}',
+        f'#   [workflow.setzen]       {tr("REPLACES the field when you pick the workflow, even if filled")}',
         f'#   [workflow.beispiel]     {tr("grey hint only, never uploaded")}',
         '#',
         f'# {tr("Available field names:")}',
@@ -221,6 +249,8 @@ def template_text(translate=None):
             note += f'  ({tr("off by default")})'
         lines.append(f'#   {name.ljust(width)}  {shown}{note}')
     lines += [
+        '#',
+        f'# {tr("Workflows you load from a .cammello file are kept in the folder workflows.d next to this file.")}',
         '#',
         f'# {tr("Anything Cammello cannot make sense of is listed in the log;")}',
         f'# {tr("a broken file never stops the program - the built-in")}',
@@ -239,6 +269,11 @@ def template_text(translate=None):
             '',
             '  # [workflow.vorbelegung]',
             '  # vorlagen = "{{Wikiportraits}}"',
+            '',
+            '  # [workflow.setzen]',
+            '  # vorlagen = "{{WikiPortraits Event 2026}}"',
+            '  # kategorien = "Event 2026; Another category"',
+            '  # entstanden_waehrend = "Q12345678"',
             '',
             '  # [workflow.beispiel]',
             '  # autor = "[[User:Seewolf|Harald Krichel]]"',
@@ -270,6 +305,8 @@ def render_block(wf):
     ]
     for name, value in wf.get('preset', {}).items():
         lines.append(f'vorbelegung.{name} = {_quote(value)}')
+    for name, value in wf.get('set', {}).items():
+        lines.append(f'setzen.{name} = {_quote(value)}')
     for name, value in wf.get('example', {}).items():
         lines.append(f'beispiel.{name} = {_quote(value)}')
     return '\n'.join(lines) + '\n'
@@ -425,6 +462,8 @@ def _parse(data, warnings):
             'show': show,
             'preset': _clean_map(raw.get('vorbelegung'),
                                  f'{where} vorbelegung', warnings),
+            'set': _clean_map(raw.get('setzen'),
+                              f'{where} setzen', warnings),
             'example': _clean_map(raw.get('beispiel'),
                                   f'{where} beispiel', warnings),
         })
@@ -456,8 +495,10 @@ def load(translate=None):
             LAST_ERROR = f'{FILENAME}: {e}'
     if entries is None:
         entries = [dict(w, hide=list(w['hide']), show=list(w.get('show', [])),
-                        preset=dict(w['preset']), example=dict(w['example']))
+                        preset=dict(w['preset']), example=dict(w['example']),
+                        set=dict(w.get('set', {})))
                    for w in BUILTIN]
+    _load_extras(entries, warnings)
     LAST_WARNINGS = warnings
     _cache = entries
     return _cache
@@ -468,3 +509,160 @@ def reload(translate=None):
     global _cache
     _cache = None
     return load(translate)
+
+
+# ── Passed-on workflow files (.cammello, 0.18.29) ────────────────────────
+
+def extras_dir():
+    """Where loaded .cammello files live: workflows.d beside workflows.toml
+    (so CAMMELLO_WORKFLOWS moves it along - the tests rely on that)."""
+    return os.path.join(os.path.dirname(path()), DIRNAME)
+
+
+def _parse_bytes(raw, where):
+    """(entries, warnings, error) from the bytes of one .cammello file."""
+    warnings = []
+    if len(raw) > MAX_FILE_BYTES:
+        return [], warnings, f'{where}: file is too large'
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return [], warnings, f'{where}: not a UTF-8 text file'
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        return [], warnings, f'{where}: {e}'
+    try:
+        entries = _parse(data, warnings)
+    except ValueError as e:
+        return [], warnings, f'{where}: {e}'
+    return entries, warnings, None
+
+
+def _load_extras(entries, warnings):
+    """Append the workflows of workflows.d to `entries`, in file-name order.
+
+    A key that is already taken (by workflows.toml, a built-in or an
+    earlier file) is ignored with a warning - the user's own file wins.
+    Never raises: a broken file is reported and skipped.
+    """
+    ORIGINS.clear()
+    folder = extras_dir()
+    try:
+        names = sorted(n for n in os.listdir(folder)
+                       if n.lower().endswith(EXT))
+    except OSError:
+        return
+    taken = {w['key'] for w in entries}
+    for name in names:
+        try:
+            with open(os.path.join(folder, name), 'rb') as fh:
+                raw = fh.read(MAX_FILE_BYTES + 1)
+        except OSError as e:
+            warnings.append(f'{name}: {e}')
+            continue
+        found, file_warnings, error = _parse_bytes(raw, name)
+        warnings += [f'{name}: {w}' for w in file_warnings]
+        if error:
+            warnings.append(error)
+            continue
+        for wf in found:
+            if wf['key'] in taken:
+                warnings.append(f'{name}: ignored (schluessel {wf["key"]} '
+                                f'is already in use)')
+                continue
+            taken.add(wf['key'])
+            ORIGINS[wf['key']] = name
+            entries.append(wf)
+
+
+def safe_name(src):
+    """The file name a loaded file is stored under: the base name only,
+    harmless characters, always ending in .cammello."""
+    base = os.path.basename(src or '')
+    stem = base[:-len(EXT)] if base.lower().endswith(EXT) else base
+    stem = ''.join(c if (c.isalnum() or c in ' ._-()') else '_'
+                   for c in stem).strip(' .')
+    return (stem or 'workflow') + EXT
+
+
+def inspect_file(src):
+    """Check a .cammello file WITHOUT installing it.
+
+    Returns (entries, warnings, error); on error entries is empty. Only the
+    extension, the size, UTF-8, TOML and the workflow blocks are checked -
+    the same rules the loader applies, so what passes here will load.
+    """
+    name = os.path.basename(src or '')
+    if not name.lower().endswith(EXT):
+        return [], [], f'{name}: a workflow file ends in {EXT}'
+    try:
+        with open(src, 'rb') as fh:
+            raw = fh.read(MAX_FILE_BYTES + 1)
+    except OSError as e:
+        return [], [], f'{name}: {e}'
+    return _parse_bytes(raw, name)
+
+
+def conflicts_of(entries, src):
+    """Keys of `entries` that are already taken by something ELSE.
+
+    "Else" = workflows.toml, a built-in, or a different file in
+    workflows.d. The same file name is an update, not a conflict.
+    """
+    mine = safe_name(src)
+    load()                      # makes ORIGINS current
+    taken = {w['key'] for w in load()}
+    return [w['key'] for w in entries
+            if w['key'] in taken and ORIGINS.get(w['key']) != mine]
+
+
+def install_file(src, translate=None):
+    """Copy a checked .cammello file into workflows.d and reload.
+
+    Returns (destination, replaced, error). Written to a temporary name
+    and moved into place, so a half-written file is never read. An
+    existing file of the same name is replaced - that is how a corrected
+    version reaches people.
+    """
+    dest = os.path.join(extras_dir(), safe_name(src))
+    replaced = os.path.exists(dest)
+    try:
+        with open(src, 'rb') as fh:
+            raw = fh.read(MAX_FILE_BYTES + 1)
+        os.makedirs(extras_dir(), exist_ok=True)
+        tmp = dest + '.part'
+        with open(tmp, 'wb') as fh:
+            fh.write(raw)
+        os.replace(tmp, dest)
+    except OSError as e:
+        return None, False, str(e)
+    reload(translate)
+    return dest, replaced, None
+
+
+def preview_text(entries, translate=None, limit=90):
+    """What loading would change, for the confirmation: per workflow its
+    name, the fields it REPLACES and the fields it FILLS, with the values.
+    Fields that end up in every upload's description are marked."""
+    tr = translate or (lambda s: s)
+    lines = []
+
+    def shown(name):
+        return tr(label_key_of_field(name)).rstrip(':')
+
+    def value(text):
+        flat = ' | '.join(p.strip() for p in text.splitlines() if p.strip())
+        return flat if len(flat) <= limit else flat[:limit - 1] + '…'
+
+    for wf in entries:
+        lines.append(f'■ {wf["label"]}')
+        for heading, mapping in ((tr('replaces'), wf.get('set', {})),
+                                 (tr('fills if empty'), wf.get('preset', {}))):
+            for name, text in mapping.items():
+                mark = '  ⚠' if name in SENSITIVE_FIELDS else ''
+                lines.append(f'    {heading}: {shown(name)} = '
+                             f'{value(text) or "(empty)"}{mark}')
+        if not wf.get('set') and not wf.get('preset'):
+            lines.append(f'    {tr("sets no field")}')
+    return '\n'.join(lines)

@@ -4,6 +4,125 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.29 - 2026-10-13
+
+### Added
+- "Suggest captions" under depicts (P180) in the per-file editor of the
+  MediaWiki module, for the selected file(s). One press fills, from each
+  file's own depicts and the event of the base description:
+  - the captions in every configured language (the learned conjunctions
+    apply, otherwise the plain "Name, Event"),
+  - the Information description for each language with interwiki links,
+  - the categories of the depicts entries (Commons category P373, label as
+    fallback), added to the file's own categories.
+  Only what is still empty is filled: a caption, description or category
+  written by hand is never overwritten, so the button can be pressed again
+  after changing depicts. One Wikidata request serves the whole selection.
+  Nothing is remembered behind the user's back: the conjunctions are only
+  stored by the batch dialog "Generate captions", which has the review step.
+- `captions.fill_missing`: the Qt-free rule behind it.
+- Event workflows: a new section `[workflow.setzen]` in `workflows.toml`
+  REPLACES the named fields when the workflow is picked in the dropdown,
+  filled or not - for an event the other templates (e.g. the WikiPortraits
+  template), the base categories and "created during" in one click.
+  `vorbelegung` keeps its meaning (fills only an empty field). `setzen`
+  applies only when the user picks the workflow: not at start-up and not
+  after "Reload workflows", so fields tuned since are never overwritten. The
+  categories of the selected file are never touched, only the base. A fresh
+  `workflows.toml` documents the section; an existing file gets a new block
+  by hand.
+- Workflow files to pass on: a workflow can be sent as a small text file
+  with the extension `.cammello` (the same TOML as `workflows.toml`, one or
+  more `[[workflow]]` blocks). The recipient loads it with one action:
+  menu "Load workflow from file…", dropping it on the window or the file
+  list, a double-click (macOS: the bundle now declares the type; Windows:
+  "Open with" once, the file is then passed as an argument) or a start
+  with the file as argument.
+  - Cammello shows what the file sets (marking changes to licence, author,
+    creator, source and permission) and asks before anything is stored.
+  - The file is copied to `~/Cammello/workflows.d/`; `workflows.toml` is
+    never touched. A newer version of the same file name replaces the older
+    one, removing a workflow is deleting the file. A workflow key that is
+    already taken (own file, built-in, another loaded file) is refused; the
+    user's own `workflows.toml` always wins.
+  - After loading, the workflow is in the dropdown, selected, and its
+    `setzen` and `vorbelegung` are applied.
+  - A file is checked first: extension, size (64 KB), UTF-8, TOML, workflow
+    blocks. Only registry field names and plain text are accepted, nothing
+    in it is executed.
+  - Build: `make_bundle_types.py` writes the document type into the macOS
+    `Info.plist` in a new step before code signing.
+  - `workflows_examples/Frankfurter_Buchmesse_2026.cammello` as a starting
+    point.
+- New tests `test_suggestcaps_01829.py`, `test_workflowset_01829.py` and
+  `test_workflowfile_01829.py`.
+
+### Changed
+- In the per-file editor of the MediaWiki module, depicts (with "If no
+  depicts" and the caption button) is now the first row of the section,
+  above the captions.
+- `test_workflow_0150.py`: a workflow entry now also carries `set`.
+- Caption languages: the defaults are now en, de, fr, it (were en, de, es,
+  fr in the dropdown and a broad set of 14 for "Generate captions"). Both
+  "Generate captions" and "Suggest captions" use the four plus every
+  language the user added via "Other (ISO code)..." in the caption-language
+  dropdown; an added language stays until it is removed with "Remove saved
+  language...". Spanish is no longer a default; it can be added like any
+  other (a file that already has a Spanish caption keeps it).
+
+- File menu: "Save settings", "Save to file…", "Load from file…" and the
+  "incl. selected file" tick moved from the right column to the File menu,
+  as "Save base_description", "Save base_description to file…", "Load
+  base_description from file…" and a checkable "incl. selected file".
+- The per-file "Suggest" button next to Categories is gone: "Suggest
+  captions" under depicts adds the same depicts categories. The base
+  "Suggest" (event category) stays.
+- New workflow field `captions_basis` (felder_aus / felder_an) hides the
+  captions of the BASE description - one text for every file, which a series
+  of portraits does not want. The built-in Events/Portraits workflow hides
+  it; add `"captions_basis"` to `felder_aus` in your own workflows.toml.
+
+- Several files selected: the structured editor now shows ONE merged view.
+  A field all files agree on shows its value; a field they differ in (or
+  only some have) shows `<mixed>` (captions, depicts, "if no depicts",
+  Information texts, categories, free text, ...). Typing over `<mixed>`
+  sets the field in every selected file; leaving it alone changes nothing.
+  Removing a caption row clears that language in all files. In the
+  categories field, keeping `<mixed>` and adding a category adds it to each
+  file's own categories; replacing `<mixed>` replaces them everywhere. The
+  marker is never written to a file (`sdc.merged_view`, `sdc.MIXED`).
+  Expert mode still shows the first file's raw text.
+- New button "Clear description" below the editors empties the description
+  of the selected file(s) after a confirmation; the base description stays.
+- The button "Information from caption" is gone (its job is done by
+  "Suggest captions", which writes the linked Information text).
+
+### Fixed
+- A conjunction with a connector but an EMPTY "Event form" ended the caption
+  after the connector ("Anna bei"): the event was missing in exactly the
+  languages that had a conjunction stored. The event's plain label is now
+  used as the form, in captions and in linked descriptions.
+- Conjunctions typed without blanks ("bei", "at") produced captions like
+  "Anna Müllerbei Berlinale": the dialog stored the text as typed.
+  `captions.join_tail` now puts a blank before a connector that starts with
+  a letter or dash and one between connector and event. Comma and apostrophe
+  connectors (", ", "l'") and scripts written without word spaces (ja, zh,
+  ko, th, ...) are left as typed.
+- "Suggest captions" failed with "Wikidata request failed: 429 Client Error:
+  Too Many Requests". Three changes, because the cause cannot be known for
+  sure:
+  - Every Wikidata call (`wikidata.wd_get_json`) now waits and retries twice
+    on HTTP 429 and 503 (the Retry-After time, at least 1 s, at most 6 s)
+    before it gives up.
+  - "Suggest captions" asks once instead of twice: the Commons categories
+    (P373) come from the same `wbgetentities` answer as the labels
+    (`captions.commons_categories`).
+  - The User-Agent now names the repository and the Commons user page
+    (User:Seewolf) as contact, as the Wikimedia policy asks.
+  A rate limit that persists shows a plain message ("try again in a
+  minute", `wikidata.wd_error_text`) in "Suggest captions", "Generate
+  captions" and the category fetch.
+
 ## 0.18.28 - 2026-10-05
 
 ### Fixed

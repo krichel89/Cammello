@@ -265,6 +265,14 @@ jobs:
           fi
           find dist/Cammello.app -type d -name camlibs -exec sh -c 'echo "camlibs: $1 ($(ls "$1" | wc -l) Dateien)"' _ {} \;
 
+      # 0.18.29: a double-clicked .cammello file (a workflow someone passed
+      # on) only reaches the app if the bundle DECLARES the type. This has
+      # to run BEFORE the signature: Info.plist is part of it.
+      - name: Declare the .cammello file type in the bundle
+        run: |
+          set -euo pipefail
+          python3 make_bundle_types.py dist/Cammello.app/Contents/Info.plist
+
       # ── Code signing + notarization ───────────────────────────────────
       # These steps stay DORMANT until the signing secrets exist: each
       # guards on env.MACOS_CERT_P12 (the notarize step also on

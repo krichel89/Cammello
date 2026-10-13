@@ -116,6 +116,12 @@ def presets_of(key):
     return dict(by_key(key)['preset'])
 
 
+def sets_of(key):
+    """{field name: text} that REPLACE the field when the workflow is
+    picked (0.18.29) - filled or not, unlike presets_of."""
+    return dict(by_key(key).get('set', {}))
+
+
 def examples_of(key):
     """{field name: text} to show as a grey placeholder only."""
     return dict(by_key(key)['example'])

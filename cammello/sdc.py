@@ -1110,6 +1110,44 @@ def decompose_fields(text):
     return fields, cats
 
 
+# The marker shown in an editor field where the selected files DIFFER
+# (0.18.29). It is only ever a display value: diff_fields against the merged
+# view never reports it as a change, and a value containing it is never
+# written to a file.
+MIXED = '<mixed>'
+
+
+def merged_view(texts):
+    """One description text for a multi-file selection: a field the files
+    agree on shows its value; a field they differ in (or only some have)
+    shows MIXED. Categories likewise (a single MIXED link when they differ).
+    Feeding this text to the structured editor and diffing the edited result
+    against it yields exactly what the user changed."""
+    parts = [decompose_fields(t) for t in texts]
+    if not parts:
+        return ''
+    ids = []
+    for fields, _c in parts:
+        for fid in fields:
+            if fid not in ids:
+                ids.append(fid)
+    merged = {}
+    for fid in ids:
+        vals = [f.get(fid) for f, _c in parts]
+        merged[fid] = vals[0] if all(v == vals[0] for v in vals) else MIXED
+    cat_lists = [[c.strip() for c in c_] for _f, c_ in parts]
+    cats = (cat_lists[0] if all(c == cat_lists[0] for c in cat_lists)
+            else [MIXED])
+    return apply_field_changes('', merged, cats)
+
+
+def has_mixed(text):
+    """Whether a merged view still contains a MIXED field or category."""
+    fields, cats = decompose_fields(text)
+    return (any(v == MIXED for v in fields.values())
+            or any(c.strip() == MIXED for c in cats))
+
+
 def diff_fields(old_text, new_text):
     """(changes, categories_or_None): what changed from old to new.
 

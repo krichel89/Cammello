@@ -1772,9 +1772,11 @@ class FileDropTableWidget(QTableWidget):
     """
 
     def __init__(self, rows, cols, on_files_dropped=None, logger=None,
-                 on_rename=None, parent=None):
+                 on_rename=None, parent=None, on_workflow_dropped=None):
         super().__init__(rows, cols, parent)
         self._on_files_dropped = on_files_dropped
+        # 0.18.29: a dropped .cammello file is a workflow, not a picture.
+        self._on_workflow_dropped = on_workflow_dropped
         self._logger = logger
         # F2 = rename (Lightroom habit): one selected row edits its target
         # filename inline, several open the bulk-rename dialog. The callback
@@ -1853,6 +1855,13 @@ class FileDropTableWidget(QTableWidget):
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
+            workflows = [u.toLocalFile() for u in event.mimeData().urls()
+                         if u.isLocalFile()
+                         and u.toLocalFile().lower().endswith('.cammello')]
+            if workflows and self._on_workflow_dropped:
+                event.acceptProposedAction()
+                self._on_workflow_dropped(workflows[0])
+                return
             paths = self._collect(event.mimeData().urls())
             if paths and self._on_files_dropped:
                 self._on_files_dropped(paths)

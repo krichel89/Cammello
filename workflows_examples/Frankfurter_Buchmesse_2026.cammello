@@ -1,0 +1,19 @@
+# Cammello workflow: Frankfurter Buchmesse 2026
+#
+# Load it in Cammello: menu "Load workflow from file…", drop this file on
+# the window, or double-click it. Cammello shows what it sets and asks first.
+#
+# PRUEFEN, bevor du die Datei weitergibst: Der Vorlagenname und die
+# Kategorie unten sind nach dem Muster der Dragon-Con-Seiten gesetzt, nicht
+# gegen Commons geprueft. Die QID ist die der Ausgabe 2026 (von Harald).
+
+[[workflow]]
+schluessel = "frankfurter-buchmesse-2026"
+name       = "Frankfurter Buchmesse 2026"
+felder_aus = ["kamerastandort", "objektstandort", "captions_basis"]
+felder_an  = []
+
+  [workflow.setzen]
+  vorlagen            = "{{WikiPortraits Frankfurter Buchmesse 2026}}\n{{Do not crop}}"
+  kategorien          = "Frankfurter Buchmesse 2026"
+  entstanden_waehrend = "Q141663636"

@@ -209,10 +209,41 @@ class MenusMixin:
             menu, tr('C&lear list'), 'clear_all',
             tip=tr('Remove every file from the list.')))
         menu.addSeparator()
+        # 0.18.29 (Harald): these sat as buttons under the base description.
+        # They are file-level commands, so they live here. "base_description"
+        # is the name the settings file itself uses for the block.
+        self._scope('mediawiki', self._act(
+            menu, tr('Save base_description'), '_on_save_settings', None,
+            tr('Save the upload settings and the base description so they '
+               'are restored next time.'), QAction.NoRole))
+        self._scope('mediawiki', self._act(
+            menu, tr('Save base_description to file…'),
+            '_save_settings_to_file', None,
+            tr('Write settings + base description to a text file.'),
+            QAction.NoRole))
+        self._scope('mediawiki', self._act(
+            menu, tr('Load base_description from file…'),
+            '_load_settings_from_file', None,
+            tr('Read settings back from a text file.'), QAction.NoRole))
+        if hasattr(self, '_save_settings_to_file'):
+            self.export_file_desc_act = QAction(tr('incl. selected file'), self)
+            self.export_file_desc_act.setCheckable(True)
+            self.export_file_desc_act.setStatusTip(tr(
+                "Also write the selected file's description into the "
+                "settings file."))
+            self.export_file_desc_act.setMenuRole(QAction.NoRole)
+            menu.addAction(self.export_file_desc_act)
+            self._scope('mediawiki', self.export_file_desc_act)
+        menu.addSeparator()
         # 0.16.1: the workflow file is configuration, so it sits next to
         # Settings rather than in its own menu.
         self._act(menu, tr('Open &workflow file…'), '_open_workflow_file',
                   None, tr('Edit the workflows in a text editor.'),
+                  QAction.NoRole)
+        self._act(menu, tr('Load workflow from &file…'), '_load_workflow_file',
+                  None, tr('Load a workflow file (.cammello) someone passed '
+                           'on: templates, categories and event for one '
+                           'occasion.'),
                   QAction.NoRole)
         self._act(menu, tr('Reload &workflows'), '_reload_workflows',
                   None, tr('Read the workflow file again after editing it.'),

@@ -162,6 +162,13 @@ class MWSettingsMixin:
             self.settings.setValue('color_scheme',
                                    self.scheme_combo.currentData())
 
+    def _export_file_desc(self):
+        """Whether "Include the selected file's description" is ticked in the
+        File menu (it was a checkbox under the base description before
+        0.18.29)."""
+        act = getattr(self, 'export_file_desc_act', None)
+        return bool(act is not None and act.isChecked())
+
     def _on_save_settings(self):
         """Explicitly persist the current settings (button + on close)."""
         self._save_settings()
@@ -210,7 +217,7 @@ class MWSettingsMixin:
                   self.base_text_edit.toPlainText(), self._BLOCK_BASE_END]
 
         included_file = False
-        if self.export_file_desc_cb.isChecked():
+        if self._export_file_desc():
             row = self._selected_row()
             if row is not None:
                 item = self.table.item(row, self.COL_DESC)
@@ -229,7 +236,7 @@ class MWSettingsMixin:
 
         self.logger.info('Settings written to %s (file description incl.: %s)',
                          path, included_file)
-        if self.export_file_desc_cb.isChecked() and not included_file:
+        if self._export_file_desc() and not included_file:
             self.status_bar.showMessage(
                 tr('Saved. No single file selected, so no file description was '
                 'included.'), 6000)

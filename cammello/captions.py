@@ -30,7 +30,8 @@ wikidata.py.fetch_caption_entities returns, so the two never disagree:
 
     { 'Q42': { 'labels':    {'en': 'Douglas Adams', 'de': '…'},
                'sitelinks':  {'enwiki': 'Douglas Adams', 'dewiki': '…'},
-               'human':      True } }
+               'human':      True,
+               'commons_category': 'Douglas Adams' } }
 """
 import json
 import re
@@ -117,6 +118,26 @@ def subject_linked(depicts_qids, entities, lang, prefer_langs):
 
 # ── The learned conjunction table ("Fügungen"), Qt-free ─────────────────────
 
+# Scripts written without spaces between words: their connectors are taken
+# exactly as typed.
+NO_SPACE_LANGS = ('ja', 'zh', 'ko', 'th', 'lo', 'km', 'my', 'bo')
+
+
+def join_tail(conn, form, lang=''):
+    """conn + form with the blanks a reader expects (see FuegungTable.tail)."""
+    conn, form = conn or '', form or ''
+    if (lang or '').split('-')[0].lower() in NO_SPACE_LANGS:
+        return conn + form
+    if conn.strip():
+        if conn[0].isalnum() or conn[0] in '-–—':
+            conn = ' ' + conn
+        if form.strip() and (conn[-1].isalnum() or conn[-1] in '-–—'):
+            conn += ' '
+    elif form and form[0].isalnum():
+        form = ' ' + form
+    return conn + form
+
+
 class FuegungTable:
     """What connects a name to an event, per event and per language.
 
@@ -138,10 +159,24 @@ class FuegungTable:
             return None
         return (entry.get('conn', ''), entry.get('form', ''))
 
-    def tail(self, event_qid, lang):
-        """conn + form, the text that follows the name. '' when unlearned."""
+    def tail(self, event_qid, lang, event_label=''):
+        """conn + form, the text that follows the name. '' when unlearned.
+
+        Spacing is repaired (0.18.29): a connector typed as "bei" or "at"
+        (no blanks, as people do in the dialog) still gets a blank before it
+        and one before the event. A connector with an EMPTY event form takes
+        the event's plain label as the form (otherwise the caption would end
+        after the connector and the event would be missing). Punctuation connectors (", ") and
+        apostrophes ("l'") are left as written, and so are the scripts that
+        are written without word spaces.
+        """
         pair = self.get(event_qid, lang)
-        return (pair[0] + pair[1]) if pair else ''
+        if not pair:
+            return ''
+        conn, form = pair
+        if not form.strip() and conn.strip() and event_label:
+            form = event_label
+        return join_tail(conn, form, lang)
 
     def learn(self, event_qid, lang, conn, form):
         """Remember (or, when both parts are empty, forget) one conjunction."""
@@ -264,7 +299,7 @@ def build_caption(subject, event_qid, event_label, lang, table,
     if not event_label:
         caption = subject
     else:
-        tail = table.tail(event_qid, lang) if (table and event_qid) else ''
+        tail = table.tail(event_qid, lang, event_label) if (table and event_qid) else ''
         if tail.strip():
             caption = (subject + tail) if subject else tail.lstrip()
         elif subject:
@@ -333,7 +368,7 @@ def linked_description(depicts_qids, event_qid, entities, table, lang,
         return ''
     if not event_label:
         return subject
-    tail = table.tail(event_qid, lang) if (table and event_qid) else ''
+    tail = table.tail(event_qid, lang, event_label) if (table and event_qid) else ''
     if tail.strip():
         # Link the event by swapping its bare label inside the learned form
         # for the interwiki link; the connector and inflection stay.
@@ -342,3 +377,45 @@ def linked_description(depicts_qids, event_qid, entities, table, lang,
         return (subject + tail) if subject else tail.lstrip()
     linked_event = event_link or event
     return f'{subject}, {linked_event}' if subject else linked_event
+
+
+def fill_missing(existing_captions, existing_infos, captions, linked):
+    """The field changes that fill ONLY what is still empty (0.18.29).
+
+    existing_captions: {lang: text} the file already has (base merged).
+    existing_infos:    {lang: text} the Information descriptions it has.
+    captions / linked: what generation produced, {lang: text}.
+
+    Returns a changes dict for sdc.apply_field_changes: 'caption_<lang>' and
+    'info:<lang>' keys, only for languages where the file has nothing yet.
+    A hand-written caption or description is never overwritten - the button
+    next to depicts is meant to be pressed again after a depicts change
+    without destroying what was corrected by hand.
+    """
+    changes = {}
+    for lang, text in (captions or {}).items():
+        if text and not (existing_captions or {}).get(lang, '').strip():
+            changes[f'caption_{lang}'] = text
+    for lang, text in (linked or {}).items():
+        if text and not (existing_infos or {}).get(lang, '').strip():
+            changes[f'info:{lang}'] = text
+    return changes
+
+
+def commons_categories(entities, qids):
+    """{qid: (commons_category_or_None, label)} out of caption entities.
+
+    The shape wikidata.fetch_commons_categories returns and
+    wikidata.category_suggestions expects, built from the entities that were
+    fetched anyway (0.18.29) - one request instead of two. The label falls
+    back en -> de -> any, like there.
+    """
+    out = {}
+    for qid in qids:
+        ent = (entities or {}).get(qid) or {}
+        labels = ent.get('labels') or {}
+        label = labels.get('en') or labels.get('de') or ''
+        if not label and labels:
+            label = next(iter(labels.values()))
+        out[qid] = ((ent.get('commons_category') or None), label)
+    return out

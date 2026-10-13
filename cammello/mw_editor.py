@@ -20,12 +20,13 @@ from PyQt5.QtGui import (QPixmap, QFont, QDesktopServices, QIcon, QImageReader,
                          QRegExpValidator)
 from .constants import *
 from .wikidata import (fetch_commons_categories,
-                       category_suggestions)
+                       category_suggestions, wd_error_text)
 from .i18n import tr
 from .constants import __version__, _WD_SINGLE_RE, _WD_LIST_RE
 from .logging_setup import *
 from .sdc import *
 from .sdc import _strip_sd_lines
+from .sdc import MIXED, merged_view, has_mixed
 from .exif import *
 from .api import *
 from .workers import *
@@ -181,6 +182,19 @@ class MWEditorMixin:
         if row is not None:
             item = self.table.item(row, self.COL_DESC)
             text = item.text() if item else ''
+        # 0.18.29 (Harald): with several files selected the structured
+        # editor shows ONE merged view - a field they agree on shows its
+        # value, a field they differ in shows "<mixed>". Typing over a
+        # "<mixed>" field sets it in every selected file. Expert mode keeps
+        # showing the anchor file's raw text.
+        sel_rows = self._selected_rows_all()
+        self._editor_multi = (len(sel_rows) > 1
+                              and not self.expert_cb.isChecked())
+        if self._editor_multi:
+            text = merged_view(
+                [self.table.item(r, self.COL_DESC).text()
+                 if self.table.item(r, self.COL_DESC) else ''
+                 for r in sel_rows])
         self._loading_desc = True
         try:
             if self.expert_cb.isChecked():
@@ -203,9 +217,16 @@ class MWEditorMixin:
             self.table.item(r, self.COL_FILENAME)
             for r in self._selected_rows_all()]
         if len(self._editor_sel_items) > 1:
-            self.status_bar.showMessage(
-                tr('{n} files selected - a changed field is applied to all '
-                   'of them.').format(n=len(self._editor_sel_items)), 5000)
+            if self._editor_multi and has_mixed(text):
+                self.status_bar.showMessage(
+                    tr('{n} files selected - "<mixed>" marks a field where '
+                       'they differ; type over it to set it in all of '
+                       'them.').format(n=len(self._editor_sel_items)), 8000)
+            else:
+                self.status_bar.showMessage(
+                    tr('{n} files selected - a changed field is applied to '
+                       'all of them.').format(n=len(self._editor_sel_items)),
+                    5000)
         # 0.15.2 (Harald's report: empty depicts without a red dot). THIS is
         # the one place where the per-file editor becomes what is on screen,
         # so the marks belong here. Hanging them on textChanged alone was
@@ -235,9 +256,7 @@ class MWEditorMixin:
             return None
         if exc is not None:
             self.logger.error('Category suggestion failed: %s', exc)
-            QMessageBox.warning(self, tr('Categories'),
-                                tr('Wikidata request failed: {e}').format(
-                                    e=exc))
+            QMessageBox.warning(self, tr('Categories'), wd_error_text(exc))
             return None
         return result
 
@@ -330,9 +349,90 @@ class MWEditorMixin:
             new_text = self.file_desc_edit.toPlainText()
         else:
             new_text = self.file_struct.assemble()
+            if getattr(self, '_editor_multi', False):
+                self._commit_multi(new_text)
+                return
         item.setText(new_text)
         self._refresh_effective(row)
         self._propagate_field_changes(row, new_text)
+
+    def _commit_multi(self, new_text):
+        """Commit the merged multi-file view (0.18.29).
+
+        The editor shows a merged text, not any one file's, so it must never
+        be written to a row as a whole. Instead the fields the user CHANGED
+        (diff against the merged view) are applied to every selected file,
+        the anchor included; "<mixed>" fields the user left alone are not a
+        change. A value that still contains the marker is never written.
+        Categories: typing over "<mixed>" replaces them in every file;
+        keeping "<mixed>" and adding a category adds it to each file's own.
+        """
+        old_text = getattr(self, '_editor_snapshot_text', None)
+        sel_items = getattr(self, '_editor_sel_items', None) or []
+        if old_text is None:
+            self._editor_snapshot_text = new_text
+            return
+        changes, cats = diff_fields(old_text, new_text)
+        self._editor_snapshot_text = new_text
+        changes = {k: v for k, v in changes.items()
+                   if not (isinstance(v, str) and MIXED in v)}
+        add_cats = None
+        if cats is not None:
+            clean = [c for c in cats if MIXED not in c]
+            if len(clean) != len(cats):
+                add_cats = clean          # kept <mixed>: add to each file
+                cats = None
+            else:
+                cats = clean
+        if not changes and cats is None and not add_cats:
+            return
+        touched = 0
+        for sel_item in sel_items:
+            if sel_item is None:
+                continue
+            r = sel_item.row()
+            if r < 0:
+                continue
+            desc_item = self.table.item(r, self.COL_DESC)
+            if desc_item is None:
+                continue
+            row_cats = cats
+            if add_cats:
+                _f, own = decompose_fields(desc_item.text())
+                row_cats = list(own) + [c for c in add_cats if c not in own]
+            desc_item.setText(apply_field_changes(
+                desc_item.text(), changes, row_cats))
+            self._refresh_effective(r)
+            touched += 1
+        if touched:
+            self.logger.info(
+                'Multi-select edit: %s applied to %d file(s).',
+                ', '.join(sorted(changes) or ['categories']), touched)
+
+    def _clear_selected_descriptions(self):
+        """Empty the per-file description of every selected file (0.18.29,
+        Harald: for a mistake). The base description is not touched."""
+        rows = self._selected_rows_all()
+        if not rows:
+            self.status_bar.showMessage(tr('Select a file first.'), 4000)
+            return
+        answer = QMessageBox.question(
+            self, tr('Clear description'),
+            tr('Clear the description of {n} selected file(s)? The base '
+               'description stays.').format(n=len(rows)),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        for r in rows:
+            item = self.table.item(r, self.COL_DESC)
+            if item is not None:
+                item.setText('')
+                self._refresh_effective(r)
+        self._load_selected_desc()
+        self.status_bar.showMessage(
+            tr('Description cleared for {n} file(s).').format(n=len(rows)),
+            5000)
+        self.logger.info('Cleared the description of %d file(s).', len(rows))
 
     def _propagate_field_changes(self, anchor_row, new_text):
         """Multi-select editing: diff the anchor's new text against its

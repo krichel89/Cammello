@@ -312,13 +312,13 @@ extra_saved = settings.value('caption_extra_langs')
 try:
     settings.remove('caption_extra_langs'); settings.sync()
     base = [c for c, _n in caption_language_choices()]
-    check('four base languages', base == ['en', 'de', 'es', 'fr'], str(base))
+    check('four base languages', base == ['en', 'de', 'fr', 'it'], str(base))
     remember_caption_language('ja')
     remember_caption_language('ja')          # dedup
     remember_caption_language('de')          # base: not duplicated
     langs = [c for c, _n in caption_language_choices()]
     check('entered ISO code persisted once',
-          langs == ['en', 'de', 'es', 'fr', 'ja'], str(langs))
+          langs == ['en', 'de', 'fr', 'it', 'ja'], str(langs))
     ed2 = StructuredDescriptionEditor(is_base=False)
     combo = ed2.captions_editor._rows[0]['combo']
     codes = [combo.itemData(i) for i in range(combo.count())]
@@ -327,7 +327,7 @@ try:
     # last item predates the second one - it was simply never reached,
     # because the run crashed earlier (corrected 0.15.2).
     check('dropdown = base + extras + Other',
-          codes[:5] == ['en', 'de', 'es', 'fr', 'ja']
+          codes[:5] == ['en', 'de', 'fr', 'it', 'ja']
           and '__other__' in codes and codes[-1] == '__forget__',
           str(codes))
 finally:

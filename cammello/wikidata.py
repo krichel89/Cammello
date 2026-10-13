@@ -1,5 +1,6 @@
 """Wikidata entity search, completer and field styling."""
 import re
+import time
 import weakref
 import requests
 from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QObject, QTimer,
@@ -356,6 +357,41 @@ class WikidataSuggest(QObject):
 
 # ── Category suggestions (0.11.0) ─────────────────────────────────────────────
 
+def wd_get_json(params, timeout=8, retries=2):
+    """GET against the Wikidata API; patient with HTTP 429 and 503.
+
+    A rate limit answers 429 (or 503) and usually says in Retry-After how
+    long to wait. Giving up at the first one turned a short throttle into an
+    error dialog (0.18.29). So: wait the asked time (at least a second,
+    at most six) and try again, `retries` times; after that the error is
+    raised as before. Sleeps - call it from a worker thread, as
+    fetch_in_background does.
+    """
+    for attempt in range(retries + 1):
+        r = requests.get(WD_API_ENDPOINT, params=params,
+                         headers={'User-Agent': WD_USER_AGENT},
+                         timeout=timeout)
+        if r.status_code in (429, 503) and attempt < retries:
+            try:
+                asked = float(r.headers.get('Retry-After', ''))
+            except (TypeError, ValueError):
+                asked = 0.0
+            time.sleep(min(max(asked, 1.0 * (attempt + 1)), 6.0))
+            continue
+        r.raise_for_status()
+        return r.json()
+
+
+def wd_error_text(exc):
+    """The sentence for a failed Wikidata request: a rate limit gets its own
+    plain words, everything else the technical message."""
+    status = getattr(getattr(exc, 'response', None), 'status_code', None)
+    if status == 429:
+        return tr('Wikidata is limiting requests at the moment (429). Wait '
+                  'a minute, then try again.')
+    return tr('Wikidata request failed: {e}').format(e=exc)
+
+
 def fetch_commons_categories(qids, timeout=8):
     """{qid: (commons_category_or_None, label_or_'')} for up to 50 QIDs via
     one wbgetentities call. The Commons category is Wikidata property P373;
@@ -363,15 +399,12 @@ def fetch_commons_categories(qids, timeout=8):
     qids = [q for q in qids if q]
     if not qids:
         return {}
-    r = requests.get(
-        'https://www.wikidata.org/w/api.php',
-        params={'action': 'wbgetentities', 'ids': '|'.join(qids[:50]),
-                'props': 'claims|labels', 'languages': 'en|de',
-                'format': 'json'},
-        headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
-    r.raise_for_status()
+    data = wd_get_json({'action': 'wbgetentities',
+                        'ids': '|'.join(qids[:50]),
+                        'props': 'claims|labels', 'languages': 'en|de',
+                        'format': 'json'}, timeout)
     out = {}
-    for qid, ent in (r.json().get('entities') or {}).items():
+    for qid, ent in (data.get('entities') or {}).items():
         cat = None
         for claim in (ent.get('claims', {}).get('P373') or []):
             val = (claim.get('mainsnak', {}).get('datavalue', {})
@@ -425,7 +458,8 @@ def fetch_caption_entities(qids, timeout=8):
 
         { qid: { 'labels':    {lang: value},        # every language
                  'sitelinks': {wiki: title},        # e.g. 'dewiki'
-                 'human':     bool } }               # P31 contains Q5
+                 'human':     bool,                 # P31 contains Q5
+                 'commons_category': str } }        # P373 or ''
 
     Labels are fetched in every language (no `languages` filter) so a caption
     can be built in any of them; sitelinks give the interwiki links for the
@@ -439,13 +473,11 @@ def fetch_caption_entities(qids, timeout=8):
     # several batches, but each is still ONE round trip.
     for start in range(0, len(qids), 50):
         batch = qids[start:start + 50]
-        r = requests.get(
-            'https://www.wikidata.org/w/api.php',
-            params={'action': 'wbgetentities', 'ids': '|'.join(batch),
-                    'props': 'labels|sitelinks|claims', 'format': 'json'},
-            headers={'User-Agent': WD_USER_AGENT}, timeout=timeout)
-        r.raise_for_status()
-        for qid, ent in (r.json().get('entities') or {}).items():
+        data = wd_get_json({'action': 'wbgetentities',
+                            'ids': '|'.join(batch),
+                            'props': 'labels|sitelinks|claims',
+                            'format': 'json'}, timeout)
+        for qid, ent in (data.get('entities') or {}).items():
             labels = {code: (v or {}).get('value', '')
                       for code, v in (ent.get('labels') or {}).items()
                       if (v or {}).get('value', '').strip()}
@@ -460,8 +492,18 @@ def fetch_caption_entities(qids, timeout=8):
                 if isinstance(val, dict) and val.get('id') == HUMAN_ITEM:
                     human = True
                     break
+            # 0.18.29: the Commons category (P373) comes along in the same
+            # response, so "Suggest captions" needs ONE request, not two.
+            commons_category = ''
+            for claim in (ent.get('claims', {}).get('P373') or []):
+                val = (claim.get('mainsnak', {}).get('datavalue', {})
+                       .get('value'))
+                if isinstance(val, str) and val.strip():
+                    commons_category = val.strip()
+                    break
             out[qid] = {'labels': labels, 'sitelinks': sitelinks,
-                        'human': human}
+                        'human': human,
+                        'commons_category': commons_category}
     return out
 
 

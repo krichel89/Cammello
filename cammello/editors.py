@@ -10,12 +10,14 @@ from PyQt5.QtWidgets import QApplication, QMenu, QToolButton
 from .constants import *
 from .constants import _caption_extra_langs, MUSIC_SEL_FIELDS
 from .sdc import *
+from .sdc import MIXED
 from .i18n import tr, current_language
 from . import new_person
 from . import langcodes
 from .wikidata import *
 from .wikidata import _style_wd_field
 from .widgets import *
+from .widgets import apply_form_ratio
 from .widgets import _VGrip
 
 
@@ -61,12 +63,9 @@ class CaptionsEditor(QWidget):
         add_btn.clicked.connect(
             lambda: (self.add_row(), self.changed.emit(), self.committed.emit()))
         btn_row.addWidget(add_btn)
-        info_btn = QPushButton(tr('Information from caption'))
-        info_btn.setToolTip(
-            tr('Fills the Information wikitext of each language with its '
-               'caption text, where the Information field is still empty.'))
-        info_btn.clicked.connect(self._info_from_captions)
-        btn_row.addWidget(info_btn)
+        # 0.18.29 (Harald): the "Information from caption" button is gone;
+        # "Suggest captions" writes the linked Information text instead.
+        # _info_from_captions below stays for callers and tests.
         outer.addLayout(btn_row)
 
         self.add_row()  # start with one empty row
@@ -122,8 +121,7 @@ class CaptionsEditor(QWidget):
             'stores every\nfile TWICE: as wikitext (the Information '
             'template - the field below)\nand as structured data '
             '(machine-readable statements - this field).\nThey say the '
-            'same thing in two forms; that is why Cammello asks for\nboth. '
-            '"Information from caption" copies this text down.'))
+            'same thing in two forms; that is why Cammello asks for\nboth.'))
 
         remove = QPushButton('×')
         remove.setFixedWidth(28)
@@ -454,6 +452,7 @@ class StructuredDescriptionEditor(QWidget):
     committed = pyqtSignal()   # fires on field switch, not per keystroke
     suggest_requested = pyqtSignal()        # created-during category (base)
     suggest_depicts_requested = pyqtSignal()  # depicts categories (per-file)
+    suggest_captions_requested = pyqtSignal()  # captions+description+cats
 
     def __init__(self, parent=None, is_base=True):
         super().__init__(parent)
@@ -461,7 +460,18 @@ class StructuredDescriptionEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(QLabel(tr('Captions:')))
+        # 0.18.29 (Harald: "Depicts soll im Abschnitt an erster Stelle
+        # stehen"): in the per-file editor depicts - the field everything
+        # else is made from - sits ABOVE the captions. Its own small form, so
+        # the rows keep their labels (red attention mark, workflow hiding).
+        top_form = QFormLayout() if not is_base else None
+        if top_form is not None:
+            layout.addLayout(top_form)
+
+        # Kept as an attribute: the workflow field 'captions_basis' hides the
+        # base editor's label together with the editor (0.18.29).
+        self.captions_label = QLabel(tr('Captions:'))
+        layout.addWidget(self.captions_label)
         self.captions_editor = CaptionsEditor(is_base=is_base)
         self.captions_editor.changed.connect(self.changed)
         self.captions_editor.committed.connect(self.committed)
@@ -674,10 +684,31 @@ class StructuredDescriptionEditor(QWidget):
             depicts_row.setContentsMargins(0, 0, 0, 0)
             depicts_row.addWidget(self.depicts, 1)
             depicts_row.addWidget(self._build_new_person_button(), 0)
+            # 0.18.29: the caption button sits UNDER the field. The wrapper
+            # stays ONE widget, so the workflow switch that hides depicts
+            # hides the button with it.
+            self.suggest_captions_btn = QPushButton(tr('Suggest captions'))
+            self.suggest_captions_btn.setToolTip(tr(
+                'Fills what is still empty from the depicts entries: the '
+                'captions in every\nconfigured language, the linked '
+                'description for each language and the\ncategories. '
+                'Nothing you wrote yourself is overwritten, so it can be '
+                'pressed\nagain after changing depicts.'))
+            self.suggest_captions_btn.clicked.connect(
+                self.suggest_captions_requested)
+            captions_row = QHBoxLayout()
+            captions_row.setContentsMargins(0, 0, 0, 0)
+            captions_row.addWidget(self.suggest_captions_btn, 0)
+            captions_row.addStretch(1)
+            depicts_col = QVBoxLayout()
+            depicts_col.setContentsMargins(0, 0, 0, 0)
+            depicts_col.setSpacing(4)
+            depicts_col.addLayout(depicts_row)
+            depicts_col.addLayout(captions_row)
             self._depicts_row_widget = QWidget()
-            self._depicts_row_widget.setLayout(depicts_row)
-            form.addRow(tr('Depicts (P180):'), self._depicts_row_widget)
-            form.addRow(tr('If no depicts:'), self.override_combo)
+            self._depicts_row_widget.setLayout(depicts_col)
+            top_form.addRow(tr('Depicts (P180):'), self._depicts_row_widget)
+            top_form.addRow(tr('If no depicts:'), self.override_combo)
             # 0.18.1: the music side of the selection. Hidden in every
             # workflow that does not switch the music fields on, so a
             # photographer never sees these rows.
@@ -689,20 +720,21 @@ class StructuredDescriptionEditor(QWidget):
             form.addRow(tr('Created during (P10408):'), self.created_during)
         # Categories row - with the Suggest button in the label column, so
         # the input keeps the full field width.
-        cat_btn = QPushButton(tr('Suggest'))
         if self.is_base:
+            cat_btn = QPushButton(tr('Suggest'))
             cat_btn.setToolTip(
                 tr('Adds a base category from the "created during" event '
                    '(Commons category P373, or the label; a missing year is '
                    'taken from the Date column).'))
             cat_btn.clicked.connect(self.suggest_requested)
+            form.addRow(_label_with_button(tr('Categories:'), cat_btn),
+                        self.categories)
         else:
-            cat_btn.setToolTip(
-                tr('Adds categories from the depicts entries (Commons '
-                   'category P373, or the label).'))
-            cat_btn.clicked.connect(self.suggest_depicts_requested)
-        form.addRow(_label_with_button(tr('Categories:'), cat_btn),
-                    self.categories)
+            # 0.18.29 (Harald): the per-file "Suggest" is merged into
+            # "Suggest captions" under depicts, which adds the same depicts
+            # categories along with the captions. The signal and handler
+            # (suggest_depicts_requested) stay for callers and tests.
+            form.addRow(tr('Categories:'), self.categories)
         if not self.is_base:
             # 0.15.0: the labels name BOTH halves, so it is visible in the
             # form itself - not only in a tooltip - which part of this ends
@@ -721,13 +753,17 @@ class StructuredDescriptionEditor(QWidget):
                   self._coords_row_widget if not self.is_base else None,
                   self._object_row_widget if not self.is_base else None):
             if w is not None:
-                lbl = form.labelForField(w)
+                on_top = w is getattr(self, '_depicts_row_widget', None) \
+                    or w is self.override_combo
+                lbl = (top_form if on_top else form).labelForField(w)
                 if lbl is not None:
                     lbl.setToolTip(w.toolTip() or (
                         self.depicts.toolTip()
                         if w is getattr(self, '_depicts_row_widget', None)
                         else ''))
         apply_form_ratio(form)
+        if top_form is not None:
+            apply_form_ratio(top_form)
         layout.addLayout(form)
 
         self.extra_label = QLabel(tr('Extra wikitext / comments:'))
@@ -805,7 +841,17 @@ class StructuredDescriptionEditor(QWidget):
     def _set_override_value(self, value):
         if self.override_combo is None:
             return
-        value = canonical_override(value)
+        # A multi-file selection whose files differ here: a "<mixed>" entry
+        # that exists only while it is needed (0.18.29).
+        mixed_idx = self.override_combo.findData(MIXED)
+        if value == MIXED:
+            if mixed_idx < 0:
+                self.override_combo.addItem(MIXED, MIXED)
+        elif mixed_idx >= 0:
+            self.override_combo.blockSignals(True)
+            self.override_combo.removeItem(mixed_idx)
+            self.override_combo.blockSignals(False)
+        value = value if value == MIXED else canonical_override(value)
         idx = self.override_combo.findData(value or '')
         self.override_combo.blockSignals(True)
         self.override_combo.setCurrentIndex(idx if idx >= 0 else 0)

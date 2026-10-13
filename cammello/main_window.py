@@ -116,6 +116,8 @@ class MainWindow(FlickrMixin,
         self.emitter = emitter
         self.gui_handler = gui_handler
         self.log_path = log_path
+        # 0.18.29: a .cammello workflow file dropped anywhere on the window.
+        self.setAcceptDrops(True)
 
         # Translated column headers: an INSTANCE attribute, so tr() runs
         # after main() selected the language (the class attribute stays as
@@ -419,6 +421,7 @@ class MainWindow(FlickrMixin,
         self.table = FileDropTableWidget(
             0, len(self.COLS),
             on_files_dropped=self._add_dropped_files,
+            on_workflow_dropped=self._load_workflow_file_deferred,
             logger=self.logger,
             on_rename=self._rename_selected)
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -727,30 +730,8 @@ class MainWindow(FlickrMixin,
         base_layout.addWidget(clear_base_btn)
         right_layout.addWidget(base_group)
 
-        save_settings_btn = QPushButton(tr('Save settings'))
-        save_settings_btn.setToolTip(tr('Save the upload settings and the base '
-                                     'description so they are restored next time.'))
-        save_settings_btn.clicked.connect(self._on_save_settings)
-        right_layout.addWidget(save_settings_btn)
-
-        # Settings import/export to a plain text file (optionally incl. the
-        # selected file's description). FlowLayout, not QHBoxLayout: the right
-        # column is ~380 px wide, where three side-by-side controls used to
-        # overlap each other (0.12.4). Now they wrap onto a second line.
-        file_io = FlowLayout(margin=0, spacing=6)
-        save_file_btn = QPushButton(tr('Save to file…'))
-        save_file_btn.setToolTip(tr('Write settings + base description to a text file.'))
-        save_file_btn.clicked.connect(self._save_settings_to_file)
-        load_file_btn = QPushButton(tr('Load from file…'))
-        load_file_btn.setToolTip(tr('Read settings back from a text file.'))
-        load_file_btn.clicked.connect(self._load_settings_from_file)
-        self.export_file_desc_cb = QCheckBox(tr('incl. selected file'))
-        self.export_file_desc_cb.setToolTip(
-            tr("Also write the selected file's description into the settings file."))
-        file_io.addWidget(save_file_btn)
-        file_io.addWidget(load_file_btn)
-        file_io.addWidget(self.export_file_desc_cb)
-        right_layout.addLayout(file_io)
+        # 0.18.29 (Harald): "Save settings" and the file import/export
+        # moved to the File menu (menus.py); the column only holds fields.
 
         # ── Selected file description ──
         file_group = CollapsibleGroupBox(tr('Selected file(s) - description'))
@@ -768,6 +749,8 @@ class MainWindow(FlickrMixin,
         self.file_struct = StructuredDescriptionEditor(is_base=False)
         self.file_struct.suggest_depicts_requested.connect(
             self._suggest_depicts_categories)
+        self.file_struct.suggest_captions_requested.connect(
+            self._suggest_captions)
         self.file_struct.coords_exif_btn.clicked.connect(
             self._fill_coordinates_from_exif)
         self.file_struct.object_wd_btn.clicked.connect(
@@ -776,6 +759,19 @@ class MainWindow(FlickrMixin,
         self.file_struct.committed.connect(self._commit_editor)
         self.file_struct.setVisible(False)
         file_layout.addWidget(self.file_struct)
+        # 0.18.29 (Harald): wipe the description of the selected file(s)
+        # after a mistake. Below both editors, so expert mode has it too.
+        clear_row = QHBoxLayout()
+        self.clear_file_desc_btn = QPushButton(tr('Clear description'))
+        self.clear_file_desc_btn.setToolTip(tr(
+            'Empties the description of the selected file(s): captions, '
+            'depicts, categories, Information texts. The base description '
+            'is not touched.'))
+        self.clear_file_desc_btn.clicked.connect(
+            self._clear_selected_descriptions)
+        clear_row.addWidget(self.clear_file_desc_btn)
+        clear_row.addStretch(1)
+        file_layout.addLayout(clear_row)
         self._file_group = file_group
         # 0.15.1: the per-file dots follow the selection and every edit in
         # the fields they judge.
@@ -839,16 +835,22 @@ class MainWindow(FlickrMixin,
             return workflows.DEFAULT_KEY
         return cb.currentData() or workflows.DEFAULT_KEY
 
-    def _on_workflow_changed(self, _index=0):
+    def _on_workflow_changed(self, _index=0, apply_set=True):
         """Remember the choice and apply the workflow's presets.
 
-        Applying is deliberately non-destructive: a preset only fills a
-        field that is still EMPTY. Switching workflows must never throw
-        away something the user typed - that was the explicit condition
-        for having a switch at all.
+        `vorbelegung` is deliberately non-destructive: it only fills a
+        field that is still EMPTY. `setzen` (0.18.29) is the exception the
+        user asked for - an event workflow REPLACES its templates, categories
+        and "created during", or last year's event would stay. It applies
+        only when the user picks the workflow: `apply_set=False` is for the
+        rebuild after "Reload workflows", which must not overwrite fields
+        the user has tuned since.
         """
         key = self.current_workflow()
         self.settings.setValue('workflow', key)
+
+        if apply_set:
+            self._apply_workflow_sets(key)
 
         # 0.16.1: both come out of workflows.toml now, by field name, so a
         # workflow can preset ANY text field - not just the two that used
@@ -871,6 +873,50 @@ class MainWindow(FlickrMixin,
         # hidden is not inactive - they would upload regardless. Offer to
         # clear them; never do it unasked.
         self._clear_hidden_workflow_fields(key)
+
+    def _apply_workflow_sets(self, key):
+        """Replace the fields a workflow's [setzen] section names.
+
+        Only the BASE-level controls: a field that also exists in the
+        per-file editor (categories) must not be replaced there, or picking
+        an event would overwrite the categories of the selected file.
+        """
+        done = []
+        per_file = getattr(self, 'file_struct', None)
+        for name, text in workflows.sets_of(key).items():
+            for w in self._workflow_field_widgets(name):
+                if per_file is not None and per_file.isAncestorOf(w):
+                    continue
+                if self._replace_field_text(w, text):
+                    done.append(name)
+        if done:
+            names = sorted(set(done))
+            self.logger.info('Workflow %s set: %s.', key, ', '.join(names))
+            sb = getattr(self, 'status_bar', None)
+            if sb is not None:
+                shown = ', '.join(
+                    tr(workflow_config.label_key_of_field(n)).rstrip(':')
+                    for n in names)
+                sb.showMessage(
+                    tr('Workflow "{w}" set: {f}.').format(
+                        w=tr(workflows.by_key(key)['label']), f=shown),
+                    6000)
+
+    @staticmethod
+    def _replace_field_text(widget, text):
+        """Set a control to `text`, whatever it held. True when it changed."""
+        if hasattr(widget, 'toPlainText'):
+            current = widget.toPlainText()
+            if current == text:
+                return False
+            widget.setPlainText(text)
+            return True
+        if hasattr(widget, 'text') and hasattr(widget, 'setText'):
+            if widget.text() == text:
+                return False
+            widget.setText(text)
+            return True
+        return False
 
     @staticmethod
     def _mark_label(lbl, missing):
@@ -1210,6 +1256,111 @@ class MainWindow(FlickrMixin,
         self.logger.info('Opening workflow file %r.', target)
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
 
+    # ── Passed-on workflow files (.cammello, 0.18.29) ────────────────────
+
+    @staticmethod
+    def _workflow_paths(mime):
+        """The local .cammello files named by a drag or drop."""
+        if mime is None or not mime.hasUrls():
+            return []
+        return [u.toLocalFile() for u in mime.urls()
+                if u.isLocalFile()
+                and u.toLocalFile().lower().endswith(workflow_config.EXT)]
+
+    def dragEnterEvent(self, event):
+        if self._workflow_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._workflow_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            self._load_workflow_file_deferred(paths[0])
+        else:
+            super().dropEvent(event)
+
+    def _load_workflow_file_deferred(self, src):
+        """After the drag has ended: a modal dialog opened from inside a
+        drop handler would keep the drag source waiting."""
+        QTimer.singleShot(0, lambda p=src: self._load_workflow_file(p))
+
+    def _open_from_system(self, path):
+        """A file the operating system handed to the running app (macOS
+        file-open event) or at start (command line, Windows "Open with")."""
+        if str(path).lower().endswith(workflow_config.EXT):
+            self._load_workflow_file(path)
+
+    def _load_workflow_file(self, src=None):
+        """Load a workflow someone passed on as a .cammello file.
+
+        One click for the recipient: pick (or drop, or double-click) the
+        file, read what it would set, confirm, done - it is copied into
+        workflows.d, appears in the dropdown, is selected and applied.
+        The confirmation is not decoration: the file sets text that ends up
+        in every upload (templates, categories, possibly licence or author),
+        and it may come from anywhere.
+        """
+        title = tr('Load workflow')
+        if not isinstance(src, str) or not src:     # triggered() hands a bool
+            start = os.path.join(os.path.expanduser('~'), 'Downloads')
+            if not os.path.isdir(start):
+                start = os.path.expanduser('~')
+            src, _ = QFileDialog.getOpenFileName(
+                self, title, start,
+                tr('Cammello workflow (*.cammello)'))
+            if not src:
+                return
+        entries, notes, error = workflow_config.inspect_file(src)
+        if error:
+            self.logger.warning('Workflow file not loaded: %s', error)
+            QMessageBox.warning(
+                self, title,
+                tr('This is not a usable workflow file:\n{e}').format(e=error))
+            return
+        clash = workflow_config.conflicts_of(entries, src)
+        if clash:
+            self.logger.warning('Workflow file %r: key(s) in use: %s',
+                                src, ', '.join(clash))
+            QMessageBox.warning(
+                self, title,
+                tr('A workflow with the key "{k}" already exists - in your '
+                   'own workflow file, built in, or from another loaded '
+                   'file. Nothing was loaded.').format(k=', '.join(clash)))
+            return
+        dest = os.path.join(workflow_config.extras_dir(),
+                            workflow_config.safe_name(src))
+        text = (tr('Load this workflow? It sets these fields when you pick '
+                   'it:') + '\n\n' + workflow_config.preview_text(entries, tr))
+        if os.path.exists(dest):
+            text += '\n\n' + tr('It replaces the version you loaded before.')
+        if notes:
+            text += '\n\n' + tr('Ignored in the file:') + '\n' + '\n'.join(
+                notes[:5])
+        if QMessageBox.question(
+                self, title, text,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            self.logger.info('Workflow file %r: not loaded (declined).', src)
+            return
+        _dest, replaced, err = workflow_config.install_file(src, tr)
+        if err:
+            self.logger.error('Workflow file %r could not be stored: %s',
+                              src, err)
+            QMessageBox.warning(
+                self, title,
+                tr('The workflow could not be stored: {e}').format(e=err))
+            return
+        key = entries[0]['key']
+        self._rebuild_workflow_combo(wanted=key)
+        self._apply_workflow_sets(key)
+        self.logger.info('Workflow file %r loaded%s: %s.', src,
+                         ' (replaced)' if replaced else '',
+                         ', '.join(w['key'] for w in entries))
+        self.status_bar.showMessage(
+            tr('Workflow "{w}" loaded.').format(w=entries[0]['label']), 6000)
+
     def _reload_workflows(self):
         """Re-read the workflow file and rebuild the dropdown.
 
@@ -1238,7 +1389,9 @@ class MainWindow(FlickrMixin,
             index = cb.findData(workflows.default_key())
         cb.setCurrentIndex(max(0, index))
         cb.blockSignals(blocked)
-        self._on_workflow_changed()
+        # A reload applies presets and visibility, but never [setzen]: the
+        # user may have tuned the fields since picking the workflow.
+        self._on_workflow_changed(apply_set=False)
 
     def _report_workflow_problems(self, spoken=False):
         """Log what was wrong with the workflow file; say it once if asked.
@@ -1284,6 +1437,10 @@ class MainWindow(FlickrMixin,
         table = {
             'vorlagen': [getattr(self, 'other_templates_edit', None)],
             'basisbeschreibung': [getattr(self, 'base_text_edit', None)],
+            # 0.18.29: the captions of the BASE description - one text for
+            # every file; a portrait series wants none (each file has its own).
+            'captions_basis': [getattr(base, 'captions_label', None),
+                               getattr(base, 'captions_editor', None)],
             'autor': [getattr(self, 'author_edit', None)],
             'ersteller': [getattr(self, 'creator_edit', None)],
             'quelle': [getattr(self, 'source_edit', None)],
@@ -2528,6 +2685,34 @@ def _apply_feature_cli(argv):
     return out
 
 
+class _OpenFileFilter(QObject):
+    """macOS hands a double-clicked document to the RUNNING app as a
+    QFileOpenEvent (never as a command-line argument). Files that arrive
+    before the window exists are kept in `pending`."""
+
+    def __init__(self):
+        super().__init__()
+        self.pending = []
+        self.handler = None
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.FileOpen:
+            path = event.file()
+            if path:
+                if self.handler is None:
+                    self.pending.append(path)
+                else:
+                    QTimer.singleShot(0, lambda p=path: self.handler(p))
+            return True
+        return False
+
+
+def _workflow_args(argv):
+    """The .cammello files named on the command line (Windows "Open with",
+    Linux file managers). Anything else is not ours to open."""
+    return [a for a in argv[1:] if a.lower().endswith(workflow_config.EXT)]
+
+
 def main():
     argv = _apply_feature_cli(sys.argv)
     # UI language BEFORE any window construction: saved choice, else the
@@ -2538,6 +2723,8 @@ def main():
     app = QApplication(argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
+    opener = _OpenFileFilter()
+    app.installEventFilter(opener)
     # Slightly larger UI font (0.12.7, Harald). Before any window exists, so
     # every size hint is computed with the final font.
     apply_ui_font(app)
@@ -2598,6 +2785,15 @@ def main():
     # after the music one shipped. Offered here rather than merged
     # silently: the file is his.
     QTimer.singleShot(700, window.offer_missing_workflows)
+    # 0.18.29: a .cammello file the app was started with (or that macOS
+    # handed over while it was starting) - after the two offers above, so
+    # the dialogs do not pile up. From now on the filter forwards directly.
+    opener.handler = window._open_from_system
+    first = _workflow_args(argv) + opener.pending
+    opener.pending = []
+    if first:
+        QTimer.singleShot(1300, lambda: [window._open_from_system(p)
+                                         for p in first])
     sys.exit(app.exec())
 
 
