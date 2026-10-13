@@ -838,8 +838,8 @@ class MainWindow(FlickrMixin,
     def _on_workflow_changed(self, _index=0, apply_set=True):
         """Remember the choice and apply the workflow's presets.
 
-        `vorbelegung` is deliberately non-destructive: it only fills a
-        field that is still EMPTY. `setzen` (0.18.29) is the exception the
+        `prefill` (`vorbelegung`) is deliberately non-destructive: it only fills a
+        field that is still EMPTY. `set` (`setzen`, 0.18.29) is the exception the
         user asked for - an event workflow REPLACES its templates, categories
         and "created during", or last year's event would stay. It applies
         only when the user picks the workflow: `apply_set=False` is for the
@@ -875,7 +875,7 @@ class MainWindow(FlickrMixin,
         self._clear_hidden_workflow_fields(key)
 
     def _apply_workflow_sets(self, key):
-        """Replace the fields a workflow's [setzen] section names.
+        """Replace the fields a workflow's [set] section names.
 
         Only the BASE-level controls: a field that also exists in the
         per-file editor (categories) must not be replaced there, or picking
@@ -1224,6 +1224,17 @@ class MainWindow(FlickrMixin,
             hidden = set()
         for name in workflow_config.FIELD_NAMES:
             self._set_field_visible(name, name not in hidden)
+        # 0.18.29 (Harald: "Brauche ich das grosse Textfeld ueberhaupt?"):
+        # the registry field 'basisbeschreibung' IS the raw text of the base
+        # description. It belongs to expert mode only - the structured fields
+        # beside it show the same content. Showing it for every workflow
+        # (the loop above does) put a second, 110 px high editor on screen
+        # in the normal mode.
+        base_raw = getattr(self, 'base_text_edit', None)
+        if base_raw is not None:
+            base_raw.setVisible(bool(expert_cb is not None
+                                     and expert_cb.isChecked()
+                                     and 'basisbeschreibung' not in hidden))
         # The button that fills "Created during" from the IPTC tab is not a
         # form field, so it is not in the registry - it simply follows the
         # field it fills. Hiding the field but leaving its button would be
@@ -1389,7 +1400,7 @@ class MainWindow(FlickrMixin,
             index = cb.findData(workflows.default_key())
         cb.setCurrentIndex(max(0, index))
         cb.blockSignals(blocked)
-        # A reload applies presets and visibility, but never [setzen]: the
+        # A reload applies presets and visibility, but never [set]: the
         # user may have tuned the fields since picking the workflow.
         self._on_workflow_changed(apply_set=False)
 
@@ -1503,8 +1514,8 @@ class MainWindow(FlickrMixin,
     def _set_field_text(widget, text, placeholder_only=False):
         """Fill a control, or only hint at it.
 
-        `placeholder_only` is the difference between [workflow.beispiel]
-        and [workflow.vorbelegung]: a placeholder is grey, is never read
+        `placeholder_only` is the difference between [workflow.example]
+        and [workflow.prefill]: a placeholder is grey, is never read
         back and never uploaded. Filling happens ONLY into a still-empty
         control - a workflow presets, it does not overwrite.
         """

@@ -39,15 +39,12 @@ file_menu = next(a.menu() for a in w.menuBar().actions()
                  if a.text().replace('&', '') == 'File')
 texts = [a.text() for a in file_menu.actions()]
 for t in ('Save base_description', 'Save base_description to file…',
-          'Load base_description from file…', 'incl. selected file'):
+          'Load base_description from file…'):
     check(f'File menu has "{t}"', t in texts, str(texts))
-act = w.export_file_desc_act
-check('the include-file entry is a checkbox, off', act.isCheckable()
-      and not act.isChecked())
-check('the helper reads it', w._export_file_desc() is False)
-act.setChecked(True)
-check('and follows it', w._export_file_desc() is True)
-act.setChecked(False)
+check('the "incl. selected file" tick is gone',
+      'incl. selected file' not in texts
+      and not hasattr(w, 'export_file_desc_act'))
+check('the export helper says no', w._export_file_desc() is False)
 
 labels = [b.text() for b in w.findChildren(QPushButton)]
 for gone in ('Save settings', 'Save to file…', 'Load from file…'):
@@ -95,6 +92,24 @@ check('the base editor keeps its created-during one',
       len(suggest_btns(base)) == 1)
 check('Suggest captions is still there',
       w.file_struct.suggest_captions_btn.text() == 'Suggest captions')
+
+# ── the raw base text is for expert mode only ───────────────────────────────
+w.show()
+app.processEvents()
+check('normal mode: the raw base text field is hidden',
+      w.base_text_edit.isHidden() and not w.base_struct.isHidden())
+for key in ('portraits', 'buildings', 'music'):
+    w.workflow_combo.setCurrentIndex(w.workflow_combo.findData(key))
+    app.processEvents()
+    check(f'still hidden after switching to {key}',
+          w.base_text_edit.isHidden())
+w.expert_cb.setChecked(True)
+app.processEvents()
+check('expert mode: shown, the structured view hidden',
+      not w.base_text_edit.isHidden() and w.base_struct.isHidden())
+w.expert_cb.setChecked(False)
+app.processEvents()
+check('and hidden again afterwards', w.base_text_edit.isHidden())
 w.close()
 
 print('FAILURES:', fails or 'none')

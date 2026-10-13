@@ -20,7 +20,7 @@ Design decisions:
     and the generated template lists every one of them as a comment. So
     nobody has to read source code to find out what can be switched, and
     the list in the file can never drift from the list in the code.
-  * `felder_aus` is an EXCLUSION list: a field not mentioned stays
+  * `hide_fields` (0.18.29: `felder_aus`) is an EXCLUSION list: a field not mentioned stays
     visible. A field added in a later Cammello version therefore shows up
     on its own instead of silently disappearing because an old file did
     not know about it.
@@ -28,10 +28,10 @@ Design decisions:
     are collected in LAST_ERROR, the built-in defaults take over, and the
     user is told once - the same contract categories.py has for
     meta_categories.txt.
-  * A workflow PRESETS, it never locks: `vorbelegung` fills a field that
-    is still empty, `beispiel` only sets the grey placeholder and is never
+  * A workflow PRESETS, it never locks: `prefill` (`vorbelegung`) fills a field that
+    is still empty, `example` (`beispiel`) only sets the grey placeholder and is never
     uploaded.
-  * 0.18.29: `setzen` is the third kind - it REPLACES the field, filled or
+  * 0.18.29: `set` (`setzen`) is the third kind - it REPLACES the field, filled or
     not, when the workflow is picked in the dropdown. That is what an event
     needs (templates, categories, "created during" of ONE event): a fill-
     if-empty rule would keep last year's event the moment anything stood
@@ -45,6 +45,12 @@ Design decisions:
     replaces the older one, and removing a workflow is deleting the file.
     Everything in such a file is DATA: field names from the registry and
     plain text, nothing is executed.
+
+  * 0.18.30: the parameters are ENGLISH (key, name, hide_fields,
+    show_fields, [workflow.prefill|set|example], field names like
+    `templates`, `categories`, `created_during`). The German spelling of
+    0.18.29 and earlier is still read - nothing a user or a recipient has
+    on disk stops working.
 
 Qt-free apart from what .constants drags in (QRegExp/QStandardPaths at
 import time, no QApplication needed), so plain logic tests can use it.
@@ -107,10 +113,70 @@ FIELDS = [
     ('land',                 'Country:',                            True,  False),
 ]
 
+# 0.18.30 (Harald): the parameters in a workflow file are ENGLISH. The names
+# above stay the internal identifiers (and the old German spelling in a
+# file keeps working); this table is the spelling the template, the
+# generated blocks and the documentation use. Either spelling is read.
+ENGLISH_NAMES = {
+    'vorlagen': 'templates',
+    'basisbeschreibung': 'base_description',
+    'captions_basis': 'base_captions',
+    'autor': 'author',
+    'ersteller': 'creator',
+    'quelle': 'source',
+    'genehmigung': 'permission',
+    'lizenz': 'license',
+    'zeigt': 'depicts',
+    'falls_kein_depicts': 'if_no_depicts',
+    'kategorien': 'categories',
+    'entstanden_waehrend': 'created_during',
+    'kamerastandort': 'camera_position',
+    'objektstandort': 'object_position',
+    'galerieseite': 'gallery_page',
+    'zusatz_wikitext': 'extra_wikitext',
+    'kompositionsjahr': 'composition_year',
+    'quellvorlage': 'source_template',
+    'komponist': 'composer',
+    'aufnehmender': 'recorded_by',
+    'aufnahmetechnik': 'recording_technique',
+    'todesjahr_komponist': 'composer_died',
+    'lizenz_komposition': 'composition_license',
+    'lizenz_aufnahme': 'recording_license',
+    'andere_versionen': 'other_versions',
+    'instrument': 'instrument',
+    'epoche': 'period',
+    'werk': 'work',
+    'land': 'country',
+}
+# The keys of a [[workflow]] block and its three sections: English first,
+# the pre-0.18.30 German spelling second.
+BLOCK_KEYS = (('key', 'schluessel'), ('name', 'name'),
+              ('hide_fields', 'felder_aus'), ('show_fields', 'felder_an'),
+              ('prefill', 'vorbelegung'), ('set', 'setzen'),
+              ('example', 'beispiel'))
+
 FIELD_NAMES = [name for name, _label, _text, _on in FIELDS]
 TEXT_FIELDS = [name for name, _label, text, _on in FIELDS if text]
 DEFAULT_OFF = [name for name, _label, _text, on in FIELDS if not on]
+_TO_INTERNAL = {en: de for de, en in ENGLISH_NAMES.items()}
 _FIELD_LABEL = {name: label for name, label, _t, _on in FIELDS}
+
+
+def field_name(name):
+    """The internal field name for either spelling, or None if unknown."""
+    if name in FIELD_NAMES:
+        return name
+    return _TO_INTERNAL.get(name) if isinstance(name, str) else None
+
+
+def external_name(name):
+    """The English spelling of an internal field name (what a file shows)."""
+    return ENGLISH_NAMES.get(name, name)
+
+
+def _pick(raw, english, german):
+    """A block key by its English name, else by the old German one."""
+    return raw[english] if english in raw else raw.get(german)
 
 
 def label_key_of_field(name):
@@ -184,7 +250,7 @@ MAX_FILE_BYTES = 64 * 1024      # a workflow is a few lines; this is generous
 # Fields whose change a recipient should SEE before accepting a file: they
 # end up in the description of every upload.
 SENSITIVE_FIELDS = ('lizenz', 'autor', 'ersteller', 'quelle', 'genehmigung')
-ORIGINS = {}    # schluessel -> file name in workflows.d, for those entries
+ORIGINS = {}    # key -> file name in workflows.d, for those entries
 
 
 def path():
@@ -229,25 +295,27 @@ def template_text(translate=None):
         f'# {tr("Lines starting with # are comments.")}',
         '#',
         f'# {tr("Per workflow:")}',
-        f'#   schluessel  {tr("internal, never shown, do not change it later")}',
-        f'#   name        {tr("what the dropdown shows")}',
-        f'#   felder_aus  {tr("fields to HIDE - anything not listed stays visible")}',
-        f'#   felder_an   {tr("fields to SHOW that are off by default (marked below)")}',
+        f'#   key          {tr("internal, never shown, do not change it later")}',
+        f'#   name         {tr("what the dropdown shows")}',
+        f'#   hide_fields  {tr("fields to HIDE - anything not listed stays visible")}',
+        f'#   show_fields  {tr("fields to SHOW that are off by default (marked below)")}',
         '#',
         f'# {tr("Three optional sections per workflow:")}',
-        f'#   [workflow.vorbelegung]  {tr("fills the field if it is still empty")}',
-        f'#   [workflow.setzen]       {tr("REPLACES the field when you pick the workflow, even if filled")}',
-        f'#   [workflow.beispiel]     {tr("grey hint only, never uploaded")}',
+        f'#   [workflow.prefill]  {tr("fills the field if it is still empty")}',
+        f'#   [workflow.set]      {tr("REPLACES the field when you pick the workflow, even if filled")}',
+        f'#   [workflow.example]  {tr("grey hint only, never uploaded")}',
+        '#',
+        f'# {tr("Files written before version 0.18.30 use German names (schluessel, felder_aus, vorbelegung, ...); they are still read.")}',
         '#',
         f'# {tr("Available field names:")}',
     ]
-    width = max(len(n) for n in FIELD_NAMES)
+    width = max(len(external_name(n)) for n in FIELD_NAMES)
     for name, label, takes_text, _on in FIELDS:
         shown = tr(label).rstrip(':')
         note = '' if takes_text else f'  ({tr("hide only")})'
         if not _on:
             note += f'  ({tr("off by default")})'
-        lines.append(f'#   {name.ljust(width)}  {shown}{note}')
+        lines.append(f'#   {external_name(name).ljust(width)}  {shown}{note}')
     lines += [
         '#',
         f'# {tr("Workflows you load from a .cammello file are kept in the folder workflows.d next to this file.")}',
@@ -258,57 +326,58 @@ def template_text(translate=None):
         '',
     ]
     for wf in BUILTIN:
-        hide = ', '.join(_quote(h) for h in wf['hide'])
-        show = ', '.join(_quote(h) for h in wf.get('show', []))
+        hide = ', '.join(_quote(external_name(h)) for h in wf['hide'])
+        show = ', '.join(_quote(external_name(h))
+                         for h in wf.get('show', []))
         lines += [
             '[[workflow]]',
-            f'schluessel = {_quote(wf["key"])}',
-            f'name       = {_quote(wf["label"])}',
-            f'felder_aus = [{hide}]',
-            f'felder_an  = [{show}]',
+            f'key         = {_quote(wf["key"])}',
+            f'name        = {_quote(wf["label"])}',
+            f'hide_fields = [{hide}]',
+            f'show_fields = [{show}]',
             '',
-            '  # [workflow.vorbelegung]',
-            '  # vorlagen = "{{Wikiportraits}}"',
+            '  # [workflow.prefill]',
+            '  # templates = "{{Wikiportraits}}"',
             '',
-            '  # [workflow.setzen]',
-            '  # vorlagen = "{{WikiPortraits Event 2026}}"',
-            '  # kategorien = "Event 2026; Another category"',
-            '  # entstanden_waehrend = "Q12345678"',
+            '  # [workflow.set]',
+            '  # templates = "{{WikiPortraits Event 2026}}"',
+            '  # categories = "Event 2026; Another category"',
+            '  # created_during = "Q12345678"',
             '',
-            '  # [workflow.beispiel]',
-            '  # autor = "[[User:Seewolf|Harald Krichel]]"',
+            '  # [workflow.example]',
+            '  # author = "[[User:Seewolf|Harald Krichel]]"',
             '',
         ]
     return '\n'.join(lines)
 
 
 def render_block(wf):
-    """One [[workflow]] block with its real vorbelegung and beispiel.
+    """One [[workflow]] block with its real prefill and example.
 
     0.18.0, for adding a built-in workflow to a file that predates it.
     Deliberately NOT shared with template_text(): the template writes the
     two sections as commented-out hints, because a fresh file is there to
     be read and learned from. Here they carry actual values.
 
-    Dotted keys (vorbelegung.quelle = "") rather than [workflow.vorbelegung]
+    Dotted keys (prefill.source = "") rather than [workflow.prefill]
     sub-tables, so the whole block is self-contained and can be appended
     after any other block without landing inside the wrong table.
     """
-    hide = ', '.join(_quote(h) for h in wf['hide'])
-    show = ', '.join(_quote(x) for x in wf.get('show', []))
+    hide = ', '.join(_quote(external_name(h)) for h in wf['hide'])
+    show = ', '.join(_quote(external_name(x)) for x in wf.get('show', []))
     lines = [
         '[[workflow]]',
-        f'schluessel = {_quote(wf["key"])}',
-        f'name       = {_quote(wf["label"])}',
-        f'felder_aus = [{hide}]',
-        f'felder_an  = [{show}]',
+        f'key         = {_quote(wf["key"])}',
+        f'name        = {_quote(wf["label"])}',
+        f'hide_fields = [{hide}]',
+        f'show_fields = [{show}]',
     ]
     for name, value in wf.get('preset', {}).items():
-        lines.append(f'vorbelegung.{name} = {_quote(value)}')
+        lines.append(f'prefill.{external_name(name)} = {_quote(value)}')
     for name, value in wf.get('set', {}).items():
-        lines.append(f'setzen.{name} = {_quote(value)}')
+        lines.append(f'set.{external_name(name)} = {_quote(value)}')
     for name, value in wf.get('example', {}).items():
-        lines.append(f'beispiel.{name} = {_quote(value)}')
+        lines.append(f'example.{external_name(name)} = {_quote(value)}')
     return '\n'.join(lines) + '\n'
 
 
@@ -390,16 +459,36 @@ def _clean_map(raw, where, warnings):
     if not isinstance(raw, dict):
         warnings.append(f'{where}: expected a section, got {type(raw).__name__}')
         return out
-    for name, value in raw.items():
+    for given, value in raw.items():
+        name = field_name(given)
         if name not in TEXT_FIELDS:
-            known = 'unknown field' if name not in FIELD_NAMES \
+            known = 'unknown field' if name is None \
                 else 'field takes no text'
-            warnings.append(f'{where}: {name} ignored ({known})')
+            warnings.append(f'{where}: {given} ignored ({known})')
             continue
         if not isinstance(value, str):
-            warnings.append(f'{where}: {name} ignored (not text)')
+            warnings.append(f'{where}: {given} ignored (not text)')
             continue
         out[name] = value
+    return out
+
+
+def _field_list(raw, option, where, warnings):
+    """A list of field names (either spelling) -> internal names."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):                 # a single name without brackets
+        raw = [raw]
+    if not isinstance(raw, list):
+        warnings.append(f'{where}: {option} is not a list')
+        return []
+    out = []
+    for given in raw:
+        name = field_name(given)
+        if name is None:
+            warnings.append(f'{where}: {option} {given!r} is not a field name')
+        elif name not in out:
+            out.append(name)
     return out
 
 
@@ -416,56 +505,34 @@ def _parse(data, warnings):
         if not isinstance(raw, dict):
             warnings.append(f'{where}: ignored (not a section)')
             continue
-        key = raw.get('schluessel')
+        key = _pick(raw, 'key', 'schluessel')
         if not isinstance(key, str) or not key.strip():
-            warnings.append(f'{where}: ignored (no schluessel)')
+            warnings.append(f'{where}: ignored (no key)')
             continue
         key = key.strip()
         if key in seen:
-            warnings.append(f'{where}: ignored (schluessel {key} used twice)')
+            warnings.append(f'{where}: ignored (key {key} used twice)')
             continue
         label = raw.get('name')
         if not isinstance(label, str) or not label.strip():
             label = key
-            warnings.append(f'{where}: no name, using the schluessel')
-        hide = []
-        raw_hide = raw.get('felder_aus', [])
-        if isinstance(raw_hide, str):        # a single name without brackets
-            raw_hide = [raw_hide]
-        if isinstance(raw_hide, list):
-            for name in raw_hide:
-                if name in FIELD_NAMES:
-                    hide.append(name)
-                else:
-                    warnings.append(
-                        f'{where}: felder_aus {name!r} is not a field name')
-        else:
-            warnings.append(f'{where}: felder_aus is not a list')
-        show = []
-        raw_show = raw.get('felder_an', [])
-        if isinstance(raw_show, str):        # a single name without brackets
-            raw_show = [raw_show]
-        if isinstance(raw_show, list):
-            for name in raw_show:
-                if name in FIELD_NAMES:
-                    show.append(name)
-                else:
-                    warnings.append(
-                        f'{where}: felder_an {name!r} is not a field name')
-        else:
-            warnings.append(f'{where}: felder_an is not a list')
+            warnings.append(f'{where}: no name, using the key')
+        hide = _field_list(_pick(raw, 'hide_fields', 'felder_aus'),
+                           'hide_fields', where, warnings)
+        show = _field_list(_pick(raw, 'show_fields', 'felder_an'),
+                           'show_fields', where, warnings)
         seen.add(key)
         out.append({
             'key': key,
             'label': label.strip(),
             'hide': hide,
             'show': show,
-            'preset': _clean_map(raw.get('vorbelegung'),
-                                 f'{where} vorbelegung', warnings),
-            'set': _clean_map(raw.get('setzen'),
-                              f'{where} setzen', warnings),
-            'example': _clean_map(raw.get('beispiel'),
-                                  f'{where} beispiel', warnings),
+            'preset': _clean_map(_pick(raw, 'prefill', 'vorbelegung'),
+                                 f'{where} prefill', warnings),
+            'set': _clean_map(_pick(raw, 'set', 'setzen'),
+                              f'{where} set', warnings),
+            'example': _clean_map(_pick(raw, 'example', 'beispiel'),
+                                  f'{where} example', warnings),
         })
     if not out:
         raise ValueError('no usable workflow in the file')
@@ -568,12 +635,16 @@ def _load_extras(entries, warnings):
             continue
         for wf in found:
             if wf['key'] in taken:
-                warnings.append(f'{name}: ignored (schluessel {wf["key"]} '
+                warnings.append(f'{name}: ignored (key {wf["key"]} '
                                 f'is already in use)')
                 continue
             taken.add(wf['key'])
             ORIGINS[wf['key']] = name
             entries.append(wf)
+
+
+_WINDOWS_RESERVED = {'CON', 'PRN', 'AUX', 'NUL'} | {
+    f'{p}{n}' for p in ('COM', 'LPT') for n in range(1, 10)}
 
 
 def safe_name(src):
@@ -582,7 +653,11 @@ def safe_name(src):
     base = os.path.basename(src or '')
     stem = base[:-len(EXT)] if base.lower().endswith(EXT) else base
     stem = ''.join(c if (c.isalnum() or c in ' ._-()') else '_'
-                   for c in stem).strip(' .')
+                   for c in stem).strip(' .')[:80].strip(' .')
+    # Windows device names (CON, NUL, COM1 ...) are reserved with ANY
+    # extension; a file called CON.cammello must not be opened for writing.
+    if stem.split('.')[0].upper() in _WINDOWS_RESERVED:
+        stem = '_' + stem
     return (stem or 'workflow') + EXT
 
 
@@ -627,24 +702,42 @@ def install_file(src, translate=None):
     """
     dest = os.path.join(extras_dir(), safe_name(src))
     replaced = os.path.exists(dest)
+    tmp = dest + '.part'
     try:
         with open(src, 'rb') as fh:
             raw = fh.read(MAX_FILE_BYTES + 1)
+        # The file is read AGAIN here, after the user confirmed a preview of
+        # the first reading. Check the bytes that are about to be stored, so
+        # a file swapped in between (or one that outgrew the limit) is never
+        # written.
+        _entries, _notes, error = _parse_bytes(raw, os.path.basename(src))
+        if error:
+            return None, False, error
         os.makedirs(extras_dir(), exist_ok=True)
-        tmp = dest + '.part'
         with open(tmp, 'wb') as fh:
             fh.write(raw)
         os.replace(tmp, dest)
     except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return None, False, str(e)
     reload(translate)
     return dest, replaced, None
 
 
-def preview_text(entries, translate=None, limit=90):
+def preview_text(entries, translate=None):
     """What loading would change, for the confirmation: per workflow its
-    name, the fields it REPLACES and the fields it FILLS, with the values.
-    Fields that end up in every upload's description are marked."""
+    name, the fields it REPLACES and the fields it FILLS, with the values,
+    and the fields it hides or shows.
+
+    Values are shown IN FULL, never cut off: the confirmation is the only
+    thing between a file from anywhere and every later upload, and a
+    preview that ends in "..." could hide the part that matters (a second
+    template, another licence). Line breaks become " | ".
+    Fields that end up in every upload's description are marked.
+    """
     tr = translate or (lambda s: s)
     lines = []
 
@@ -652,8 +745,7 @@ def preview_text(entries, translate=None, limit=90):
         return tr(label_key_of_field(name)).rstrip(':')
 
     def value(text):
-        flat = ' | '.join(p.strip() for p in text.splitlines() if p.strip())
-        return flat if len(flat) <= limit else flat[:limit - 1] + '…'
+        return ' | '.join(p.strip() for p in text.splitlines() if p.strip())
 
     for wf in entries:
         lines.append(f'■ {wf["label"]}')
@@ -663,6 +755,12 @@ def preview_text(entries, translate=None, limit=90):
                 mark = '  ⚠' if name in SENSITIVE_FIELDS else ''
                 lines.append(f'    {heading}: {shown(name)} = '
                              f'{value(text) or "(empty)"}{mark}')
-        if not wf.get('set') and not wf.get('preset'):
+        for heading, names in ((tr('hides'), wf.get('hide', [])),
+                               (tr('shows'), wf.get('show', []))):
+            if names:
+                lines.append(f'    {heading}: '
+                             + ', '.join(shown(n) for n in names))
+        if not (wf.get('set') or wf.get('preset')
+                or wf.get('hide') or wf.get('show')):
             lines.append(f'    {tr("sets no field")}')
     return '\n'.join(lines)

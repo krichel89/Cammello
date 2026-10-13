@@ -104,6 +104,14 @@ def subject_name(depicts_qids, entities, lang):
     return ', '.join(names)
 
 
+def wiki_safe(text):
+    """A label made safe to sit inside wikitext (an Information template, a
+    link text): the characters that could end a template argument or open
+    other markup are dropped. Labels come from Wikidata, which anyone can
+    edit; no real name or event title contains them (0.18.30)."""
+    return re.sub(r'\s+', ' ', re.sub(r'[\[\]{}|<>]', '', text or '')).strip()
+
+
 def subject_linked(depicts_qids, entities, lang, prefer_langs):
     """The subject with each name wrapped in an interwiki link where a
     sitelink exists, for the description wikitext. Names without a sitelink
@@ -112,7 +120,7 @@ def subject_linked(depicts_qids, entities, lang, prefer_langs):
     for qid in subject_qids(depicts_qids, entities):
         entity = entities.get(qid)
         link = interwiki_link(entity, prefer_langs)
-        parts.append(link or entity_label(entity, lang))
+        parts.append(link or wiki_safe(entity_label(entity, lang)))
     return ', '.join(p for p in parts if p)
 
 
@@ -360,7 +368,7 @@ def linked_description(depicts_qids, event_qid, entities, table, lang,
     fallback are the same as build_caption; only the names are linked."""
     subject_plain = subject_name(depicts_qids, entities, lang)
     subject = subject_linked(depicts_qids, entities, lang, prefer_langs)
-    event_label = (entity_label(entities.get(event_qid), lang)
+    event_label = (wiki_safe(entity_label(entities.get(event_qid), lang))
                    if event_qid else '')
     event = event_label
     event_link = interwiki_link(entities.get(event_qid), prefer_langs)

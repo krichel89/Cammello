@@ -225,15 +225,6 @@ class MenusMixin:
             menu, tr('Load base_description from file…'),
             '_load_settings_from_file', None,
             tr('Read settings back from a text file.'), QAction.NoRole))
-        if hasattr(self, '_save_settings_to_file'):
-            self.export_file_desc_act = QAction(tr('incl. selected file'), self)
-            self.export_file_desc_act.setCheckable(True)
-            self.export_file_desc_act.setStatusTip(tr(
-                "Also write the selected file's description into the "
-                "settings file."))
-            self.export_file_desc_act.setMenuRole(QAction.NoRole)
-            menu.addAction(self.export_file_desc_act)
-            self._scope('mediawiki', self.export_file_desc_act)
         menu.addSeparator()
         # 0.16.1: the workflow file is configuration, so it sits next to
         # Settings rather than in its own menu.

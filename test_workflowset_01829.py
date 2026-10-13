@@ -97,9 +97,9 @@ check('sets_of() of an unknown key does not raise',
 check('the built-ins set nothing',
       all(w.get('set') == {} for w in wc.BUILTIN))
 check('a fresh template documents the section',
-      'setzen' in wc.template_text() and 'REPLACES' in wc.template_text())
+      '[workflow.set]' in wc.template_text() and 'REPLACES' in wc.template_text())
 check('render_block writes setzen back out',
-      'setzen.vorlagen = ' in wc.render_block(
+      'set.templates = ' in wc.render_block(
           dict(wc.BUILTIN[0], set={'vorlagen': '{{X}}'})))
 write('[[workflow]\nschluessel = "a"\n')
 check('a broken file falls back to the built-ins (which set nothing)',

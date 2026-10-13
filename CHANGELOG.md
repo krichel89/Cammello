@@ -4,6 +4,49 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.30 - 2026-10-13
+
+### Changed
+- The parameters of a workflow file are ENGLISH: `key`, `name`,
+  `hide_fields`, `show_fields`, the sections `[workflow.prefill]`,
+  `[workflow.set]` and `[workflow.example]`, and field names such as
+  `templates`, `categories`, `created_during`, `camera_position`,
+  `base_captions`. The generated template, "Add missing workflows" and the
+  example file use them. The German spelling of 0.18.29 and earlier
+  (`schluessel`, `felder_aus`, `vorbelegung`, `setzen`, `vorlagen`, ...) is
+  still read, in the same file and in `.cammello` files, so nothing on disk
+  or in the hands of a recipient stops working.
+- File menu: "Save base_description", "...to file..." and "Load
+  base_description from file..." are translated ("Basisbeschreibung
+  speichern" etc.; es, fr, it as well). The tick "incl. selected file" is
+  gone; the settings file holds the settings and the base description only.
+- The confirmation when loading a `.cammello` file shows every value in
+  full (it cut at 90 characters before) and names the fields the file hides
+  or shows.
+
+### Fixed
+- The 110 px high raw text field of the base description was on screen in
+  the NORMAL mode as well: the workflow switch showed the registry field
+  `basisbeschreibung` for every workflow. It belongs to expert mode, where
+  it replaces the structured fields; in the normal mode it is hidden now.
+
+### Security (QK)
+- Loading a `.cammello` file: the bytes that are STORED are now checked
+  again (size, UTF-8, TOML, blocks). Before, the file was read a second time
+  after the confirmation without a check, so a file replaced in between, or
+  one grown past the limit, could be stored. A leftover `.part` file is
+  removed on failure.
+- `.cammello` file names: Windows device names (CON, NUL, COM1, LPT1, ...)
+  are prefixed, since they are reserved with any extension; names are cut to
+  80 characters.
+- Wikidata labels are open to anyone's edits. In the linked Information
+  description a label (subject and event) is stripped of `[ ] { } | < >`, so
+  a vandalised label cannot close the `{{lang|1=...}}` template or open other
+  wikitext (`captions.wiki_safe`).
+- Category suggestions from Wikidata (P373 or label): a name with
+  characters a page title cannot contain (`[ ] { } | < > #`, line breaks)
+  is dropped instead of being written into `[[Category:...]]`.
+
 ## 0.18.29 - 2026-10-13
 
 ### Added

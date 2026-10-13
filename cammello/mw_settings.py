@@ -163,11 +163,10 @@ class MWSettingsMixin:
                                    self.scheme_combo.currentData())
 
     def _export_file_desc(self):
-        """Whether "Include the selected file's description" is ticked in the
-        File menu (it was a checkbox under the base description before
-        0.18.29)."""
-        act = getattr(self, 'export_file_desc_act', None)
-        return bool(act is not None and act.isChecked())
+        """The tick "incl. selected file" is gone (0.18.29, Harald): the
+        settings file holds the settings and the base description only.
+        Kept as a method so the export code below needs no second path."""
+        return False
 
     def _on_save_settings(self):
         """Explicitly persist the current settings (button + on close)."""

@@ -510,6 +510,9 @@ def fetch_caption_entities(qids, timeout=8):
 _YEAR_RE = re.compile(r'\b(19|20)\d{2}\b')
 
 
+_BAD_TITLE_CHARS = re.compile(r'[\[\]{}|<>#\n\r]')
+
+
 def category_suggestions(depicts_qids, created_qid, fetched, date_text,
                          existing_cats):
     """Pure suggestion builder (unit-testable, no network).
@@ -527,6 +530,12 @@ def category_suggestions(depicts_qids, created_qid, fetched, date_text,
 
     def add(name):
         name = (name or '').strip()
+        # P373 and the labels are open to anyone's edits on Wikidata. A
+        # MediaWiki page title cannot contain these characters, so a "name"
+        # with one is no category - and written into [[Category:...]] it
+        # could close the link and open other wikitext (0.18.30).
+        if _BAD_TITLE_CHARS.search(name):
+            return
         if name and name.lower() not in existing:
             existing.add(name.lower())
             out.append(name)

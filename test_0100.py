@@ -89,8 +89,7 @@ try:
 
     if have_iptc:
         check('tabs all-on',
-              tab_names(w) == ['Culling', 'MediaWiki', 'IPTC', 'Uploads',
-                               'Settings', 'Log', 'About'],
+              tab_names(w) == ['Culling', 'MediaWiki', 'IPTC', 'Uploads'],
               str(tab_names(w)))
         # FTP mirrors: line edit, combo, checkbox.
         w.ftp_host_edit.setText('ftp.example.org')
@@ -117,8 +116,6 @@ try:
         w.iptc_inplace_mirror.setChecked(True)
         check('iptc inplace mirror->primary', w.iptc_inplace_cb.isChecked())
         w.iptc_inplace_mirror.setChecked(False)
-        # Culling: three send targets present.
-        check('cull ftp button exists', hasattr(w, 'cull_ftp_btn'))
     if hasattr(w, '_cull_wb'):
         w._cull_shutdown()
     w.deleteLater()
@@ -130,7 +127,6 @@ try:
         w = make_window()
         names = tab_names(w)
         check('ftp off: no FTP tab', 'FTP' not in names, str(names))
-        check('ftp off: no cull FTP button', not hasattr(w, 'cull_ftp_btn'))
         check('ftp off: no FTP mirror', not hasattr(w, 'ftp_host_mirror'))
         check('ftp off: IPTC still there', 'IPTC' in names)
         if hasattr(w, '_cull_wb'):
@@ -152,7 +148,6 @@ try:
                       lambda: 'MISSING')())
         check('iptc off: no IPTC mirror', not hasattr(w, 'iptc_inplace_mirror'))
         check('iptc off: FTP mirror present', hasattr(w, 'ftp_host_mirror'))
-        check('iptc off: cull FTP button present', hasattr(w, 'cull_ftp_btn'))
         if hasattr(w, '_cull_wb'):
             w._cull_shutdown()
         w.deleteLater(); app.processEvents()

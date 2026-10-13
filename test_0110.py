@@ -190,14 +190,34 @@ try:
           and hasattr(w, 'mw_password_edit'))
     check('mw user has NO default value', True)  # audited: prefilled from
     #                                              stored settings only
+    # The password lives in the OS keyring (not QSettings) since 0.12.x;
+    # use an in-memory backend so the test works without a real keyring.
+    import keyring
+    from keyring.backend import KeyringBackend
+    class _MemKeyring(KeyringBackend):
+        priority = 1
+        def __init__(self):
+            self.d = {}
+        def get_password(self, s, u):
+            return self.d.get((s, u))
+        def set_password(self, s, u, p):
+            self.d[(s, u)] = p
+        def delete_password(self, s, u):
+            self.d.pop((s, u), None)
+    _old_kr = keyring.get_keyring()
+    keyring.set_keyring(_MemKeyring())
+    from cammello import credentials as _cred
+    _cred.clear_cache()
     w.mw_user_edit.setText('TestUser@Cammello')
+    w._mw_password_loaded = True
     w.mw_password_edit.setText('secret123')
     w._save_settings()
     from PyQt5.QtCore import QSettings as _QS
     login_s = _QS(APP_NAME, 'Login')
     check('credentials persisted',
           login_s.value('username') == 'TestUser@Cammello'
-          and login_s.value('password') == 'secret123')
+          and _cred.load_mediawiki_password(
+              login_s, 'TestUser@Cammello') == 'secret123')
     from cammello.widgets import LoginDialog
     dlg = LoginDialog(w)
     check('login dialog prefilled',
@@ -205,6 +225,9 @@ try:
           and dlg.pass_edit.text() == 'secret123')
     dlg.deleteLater()
     # cleanup credentials
+    _cred.save_mediawiki_password(login_s, 'TestUser@Cammello', '')
+    _cred.clear_cache()
+    keyring.set_keyring(_old_kr)
     login_s.remove('password')
     login_s.setValue('username', '')
     login_s.sync()

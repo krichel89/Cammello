@@ -48,7 +48,7 @@ check('the file lives in the user directory, not inside the program',
 check('it is created on first load', wc.load() and os.path.exists(wc.path()))
 _tpl = open(wc.path(), encoding='utf-8').read()
 check('the template lists every field name',
-      all(n in _tpl for n in wc.FIELD_NAMES))
+      all(wc.external_name(n) in _tpl for n in wc.FIELD_NAMES))
 check('it names the menu path for reloading',
       'Reload workflows' in _tpl or 'neu laden' in _tpl)
 check('the template parses back into the built-in workflows',
