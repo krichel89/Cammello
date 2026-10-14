@@ -117,6 +117,7 @@ class EditPanel(QFrame):
     pipette_toggled = pyqtSignal(bool)
     ev_step_requested = pyqtSignal(int)     # +1 / -1 sixths of a stop
     reset_requested = pyqtSignal()
+    close_requested = pyqtSignal()
 
     MARGIN = 12
 
@@ -152,7 +153,19 @@ class EditPanel(QFrame):
         f.setBold(True)
         self.title.setFont(f)
         self.title.setToolTip(tr('Drag to move this panel'))
-        lay.addWidget(self.title)
+        # 0.18.32 (Harald): the panel can be hidden - the cross here, the
+        # pencil in the toolbar brings it back.
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.addWidget(self.title, 1)
+        self.close_btn = QToolButton()
+        self.close_btn.setText('\u00d7')
+        self.close_btn.setAutoRaise(True)
+        self.close_btn.setToolTip(tr('Hide the edit panel (the pencil in '
+                                     'the toolbar shows it again)'))
+        self.close_btn.clicked.connect(self.close_requested)
+        title_row.addWidget(self.close_btn)
+        lay.addLayout(title_row)
 
         self.crop_btn = QPushButton(tr('Crop (C)'))
         self.crop_btn.setToolTip(tr('Draw a crop on this image. Enter '

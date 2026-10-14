@@ -2044,6 +2044,7 @@ LUCIDE_NAMES = {
     'filter_dot': 'funnel',          # same funnel, plus a drawn dot
     'filter_off': 'funnel-x',
     'nametag': 'tag',
+    'pencil': 'pencil',
     'folder': 'folder-open',
     'reload': 'refresh-cw',
 }

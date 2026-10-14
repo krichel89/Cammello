@@ -1251,6 +1251,15 @@ class MWCullingMixin:
             lambda _c: self._cull_set_filter_collapsed(
                 not self._cull_filter_collapsed, remember=True))
         bar.addWidget(self.cull_filter_toggle)
+        # 0.18.32 (Harald): the floating edit panel can be hidden. The
+        # pencil brings it back; the cross in the panel hides it. Not
+        # checkable, for the same reason as the funnel (blue = "on").
+        self.cull_edit_toggle = icon_button(
+            lucide('pencil', self._cull_ink()), tr('Show the edit panel'))
+        self.cull_edit_toggle.clicked.connect(
+            lambda _c: self._cull_set_edit_panel_shown(
+                not self._cull_edit_panel_shown()))
+        bar.addWidget(self.cull_edit_toggle)
         filter_lbl = QLabel(tr('Filter:'))
         self._cull_filter_widgets.append(filter_lbl)
         frow.addWidget(filter_lbl)
@@ -1388,6 +1397,8 @@ class MWCullingMixin:
         self.cull_edit_panel.pipette_toggled.connect(self._cull_set_pipette)
         self.cull_edit_panel.ev_step_requested.connect(self._cull_step_ev)
         self.cull_edit_panel.reset_requested.connect(self._cull_reset_edits)
+        self.cull_edit_panel.close_requested.connect(
+            lambda: self._cull_set_edit_panel_shown(False))
         self.cull_view.pixel_picked.connect(self._cull_wb_from_pixel)
         self.cull_view.crop.changed.connect(self._cull_update_crop_readout)
         self.cull_view.crop.committed.connect(
@@ -1894,6 +1905,11 @@ class MWCullingMixin:
         # icon to ink - nothing to do for it any more.
         hidden = getattr(self, '_cull_filter_collapsed', False)
         marked = hidden and self._cull_filter_active()
+        if hasattr(self, 'cull_edit_toggle'):
+            self.cull_edit_toggle.setIcon(lucide('pencil', ink))
+            self.cull_edit_toggle.setToolTip(
+                tr('Hide the edit panel') if self._cull_edit_panel_shown()
+                else tr('Show the edit panel'))
         self.cull_filter_toggle.setIcon(
             lucide('filter_dot' if marked else 'filter', ink))
         self.cull_filter_toggle.setToolTip(
@@ -3161,9 +3177,21 @@ class MWCullingMixin:
             self.cull_view.set_tone(*pending)
             self._cull_tone_pending = None
 
+    def _cull_edit_panel_shown(self):
+        """Whether the user wants the floating edit panel (persistent)."""
+        return self.settings.value('cull_edit_panel', True, type=bool)
+
+    def _cull_set_edit_panel_shown(self, on):
+        self.settings.setValue('cull_edit_panel', bool(on))
+        self._cull_update_edit_panel()
+        self._cull_update_icons()
+
     def _cull_update_edit_panel(self):
         """Show the current image's edits in the floating panel."""
         if not hasattr(self, 'cull_edit_panel'):
+            return
+        if not self._cull_edit_panel_shown():
+            self.cull_edit_panel.hide()
             return
         if self._cull_edits_locked():
             # 0.18.8: nothing to edit in fullscreen, so nothing to float
@@ -3527,6 +3555,23 @@ class MWCullingMixin:
         # folder, not a different one.
         self._cull_open_folder(folder, getattr(self, '_cull_recursive', False))
 
+    def _cull_refresh_table_badges(self):
+        """Re-mark which culling items are in the upload table ([T]).
+        Also called when files leave the table (0.18.32)."""
+        if not hasattr(self, '_cull_items'):
+            return
+        table_paths = {os.path.normpath(
+            self.table.item(r, self.COL_FILENAME).data(Qt.UserRole))
+            for r in range(self.table.rowCount())
+            if self.table.item(r, self.COL_FILENAME)
+            and self.table.item(r, self.COL_FILENAME).data(Qt.UserRole)}
+        for item in self._cull_items:
+            item.in_table = any(
+                p and os.path.normpath(p) in table_paths
+                for p in (item.jpg_path, item.raw_path))
+        for i in range(len(self._cull_visible)):
+            self._cull_decorate_row(i)
+
     def _cull_to_table(self):
         """Target 1: the MediaWiki tab's file table."""
         rows = self._cull_send_rows()
@@ -3534,16 +3579,7 @@ class MWCullingMixin:
             return
         paths = self._cull_paths_for_rows(rows)
         added, dupes, failed = self._add_paths(paths)
-        table_paths = {os.path.normpath(
-            self.table.item(r, self.COL_FILENAME).data(Qt.UserRole))
-            for r in range(self.table.rowCount())
-            if self.table.item(r, self.COL_FILENAME)}
-        for item in self._cull_items:
-            item.in_table = any(
-                p and os.path.normpath(p) in table_paths
-                for p in (item.jpg_path, item.raw_path))
-        for i in range(len(self._cull_visible)):
-            self._cull_decorate_row(i)
+        self._cull_refresh_table_badges()
         self.cull_status.setText(
             tr('{added} file(s) added to the table, {dupes} duplicate(s) '
                'skipped, {failed} failed.').format(

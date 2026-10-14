@@ -387,6 +387,23 @@ try:
     eq('file A names Anna', fa.get('caption_en'), 'Anna Müller, Berlinale')
     eq('file B names Bob', fb.get('caption_en'), 'Bob Beta, Berlinale')
 
+    # 0.18.32: a caption in the BASE description must not count as "already
+    # there" for the selected file - the button fills the file's own fields.
+    saved_base = w.base_text_edit.toPlainText()
+    w.base_text_edit.setPlainText(
+        (saved_base + '\n' if saved_base else '')
+        + 'caption_en=Base caption\ncaption_de=Basis')
+    rc = add_row('c.jpg', 'depicts=Q1')
+    w.table.clearSelection()
+    w.table.selectRow(rc)
+    w._suggest_captions()
+    fc, _ = fields_of(rc)
+    eq('base caption does not block the file caption', fc.get('caption_en'),
+       'Anna Müller, Berlinale')
+    check('and the file gets its own description too',
+          bool(fc.get('info:en')), str(fc))
+    w.base_text_edit.setPlainText(saved_base)
+
     # the conjunctions are NOT stored behind the user's back
     eq('no conjunction was persisted',
        settings.value('fuegungen', '', type=str), saved_fueg)

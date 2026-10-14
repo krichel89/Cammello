@@ -251,6 +251,121 @@ def rename_stem_problem(stem):
     return None
 
 
+_FORBIDDEN_STEM_CHARS = '/\\:*?"<>|'
+
+
+def companion_paths(path):
+    """`path` plus the files that belong to the same picture: same folder,
+    same stem, and a RAW, JPEG or .xmp extension (0.18.32). Renaming one
+    half of a RAW+JPEG pair, or a RAW without its sidecar, would tear the
+    picture apart - the same rule as the culling tab's F2."""
+    folder, name = os.path.split(path)
+    stem = os.path.splitext(name)[0]
+    found = [path]
+    try:
+        names = os.listdir(folder or '.')
+    except OSError:
+        return found
+    ok = RAW_EXTENSIONS | JPEG_EXTENSIONS | {'.xmp'}
+    for other in sorted(names):
+        base, ext = os.path.splitext(other)
+        full = os.path.join(folder, other)
+        if (base == stem and ext.lower() in ok
+                and os.path.normcase(full) != os.path.normcase(path)):
+            found.append(full)
+    return found
+
+
+def plan_disk_renames(entries):
+    """entries: [(path, new_stem)] -> (plan, problems).
+
+    plan = [(old, new)] for the picture of every entry; problems = list of
+    (code, name) with code in 'chars', 'reserved', 'trailing', 'empty',
+    'clash' (target exists and is not part of this batch), 'twice' (two
+    pictures get the same name). Nothing is touched here. Entries whose
+    stem does not change are left out."""
+    plan, problems = [], []
+    olds = set()
+    news = {}
+    for path, new_stem in entries:
+        new_stem = (new_stem or '').strip()
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if new_stem == stem:
+            continue
+        if not new_stem:
+            problems.append(('empty', stem))
+            continue
+        if any(ch in new_stem for ch in _FORBIDDEN_STEM_CHARS):
+            problems.append(('chars', new_stem))
+            continue
+        reason = rename_stem_problem(new_stem)
+        if reason:
+            problems.append((reason, new_stem))
+            continue
+        folder = os.path.dirname(path)
+        for old in companion_paths(path):
+            new = os.path.join(folder, new_stem + os.path.splitext(old)[1])
+            key = os.path.normcase(new)
+            if key in news and news[key] != os.path.normcase(old):
+                problems.append(('twice', os.path.basename(new)))
+                continue
+            if (old, new) in plan:
+                continue                # the other half of a pair, too
+            news[key] = os.path.normcase(old)
+            olds.add(os.path.normcase(old))
+            plan.append((old, new))
+    for old, new in plan:
+        key = os.path.normcase(new)
+        if key in olds:
+            continue                    # a name freed by this very batch
+        if os.path.exists(new):
+            try:
+                if os.path.samefile(old, new):
+                    continue            # case-only change of the file itself
+            except OSError:
+                pass
+            problems.append(('clash', os.path.basename(new)))
+    return plan, problems
+
+
+def execute_disk_renames(plan):
+    """Carry out a plan from plan_disk_renames. -> list of (old, new) done.
+
+    Raises OSError after putting back everything that had moved. When a
+    new name equals another file's old name (a batch that shifts names
+    along) every file first goes to a temporary name, so nothing is
+    overwritten on the way."""
+    olds = {os.path.normcase(o) for o, _n in plan}
+    overlap = any(os.path.normcase(n) in olds and
+                  os.path.normcase(n) != os.path.normcase(o)
+                  for o, n in plan)
+    done = []                           # (from, to) of every os.rename made
+    try:
+        if overlap:
+            staged = []
+            for i, (old, new) in enumerate(plan):
+                tmp = os.path.join(os.path.dirname(old),
+                                   f'.cammello-rename-{os.getpid()}-{i}.tmp')
+                os.rename(old, tmp)
+                done.append((old, tmp))
+                staged.append((tmp, new))
+            for tmp, new in staged:
+                os.rename(tmp, new)
+                done.append((tmp, new))
+        else:
+            for old, new in plan:
+                os.rename(old, new)
+                done.append((old, new))
+    except OSError:
+        for src, dst in reversed(done):
+            try:
+                os.rename(dst, src)
+            except OSError:
+                pass
+        raise
+    return list(plan)
+
+
 def _write_xmp_sidecar(path, rating, label):
     """Write Rating and Label into a .xmp sidecar in pure Python.
 

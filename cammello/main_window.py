@@ -404,8 +404,16 @@ class MainWindow(FlickrMixin,
         # the 0.18.19 tests reach for names_btn.
         self.names_btn = self.rename_btn
 
+        # 0.18.32 (Harald): empties the list, e.g. what culling sent over.
+        self.clear_list_btn = QPushButton(tr('Clear list'))
+        self.clear_list_btn.setToolTip(tr(
+            'Remove every file from this list (the files on disk are not '
+            'touched).'))
+        self.clear_list_btn.clicked.connect(self._clear_list_clicked)
+
         toolbar.addWidget(self.login_label)
         toolbar.addStretch()
+        toolbar.addWidget(self.clear_list_btn)
         toolbar.addWidget(self.rename_btn)
         toolbar.addWidget(self.open_folder_btn)
         toolbar.addWidget(self._workflow_label)
@@ -442,7 +450,8 @@ class MainWindow(FlickrMixin,
                                      'rename dialog.'))
         hs = self.table.horizontalHeaderItem(self.COL_FILENAME)
         if hs:
-            hs.setToolTip(tr('Local source file (not modified).'))
+            hs.setToolTip(tr('Local source file. Its content is never changed; Rename (F2) '
+                              'renames it on disk.'))
         htb = self.table.horizontalHeaderItem(self.COL_THUMB)
         if htb:
             htb.setToolTip(tr('Preview'))
@@ -520,6 +529,15 @@ class MainWindow(FlickrMixin,
         settings_form = QFormLayout(settings_group.content)
         self.author_edit = QLineEdit()
         self.author_edit.setPlaceholderText(tr('e.g.') + ' [[User:Seewolf|Harald Krichel]]')
+        # 0.18.32 (Harald): the photographer's own Commons category, optional.
+        self.photographer_cat_edit = QLineEdit()
+        self.photographer_cat_edit.setPlaceholderText(
+            tr('e.g.') + ' Photographs by Harald Krichel')
+        self.photographer_cat_edit.setToolTip(tr(
+            'Optional. The Commons category of the photographer, e.g. '
+            '"Photographs by Harald Krichel" -\nthe NAME only, without '
+            '"Category:" and without brackets. It is added to every file '
+            'of the upload;\nempty = no photographer category.'))
         self.creator_edit = QLineEdit()
         self.creator_edit.setPlaceholderText(tr('e.g.') + ' Q640')
         _style_wd_field(self.creator_edit, searchable=True)
@@ -549,11 +567,11 @@ class MainWindow(FlickrMixin,
         self.copyright_sdc_edit.setText('Q73566113')
         _style_wd_field(self.copyright_sdc_edit)
         self._link_license_fields()
-        # These SDC values are prepended to every file at upload; keep the
-        # per-row "Effective" preview in sync when they change.
-        for _e in (self.creator_edit, self.license_sdc_edit, self.copyright_sdc_edit):
-            _e.textChanged.connect(lambda *_: self._refresh_all_effective())
+        # 0.18.32: these SDC values are prepended to every file at upload but
+        # are no longer part of the per-row preview, so nothing to refresh.
         self.other_templates_edit = QLineEdit()
+        self.other_templates_edit.textChanged.connect(
+            lambda *_: self._refresh_all_effective())
         self.other_templates_edit.setPlaceholderText(
             tr('e.g.') + ' {{WikiPortraits at Berlinale 2026}}')
         self.other_fields_edit = QLineEdit()
@@ -615,12 +633,15 @@ class MainWindow(FlickrMixin,
             'WIKITEXT half -\n"License (P275)" below says the same as '
             'structured data, and the two\nmust not disagree.'))
         settings_form.addRow(tr('Author:'), self.author_edit)
+        settings_form.addRow(tr("Photographer's category:"),
+                             self.photographer_cat_edit)
         settings_form.addRow(tr('Creator (P170):'), self.creator_edit)
         settings_form.addRow(tr('Source:'), self.source_edit)
         settings_form.addRow(tr('Permission:'), self.permission_edit)
         settings_form.addRow(tr('License:'), self.license_edit)
         for _w in (self.author_edit, self.source_edit,
                    self.permission_edit, self.license_edit,
+                   self.photographer_cat_edit,
                    self.creator_edit, self.license_sdc_edit,
                    self.copyright_sdc_edit):
             _lbl = settings_form.labelForField(_w)
@@ -1453,6 +1474,8 @@ class MainWindow(FlickrMixin,
             'captions_basis': [getattr(base, 'captions_label', None),
                                getattr(base, 'captions_editor', None)],
             'autor': [getattr(self, 'author_edit', None)],
+            'fotografen_kategorie': [
+                getattr(self, 'photographer_cat_edit', None)],
             'ersteller': [getattr(self, 'creator_edit', None)],
             'quelle': [getattr(self, 'source_edit', None)],
             'genehmigung': [getattr(self, 'permission_edit', None)],
@@ -2204,6 +2227,8 @@ class MainWindow(FlickrMixin,
         box = QGroupBox(tr('MediaWiki upload'))
         form = QFormLayout(box)
         self.author_mirror = mirror_line_edit(self.author_edit)
+        self.photographer_cat_mirror = mirror_line_edit(
+            self.photographer_cat_edit)
         self.creator_mirror = mirror_line_edit(self.creator_edit)
         _style_wd_field(self.creator_mirror, searchable=True)
         self._creator_mirror_suggest = WikidataSuggest(self.creator_mirror,
@@ -2220,6 +2245,8 @@ class MainWindow(FlickrMixin,
         self.gallery_prefix_mirror = mirror_line_edit(self.gallery_prefix_edit)
 
         form.addRow(tr('Author:'), self.author_mirror)
+        form.addRow(tr("Photographer's category:"),
+                    self.photographer_cat_mirror)
         form.addRow(tr('Creator (P170):'), self.creator_mirror)
         form.addRow(tr('Source:'), self.source_mirror)
         form.addRow(tr('Permission:'), self.permission_mirror)

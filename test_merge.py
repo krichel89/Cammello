@@ -121,12 +121,12 @@ w._refresh_effective(0)
 preview = w.table.item(0, w.COL_EFFECTIVE).text()
 psd, _ = extract_structured_data(preview)
 
-# The settings SDC must actually be in there - it never reached the upload
-# before, because the worker's base_text argument was dead.
-check('preview contains creator from the upload settings',
-      psd.get('creator') == 'Q640', str(psd.get('creator')))
-check('preview contains copyright', psd.get('copyright') == 'Q73566113')
-check('preview contains license', psd.get('license') == 'Q18199165')
+# 0.18.32 (Harald): what stands under "Author and license" is NOT in the
+# per-file preview; it is added at upload (checked below).
+check('preview has no creator from the upload settings',
+      not psd.get('creator'), str(psd.get('creator')))
+check('preview has no copyright', not psd.get('copyright'))
+check('preview has no license', not psd.get('license'))
 check('preview merges depicts', psd.get('depicts') == 'Q1; Q2',
       str(psd.get('depicts')))
 check('preview caption: file wins', psd.get('caption_en') == 'File caption')
@@ -134,7 +134,19 @@ check('preview caption: file wins', psd.get('caption_en') == 'File caption')
 # What start_upload would build for that row.
 per_file = w.table.item(0, w.COL_DESC).text()
 upload_text, _ = w._effective_text(per_file, with_warnings=True)
-check('upload text == preview text', upload_text == preview)
+usd, _ = extract_structured_data(upload_text)
+# The settings SDC must still reach the upload - it never did before 0.9.13,
+# because the worker's base_text argument was dead.
+check('upload contains creator from the upload settings',
+      usd.get('creator') == 'Q640', str(usd.get('creator')))
+check('upload contains copyright', usd.get('copyright') == 'Q73566113')
+check('upload contains license', usd.get('license') == 'Q18199165')
+preview_text = w._effective_text(per_file, with_settings=False)
+# 0.18.32: the preview also shows 'Other templates' (the worker adds them
+# outside description_all), so it is the upload text PLUS those templates.
+_ot = w.other_templates_edit.text().strip()
+_expect = (preview_text.rstrip() + '\n' + _ot) if _ot else preview_text
+check('upload text == preview text', _expect == preview)
 
 print('\nFAILURES:', fails if fails else 'none')
 sys.exit(1 if fails else 0)

@@ -82,6 +82,8 @@ class MWSettingsMixin:
             self._refresh_required_marks()
 
         self.author_edit.setText(self.settings.value('author', ''))
+        self.photographer_cat_edit.setText(
+            self.settings.value('photographer_category', ''))
         self.source_edit.setText(self.settings.value('source', '{{own}}'))
         self.permission_edit.setText(self.settings.value('permission', ''))
         self.license_edit.setText(self.settings.value('license', '{{Cc-by-sa-4.0}}'))
@@ -126,6 +128,8 @@ class MWSettingsMixin:
 
     def _save_settings(self):
         self.settings.setValue('author', self.author_edit.text())
+        self.settings.setValue('photographer_category',
+                               self.photographer_cat_edit.text())
         self.settings.setValue('creator_sdc', self.creator_edit.text())
         self.settings.setValue('source', self.source_edit.text())
         self.settings.setValue('permission', self.permission_edit.text())
@@ -182,7 +186,7 @@ class MWSettingsMixin:
     _BLOCK_FILE_BEGIN = '=== file_description ==='
     _BLOCK_FILE_END = '=== end file_description ==='
     # Single-line keys written as "key = value".
-    _FILE_KEYS = ('author', 'creator_sdc', 'source', 'permission', 'license',
+    _FILE_KEYS = ('author', 'photographer_category', 'creator_sdc', 'source', 'permission', 'license',
                   'license_sdc', 'copyright_sdc', 'other_templates',
                   'other_fields', 'gallery_prefix', 'expert_mode')
 
@@ -198,6 +202,7 @@ class MWSettingsMixin:
         self._commit_editor()
         values = {
             'author': self.author_edit.text(),
+            'photographer_category': self.photographer_cat_edit.text(),
             'creator_sdc': self.creator_edit.text(),
             'source': self.source_edit.text(),
             'permission': self.permission_edit.text(),
@@ -299,6 +304,7 @@ class MWSettingsMixin:
 
         setters = {
             'author': self.author_edit.setText,
+            'photographer_category': self.photographer_cat_edit.setText,
             'creator_sdc': self.creator_edit.setText,
             'source': self.source_edit.setText,
             'permission': self.permission_edit.setText,

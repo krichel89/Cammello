@@ -49,10 +49,11 @@ class MWEditorMixin:
                 lines.append(f'{key}={val}')
         return lines
 
-    def _full_base_text(self):
-        """Base description including the SDC fields from the upload settings."""
+    def _full_base_text(self, with_settings=True):
+        """Base description including the SDC fields from the upload settings
+        (with_settings=False leaves those out - the table preview)."""
         parts = []
-        sdc = self._base_sdc_lines()
+        sdc = self._base_sdc_lines() if with_settings else []
         if sdc:
             parts.append('\n'.join(sdc))
         base = self.base_text_edit.toPlainText().strip()
@@ -60,7 +61,8 @@ class MWEditorMixin:
             parts.append(base)
         return '\n'.join(parts)
 
-    def _effective_text(self, per_file_text, with_warnings=False):
+    def _effective_text(self, per_file_text, with_warnings=False,
+                        with_settings=True):
         """The combined description_all for one file, exactly as it is uploaded.
 
         Both the preview column and start_upload() go through here, so the two
@@ -69,7 +71,8 @@ class MWEditorMixin:
         never put them into description_all (the worker's base_text argument was
         assigned and never read), so P170/P6216/P275 were never written.
         """
-        text, warnings = merge_descriptions(self._full_base_text(),
+        text, warnings = merge_descriptions(
+            self._full_base_text(with_settings),
                                             per_file_text or '')
         return (text, warnings) if with_warnings else text
 
@@ -81,7 +84,17 @@ class MWEditorMixin:
             return
         desc_item = self.table.item(row, self.COL_DESC)
         per_file = desc_item.text() if desc_item else ''
-        text = self._effective_text(per_file)
+        # 0.18.32 (Harald): what stands under "Author and license" (creator,
+        # copyright, licence) is the same for every file and is added at
+        # upload; it does not belong in the per-file preview.
+        text = self._effective_text(per_file, with_settings=False)
+        # 0.18.32: "Other templates" are added by the upload worker, outside
+        # description_all - they showed in the upload but not here. Appended
+        # so the column shows what the page will carry.
+        ot = getattr(self, 'other_templates_edit', None)
+        extra = ot.text().strip() if ot is not None else ''
+        if extra:
+            text = (text.rstrip() + '\n' + extra) if text.strip() else extra
         if eff.text() == text:
             return  # unchanged: skip setText and the row-height relayout
         eff.setText(text)
@@ -111,12 +124,39 @@ class MWEditorMixin:
         for row in rows:
             self.table.removeRow(row)
         self._update_upload_btn()   # the row count changed
+        if hasattr(self, '_cull_refresh_table_badges'):
+            self._cull_refresh_table_badges()
 
 
 
     def clear_all(self):
         self.table.setRowCount(0)
         self._update_upload_btn()   # the row count changed
+        if hasattr(self, '_cull_refresh_table_badges'):
+            self._cull_refresh_table_badges()
+
+    def _clear_list_clicked(self):
+        """The toolbar button "Clear list" (0.18.32, Harald): empties the
+        upload table - e.g. the files sent over from culling. Files on disk
+        are untouched. Asks first only when a file carries a description of
+        its own, because that text would be lost."""
+        n = self.table.rowCount()
+        if not n:
+            return
+        typed = any((self.table.item(r, self.COL_DESC) is not None
+                     and self.table.item(r, self.COL_DESC).text().strip())
+                    for r in range(n))
+        if typed and QMessageBox.question(
+                self, tr('Clear list'),
+                tr('Remove all {n} file(s) from the list? Their own '
+                   'descriptions are lost; the files on disk are not '
+                   'touched.').format(n=n),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.clear_all()
+        self.status_bar.showMessage(
+            tr('The list was cleared.'), 5000)
 
 
     def _selected_rows_all(self):

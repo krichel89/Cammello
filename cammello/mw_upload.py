@@ -319,6 +319,7 @@ class MWUploadMixin:
                 'permission': self.permission_edit.text(),
                 'license_text': self.license_edit.text(),
                 'other_templates': self.other_templates_edit.text(),
+                'photographer_category': self.photographer_cat_edit.text(),
                 'other_fields': self.other_fields_edit.text(),
                 'template': 'Information',
             })

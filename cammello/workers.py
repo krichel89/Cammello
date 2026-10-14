@@ -253,6 +253,19 @@ class UploadWorker(QThread):
                             (other_templates.rstrip() + '\n' + joined).strip()
                             if other_templates.strip() else joined)
 
+                # 0.18.32: the photographer's own category (optional, one
+                # per batch). Not for the music workflow, which has its own
+                # category scheme.
+                if not row.get('music'):
+                    pcat = normalize_category_name(
+                        re.sub(r'[\[\]{}|<>#]', '',
+                               row.get('photographer_category', '') or ''))
+                    if pcat:
+                        pline = f'[[Category:{pcat}]]'
+                        if pline not in cats_seen:
+                            cats.append(pline)
+                            cats_seen.add(pline)
+
                 # Always add the tracking category (deduplicated).
                 if TRACKING_CATEGORY_WIKITEXT not in cats_seen:
                     cats.append(TRACKING_CATEGORY_WIKITEXT)

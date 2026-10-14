@@ -4,6 +4,52 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.32 - 2026-10-14
+
+### Added
+- Optional field "Photographer's category" under Author (Author and license
+  group, mirrored in Settings): the name of the photographer's Commons
+  category, e.g. "Photographs by Harald Krichel". It is added to every file
+  of the upload as one `[[Category:…]]` line (deduplicated; brackets,
+  braces, pipes and a `Category:` prefix are stripped). Empty = nothing is
+  added. Not used by the music workflow. Saved with the settings and the
+  settings file; a workflow can hide or prefill it as `photographer_category`.
+- "Clear list" button in the MediaWiki toolbar (next to Rename): empties the
+  table, e.g. what culling sent over. Files on disk are untouched; it asks
+  only when a file has a description of its own.
+- The floating edit panel in the culling view can be hidden: a cross in the
+  panel, and a pencil in the culling toolbar brings it back. The choice is
+  remembered. The keys C, W and +/- keep working while it is hidden.
+
+### Changed
+- Rename and F2 in the MediaWiki file table now rename the source files ON
+  DISK as well (they only set the Commons target name before). A RAW+JPEG
+  partner and the .xmp sidecar with the same name go along. All or nothing:
+  an existing target name, a name Windows cannot hold, or two files with
+  the same new name stop the whole rename with a message and change
+  nothing. Names freed by the batch itself (shifting a numbered series) are
+  handled through temporary names. The table, the open culling strip and
+  the stored edits/channel marks follow the new paths.
+- The Wikitext column of the file table no longer shows what stands under
+  "Author and license" (creator, copyright, licence lines): it is the same
+  for every file and is still added at upload.
+
+### Fixed
+- "Other templates" were uploaded but missing from the Wikitext column of
+  the file table. The column now shows them (appended), and follows the
+  field while typing. The uploaded text is unchanged.
+- "Suggest captions" under the selected file(s) did nothing and said
+  "Nothing to fill" when the BASE description already had a caption. It now
+  looks only at the file's own fields, so a base caption no longer blocks
+  it (categories still skip what the base already has).
+- Removing files from the table (Delete, Clear list) now also removes the
+  [T] mark of those pictures in the culling strip.
+- Login with a saved OAuth token that Wikimedia rejects ("HTTP 401 ... Jwt
+  is expired") and that cannot be renewed: the dead token pair is now
+  forgotten and the authorization window opens, instead of a raw error that
+  returned on every further Login. A fresh token that fails again still
+  shows its error (no dialog loop).
+
 ## 0.18.31 - 2026-10-13
 
 ### Fixed

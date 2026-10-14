@@ -35,10 +35,12 @@ from .wikidata import (fetch_caption_entities, category_suggestions,
 from .constants import APP_NAME, _caption_extra_langs
 from .widgets import *
 from .widgets import (stored_oauth2_tokens, store_oauth2_tokens,
+                      clear_stored_oauth2,
                       NamesFromDescriptionDialog, GenerateCaptionsDialog)
 from .editors import *
 from .i18n import current_language
 from . import sdc
+from . import culling
 from . import captions as captions_mod
 from . import mw_oauth2
 from . import channels
@@ -186,6 +188,9 @@ class MWFilesMixin:
                             bearer_token=None, bearer_refresher=None):
         self.login_btn.setEnabled(False)
         self._set_login_state('busy')
+        # Remembered for _on_login_failure: a dead stored token is answered
+        # with a new authorization, not with a raw HTTP error.
+        self._login_used_bearer = bool(bearer_token)
 
         self._login_worker = LoginWorker(
             api_url, username, password, self._get_timeout(), self.logger,
@@ -198,6 +203,7 @@ class MWFilesMixin:
 
     def _on_login_success(self, api, username):
         self.api = api
+        self._login_retrying = False
         self.login_btn.setEnabled(True)
         self.test_btn.setEnabled(True)
         self._set_login_state('in', username)
@@ -211,6 +217,27 @@ class MWFilesMixin:
     def _on_login_failure(self, error_msg):
         self.login_btn.setEnabled(True)
         self._set_login_state('out')
+        # 0.18.32: the stored OAuth token was rejected (HTTP 401, e.g. "Jwt
+        # is expired") and could not be renewed - the refresh token is dead
+        # too (revoked, or unused for too long). Showing the raw error left
+        # the user stuck, because every further Login pressed the same dead
+        # token again. Forget the pair and open the authorization window.
+        if (getattr(self, '_login_used_bearer', False)
+                and not getattr(self, '_login_retrying', False)
+                and ('401' in error_msg or 'expired' in error_msg.lower())):
+            self.logger.warning('Stored OAuth token rejected and not '
+                                'renewable (%s) - asking for a new '
+                                'authorization.', error_msg[:200])
+            clear_stored_oauth2()
+            self._login_used_bearer = False
+            self.status_bar.showMessage(
+                tr('The saved sign-in has expired - please authorize '
+                   'again.'), 8000)
+            # Stays set until a login succeeds: a FRESH token that is
+            # rejected too must show its error, not loop the dialog.
+            self._login_retrying = True
+            self.open_signin_dialog(force=True)
+            return
         QMessageBox.critical(self, 'Login error', error_msg)
 
     def test_connection(self):
@@ -884,11 +911,18 @@ class MWFilesMixin:
             except Exception:                    # pragma: no cover
                 effective = per_file
             eff_fields, eff_cats = sdc.decompose_fields(effective)
+            # 0.18.32 (Harald): "suggest captions did nothing because
+            # something was already there" - it was the BASE description's
+            # caption. The button fills the SELECTED FILE's own fields, so
+            # only what stands in this file counts as already there (a file
+            # caption overrides the base one anyway). Categories still look
+            # at the merged text: one the base has must not be added twice.
+            own_fields = sdc.decompose_fields(per_file)[0] or {}
             have_caps = {k[len('caption_'):]: v
-                         for k, v in (eff_fields or {}).items()
+                         for k, v in own_fields.items()
                          if k.startswith('caption_')}
             have_infos = {k[len('info:'):]: v
-                          for k, v in (eff_fields or {}).items()
+                          for k, v in own_fields.items()
                           if k.startswith('info:')}
             caps = captions_mod.all_captions(
                 m['depicts'], m['event'], entities, table, langs)
@@ -995,8 +1029,9 @@ class MWFilesMixin:
 
         Opens the rename dialog whose scheme names every selected row
         with a running number, or with the camera's own number via {c}.
-        Only the target Commons name changes - the source files on disk are
-        never touched."""
+        0.18.32 (Harald): the name is applied ON DISK as well - the source
+        file (with its RAW/JPEG partner and sidecar) gets the new name, and
+        so does the Commons target name."""
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         if not rows and self.table.currentRow() >= 0:
             rows = [self.table.currentRow()]
@@ -1024,11 +1059,99 @@ class MWFilesMixin:
                                caption_rows=self._caption_rows(rows))
         if dlg.exec() != QDialog.Accepted:
             return
-        for row, base in zip(rows, dlg.names()):
+        names = list(dlg.names())
+        # Disk first: if a file cannot be renamed, nothing changes at all -
+        # table and disk must not drift apart.
+        entries = []
+        for row, base in zip(rows, names):
+            path = self._row_path(row)
+            if path:
+                entries.append((path, base))
+        plan, problems = culling.plan_disk_renames(entries)
+        if problems:
+            self._warn_rename_problems(problems)
+            return
+        moved = {}
+        if plan:
+            try:
+                culling.execute_disk_renames(plan)
+            except OSError as exc:
+                self.logger.error('Rename on disk failed: %s', exc)
+                QMessageBox.warning(self, tr('Rename file'),
+                                    tr('Renaming failed: {error}').format(
+                                        error=str(exc)))
+                return
+            moved = dict(plan)
+            self._after_disk_rename(moved)
+        for row, base in zip(rows, names):
             item = self.table.item(row, self.COL_TITLE)
             if item:
                 item.setText(base + self._ext_for_row(row))
-        self.logger.info('Bulk-renamed %d target filenames.', len(rows))
+        self.logger.info('Bulk-renamed %d file(s): %d file(s) on disk, '
+                         'target names set.', len(rows), len(moved))
+
+    def _warn_rename_problems(self, problems):
+        texts = {
+            'chars': tr('That name contains characters a file name cannot '
+                        'hold.'),
+            'reserved': tr('That name is reserved on Windows or ends with '
+                           'a dot or space.'),
+            'trailing': tr('That name is reserved on Windows or ends with '
+                           'a dot or space.'),
+            'empty': tr('The new name is empty.'),
+            'clash': tr('A file called "{name}" already exists.'),
+            'twice': tr('Two files would get the name "{name}".'),
+        }
+        lines = []
+        for code, name in problems[:8]:
+            lines.append(texts.get(code, code).replace('{name}', name)
+                         + ('' if '{name}' in texts.get(code, '')
+                            else f'  ({name})'))
+        if len(problems) > 8:
+            lines.append('…')
+        QMessageBox.warning(
+            self, tr('Rename file'),
+            '\n'.join(lines) + '\n\n' + tr('Nothing was renamed.'))
+
+    def _after_disk_rename(self, moved):
+        """Bring everything that remembers a path up to date: the table
+        rows, the culling items and the records keyed by path."""
+        norm = {os.path.normcase(o): n for o, n in moved.items()}
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, self.COL_FILENAME)
+            old = item.data(Qt.UserRole) if item else None
+            new = norm.get(os.path.normcase(old)) if old else None
+            if new:
+                item.setData(Qt.UserRole, new)
+                item.setText(os.path.basename(new))
+        if not hasattr(self, '_cull_items'):
+            return
+        for old, new in moved.items():
+            self._cull_migrate_paths(old, new)
+        current = None
+        for ci in self._cull_items:
+            before = ci.display_path
+            changed = False
+            if ci.raw_path and os.path.normcase(ci.raw_path) in norm:
+                ci.raw_path = norm[os.path.normcase(ci.raw_path)]
+                changed = True
+            if ci.jpg_path and os.path.normcase(ci.jpg_path) in norm:
+                ci.jpg_path = norm[os.path.normcase(ci.jpg_path)]
+                changed = True
+            if not changed:
+                continue
+            ci.stem = os.path.splitext(os.path.basename(ci.display_path))[0]
+            row = self._cull_row_by_item.get(id(ci))
+            self._cull_row_by_path.pop(before, None)
+            if row is not None:
+                self._cull_row_by_path[ci.display_path] = row
+                if 0 <= row < self.cull_strip.count():
+                    self._cull_decorate_row(row)
+            if ci is self._cull_current_item():
+                current = ci
+        if current is not None:
+            # the preview cache is keyed by path: load it under the new name
+            self._cull_show_index(self._cull_index)
 
     def _make_thumbnail(self, filepath, w=THUMB_SRC_W, h=THUMB_SRC_H):
         """Create a downscaled preview efficiently (without full resolution).
