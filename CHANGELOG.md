@@ -4,6 +4,40 @@ All notable changes to Cammello are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.33 - 2026-10-15
+
+### Added
+- Workflows: new section `[workflow.statements]` adds fixed structured-data
+  claims to every file uploaded with that workflow, e.g. `P1435 = "Q123"`
+  (Q-IDs, several separated by ";" give one claim each) or
+  `P856 = "https://example.org"` (any other text is ONE string value). A
+  property the dialog's own fields or the EXIF settings already produce is not
+  written a second time (the field wins). The value is not checked against the
+  property's datatype; Wikibase rejects a wrong one. The load-file confirmation
+  lists every statement in full. Item and string values only; dates,
+  quantities and coordinates are not supported here.
+- Annotations in the culling view, made for screenshots in tutorials: the key
+  A (or "Annotate" in the edit panel) draws arrows, ellipses, rectangles and
+  translucent highlights on the current picture. Drag on the picture; 1-4
+  pick the tool, R/Y/G/B/W the colour (red, yellow, green, blue, white; the
+  panel has buttons for both), Shift gives a circle, a square or an arrow in
+  45-degree steps. Backspace removes the last one, Shift+A all of them, Ctrl+Z
+  steps back; Enter, Esc or A ends the mode. Like a crop they are not burnt
+  into the file: they are kept with the picture's edits and drawn into the
+  copy that leaves Cammello (upload, folder export), after crop and tone, so
+  a white balance never tints them. Line thickness is adjustable ([ and ] or
+  the slider in the panel, 0.1-10 % of the long edge); every note keeps the
+  thickness it was drawn with, so changing the pen only affects new ones.
+  Five neon colours (yellow, green, pink, orange, blue) join the palette: N
+  steps through them (Shift+N back), the panel has a swatch for each. At
+  most 200 per picture. The edit badge shows in the strip and "Reset all"
+  removes them.
+- PNG pictures in the culling view (scan, grid, loupe, edits, export). An
+  edited PNG stays a PNG, with its transparency and colour profile (a folder
+  export is named `<name>_edit.png`); RAW and JPEG still render to JPEG. A
+  rating on a PNG goes into an `.xmp` sidecar next to it - a PNG itself is
+  never modified. EXIF data of a PNG is not carried into the rendered copy.
+
 ## 0.18.32 - 2026-10-14
 
 ### Added

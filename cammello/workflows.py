@@ -65,7 +65,7 @@ def by_key(key):
     # Only reachable if the file yielded nothing at all, which load()
     # already guards against - but a caller must never get None.
     return {'key': DEFAULT_KEY, 'label': DEFAULT_KEY, 'hide': [],
-            'show': [], 'preset': {}, 'example': {}}
+            'show': [], 'preset': {}, 'example': {}, 'statements': {}}
 
 
 def label_of(key):
@@ -73,6 +73,11 @@ def label_of(key):
     is also the tr() key; a workflow the user invented is shown as he
     wrote it, because there is nothing to translate it to."""
     return by_key(key)['label']
+
+
+def statements(key):
+    """The workflow's [workflow.statements] as {"P123": text} (0.18.33)."""
+    return dict(by_key(key).get('statements') or {})
 
 
 def shown_fields(key):

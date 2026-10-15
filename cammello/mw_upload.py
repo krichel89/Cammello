@@ -396,7 +396,9 @@ class MWUploadMixin:
                                    capture_sdc=self.settings.value(
                                        'exif_capture_sdc', True, type=bool),
                                    edits_store=getattr(self, '_cull_edits',
-                                                       None))
+                                                       None),
+                                   statements=workflows.statements(
+                                       self.current_workflow()))
         self.worker.progress.connect(self.on_progress)
         self.worker.error.connect(self.on_error)
         self.worker.finished.connect(self.on_finished)

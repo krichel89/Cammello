@@ -67,9 +67,10 @@ check('buildings offers the camera location',
 # 'show' joined in 0.18.0: the fields a workflow switches ON, needed
 # because felder_aus alone could not carry fields that are off by default.
 # 'set' joined in 0.18.29: the fields an event workflow REPLACES on a pick.
+# 'statements' joined in 0.18.33: fixed SDC claims.
 check('every entry carries the full set of fields',
       all(set(wf) == {'key', 'label', 'hide', 'show', 'preset', 'example',
-                      'set'}
+                      'set', 'statements'}
           for wf in workflows.all_workflows()),
       str([sorted(wf) for wf in workflows.all_workflows()][:1]))
 check('the keys are unique',

@@ -990,6 +990,35 @@ _BASE_ONLY_KEYS = ['gallery_suffix']
 _MERGE_KEYS = ['depicts']
 
 
+STATEMENT_PROPERTY_RE = re.compile(r'^P[1-9]\d{0,9}$')
+_STATEMENT_QID_RE = re.compile(r'^Q[1-9]\d{0,12}$')
+
+
+def statement_claims(statements, taken=()):
+    """(property, value) claims for a workflow's [workflow.statements] (0.18.33).
+
+    `statements` maps "P123" to text. Text that is only Q-IDs separated by
+    ";" gives one item claim per QID; anything else is ONE string claim
+    (a URL or an identifier may well contain ";"). A property in `taken` is
+    skipped: what the dialog's own fields already produce has priority, and a
+    statement is never written twice. Nothing here is validated against the
+    property's datatype - Wikibase does that and answers with an error.
+    """
+    out = []
+    for prop, text in (statements or {}).items():
+        if not isinstance(prop, str) or not STATEMENT_PROPERTY_RE.match(prop):
+            continue
+        if prop in taken or not isinstance(text, str) or not text.strip():
+            continue
+        parts = [p.strip() for p in text.split(';') if p.strip()]
+        if parts and all(_STATEMENT_QID_RE.match(p) for p in parts):
+            for qid in dict.fromkeys(parts):
+                out.append((prop, qid))
+        else:
+            out.append((prop, ('string', text.strip())))
+    return out
+
+
 def _split_qids(value):
     """Split a multi-value field. ';' is the separator, ',' is tolerated."""
     return [p.strip() for p in re.split(r'[;,]', value or '') if p.strip()]

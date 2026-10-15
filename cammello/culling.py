@@ -210,7 +210,8 @@ def group_paths(item, scope=SCOPE_GROUP):
     if scope == SCOPE_RAW:
         candidates = ((raw, getattr(item, 'sidecar_path', None)) if raw
                       else (getattr(item, 'display_path', None),
-                            getattr(item, 'jpg_path', None)))
+                            getattr(item, 'jpg_path', None),
+                            getattr(item, 'sidecar_path', None)))
     else:
         candidates = (raw,
                       getattr(item, 'jpg_path', None),
@@ -266,7 +267,7 @@ def companion_paths(path):
         names = os.listdir(folder or '.')
     except OSError:
         return found
-    ok = RAW_EXTENSIONS | JPEG_EXTENSIONS | {'.xmp'}
+    ok = RAW_EXTENSIONS | PICTURE_EXTENSIONS | {'.xmp'}
     for other in sorted(names):
         base, ext = os.path.splitext(other)
         full = os.path.join(folder, other)
@@ -458,6 +459,12 @@ def _write_xmp_jpeg(path, rating, label):
 RAW_EXTENSIONS = {'.cr3', '.cr2', '.crw', '.nef', '.nrw', '.arw', '.raf',
                   '.orf', '.rw2', '.dng', '.pef', '.srw', '.x3f'}
 JPEG_EXTENSIONS = {'.jpg', '.jpeg'}
+# 0.18.33: a PNG is a picture the culling view can show and annotate (a
+# screenshot for a tutorial). It takes the JPEG's place in an entry
+# (jpg_path), but is NOT a JPEG: no embedded XMP is written into it - its
+# rating goes to an .xmp sidecar, like a RAW's.
+PNG_EXTENSIONS = {'.png'}
+PICTURE_EXTENSIONS = JPEG_EXTENSIONS | PNG_EXTENSIONS
 
 # ── Shooting sessions ────────────────────────────────────────────────────────
 #
@@ -598,9 +605,14 @@ class CullItem:
 
     @property
     def sidecar_path(self):
-        if not self.raw_path:
-            return None
-        return os.path.splitext(self.raw_path)[0] + '.xmp'
+        if self.raw_path:
+            return os.path.splitext(self.raw_path)[0] + '.xmp'
+        # A PNG-only entry (0.18.33): nothing can be written INTO a PNG
+        # safely, so its rating lives in a sidecar next to it.
+        if self.jpg_path and (os.path.splitext(self.jpg_path)[1].lower()
+                              in PNG_EXTENSIONS):
+            return os.path.splitext(self.jpg_path)[0] + '.xmp'
+        return None
 
     @property
     def label_color_index(self):
@@ -725,7 +737,7 @@ def scan_folder(folder, report=None, recursive=False, order=ORDER_NAME):
             stem, ext = os.path.splitext(name)
             ext = ext.lower()
             by_ext[ext] = by_ext.get(ext, 0) + 1
-            if ext not in RAW_EXTENSIONS and ext not in JPEG_EXTENSIONS:
+            if ext not in RAW_EXTENSIONS and ext not in PICTURE_EXTENSIONS:
                 continue
             accepted += 1
             key = (root.casefold(), stem.casefold())
@@ -797,7 +809,7 @@ def rating_label_for_path(path):
     sidecar = stem + '.xmp'
     if os.path.exists(sidecar):
         sources.append(sidecar)
-    if ext.lower() in JPEG_EXTENSIONS:
+    if ext.lower() in PICTURE_EXTENSIONS:
         sources.append(path)
     for src in sources:
         rating, label = _read_rating_label_text(src)
@@ -873,7 +885,8 @@ def write_item_metadata(item):
     if sc:
         _write_xmp_sidecar(sc, item.rating, item.label)
         written.append(sc)
-    if item.jpg_path:
+    if (item.jpg_path and os.path.splitext(item.jpg_path)[1].lower()
+            in JPEG_EXTENSIONS):
         # Embedded XMP in the JPEG - also pure Python (0.12.6). exiv2 is no
         # longer involved anywhere in the culling write path, so a
         # JPEG-only picture (which has NO sidecar) keeps its rating too.

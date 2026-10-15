@@ -41,7 +41,7 @@ from .constants import (current_input_style, camera_dest_dir,
                         remember_camera_dest, transfer_dest_dir,
                         remember_transfer_dest)
 from . import culling
-from . import channels, previews, edits, camera
+from . import channels, previews, edits, camera, annotations
 from .edit_panel import EditPanel
 from .culling_view import CullImageView
 from .widgets import (UploadProgressDialog, toolbar_separator,
@@ -1391,9 +1391,37 @@ class MWCullingMixin:
         self._cull_tone_timer.timeout.connect(self._cull_flush_tone)
         self._cull_tone_pending = None
         self._cull_cropping = False
+        # 0.18.33: annotation mode (arrows, outlines, highlights). Tool and
+        # colour are remembered between sessions; a stored value that is no
+        # longer valid falls back to the default.
+        self._cull_noting = False
+        tool = self.settings.value('cull_note_tool', annotations.DEFAULT_TOOL)
+        self._cull_note_tool = (tool if tool in annotations.TOOLS
+                                else annotations.DEFAULT_TOOL)
+        colour = self.settings.value('cull_note_color',
+                                     annotations.DEFAULT_COLOR)
+        self._cull_note_color = (colour if colour in annotations.COLORS
+                                 else annotations.DEFAULT_COLOR)
         self.cull_edit_panel = EditPanel(self.cull_view)
         self.cull_view.edit_panel = self.cull_edit_panel
         self.cull_edit_panel.crop_requested.connect(self._cull_toggle_crop)
+        self.cull_edit_panel.notes_requested.connect(self._cull_toggle_notes)
+        self.cull_edit_panel.note_tool_requested.connect(
+            self._cull_set_note_tool)
+        self.cull_edit_panel.note_color_requested.connect(
+            self._cull_set_note_color)
+        self.cull_edit_panel.note_width_requested.connect(
+            self._cull_set_note_width)
+        try:
+            step = int(self.settings.value(
+                'cull_note_width', annotations.DEFAULT_WIDTH_STEP))
+        except (TypeError, ValueError):
+            step = annotations.DEFAULT_WIDTH_STEP
+        self._cull_note_width = max(0, min(annotations.WIDTH_STEPS, step))
+        self.cull_edit_panel.set_note_width(self._cull_note_width)
+        self.cull_view.note_draw.set_width(
+            annotations.width_for_step(self._cull_note_width))
+        self.cull_view.note_draw.drawn.connect(self._cull_note_drawn)
         self.cull_edit_panel.pipette_toggled.connect(self._cull_set_pipette)
         self.cull_edit_panel.ev_step_requested.connect(self._cull_step_ev)
         self.cull_edit_panel.reset_requested.connect(self._cull_reset_edits)
@@ -2112,6 +2140,8 @@ class MWCullingMixin:
     def _cull_show_index(self, idx):
         if not (0 <= idx < len(self._cull_visible)):
             return
+        if getattr(self, '_cull_noting', False):
+            self._cull_end_notes()      # while the old picture is current
         if idx != self._cull_index:
             self._cull_direction = 1 if idx >= self._cull_index else -1
         prev = self._cull_delegate.current_row
@@ -2145,6 +2175,8 @@ class MWCullingMixin:
         # 0.14: show the picture the way the crop leaves it. The full frame
         # comes back the moment crop mode is entered, so the box can be
         # dragged further.
+        self.cull_view.set_notes(edits.get_notes(self._cull_edits, path),
+                                 rebuild=False)
         self.cull_view.set_crop_display(self._cull_crop_for(path))
         # 0.14.2: white balance and exposure are set BEFORE the pixels
         # arrive, so the corrected version is what appears - no flash of
@@ -2432,8 +2464,14 @@ class MWCullingMixin:
         if getattr(self, '_cull_cropping', False):
             if self._cull_crop_key(key, event):
                 return
+        if getattr(self, '_cull_noting', False):
+            if self._cull_note_key(key, event):
+                return
         if key == Qt.Key_C and not (event.modifiers() & Qt.ControlModifier):
             self._cull_toggle_crop()
+            return
+        if key == Qt.Key_A and not (event.modifiers() & Qt.ControlModifier):
+            self._cull_toggle_notes()
             return
         if key == Qt.Key_F2:
             self._cull_rename_current()
@@ -2616,6 +2654,8 @@ class MWCullingMixin:
             # is put away before the panel goes.
             if getattr(self, '_cull_cropping', False):
                 self._cull_crop_cancel()
+            if getattr(self, '_cull_noting', False):
+                self._cull_end_notes()
             if self.cull_view.pipette_active():
                 self.cull_view.set_pipette(False)
                 self.cull_edit_panel.set_pipette_checked(False)
@@ -2846,7 +2886,7 @@ class MWCullingMixin:
 
         # Every file that belongs to this picture, with its extension.
         parts = [p for p in (item.raw_path, item.jpg_path) if p]
-        sidecar = item.sidecar_path if item.raw_path else None
+        sidecar = item.sidecar_path
         if sidecar and os.path.exists(sidecar):
             parts.append(sidecar)
         planned = []
@@ -2939,6 +2979,8 @@ class MWCullingMixin:
         if on and self._cull_edits_locked():
             self._cull_say_locked()
             return
+        if on and getattr(self, '_cull_noting', False):
+            self._cull_end_notes()      # the drawing layer would eat the click
         self.cull_view.set_pipette(on)
         self.cull_edit_panel.set_pipette_checked(on)
         if on:
@@ -3127,8 +3169,9 @@ class MWCullingMixin:
         item = self._cull_current_item()
         if item is not None:
             rec = edits.get_edit(self._cull_edits, item.display_path)
+            self.cull_view.set_notes((rec or {}).get('notes') or [])
             self.cull_view.set_crop_display(
-                (rec or {}).get('crop'))
+                None if self._cull_noting else (rec or {}).get('crop'))
             self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
         self._cull_apply_tone(immediate=True)
@@ -3147,6 +3190,7 @@ class MWCullingMixin:
             self._cull_save_edits_soon()
             self.logger.info('All edits removed for %s',
                              os.path.basename(item.display_path))
+        self.cull_view.set_notes([])
         self.cull_view.set_crop_display(None)
         self._cull_refresh_edit_badge(item)
         self._cull_update_edit_panel()
@@ -3204,7 +3248,8 @@ class MWCullingMixin:
             return
         self.cull_edit_panel.show_state(
             edits.get_edit(self._cull_edits, item.display_path),
-            cropping=getattr(self, '_cull_cropping', False))
+            cropping=getattr(self, '_cull_cropping', False),
+            noting=getattr(self, '_cull_noting', False))
         self.cull_edit_panel.show()
         self.cull_edit_panel.place()
 
@@ -3351,6 +3396,226 @@ class MWCullingMixin:
                 tr('Crop: {w}\u00d7{h} px  \u2014  Enter: apply, Esc: cancel, '
                    'Shift+C: remove').format(w=px[0], h=px[1]))
             self.cull_view.show_info_overlay(True)
+
+    # -- annotation mode (0.18.33) ------------------------------------------
+    # Arrows, outlines and highlights drawn into a picture - made for
+    # screenshots in a tutorial. They are stored in the edit record like a
+    # crop (non-destructive, undoable with Ctrl+Z) and rendered into the
+    # pixels only when the file leaves Cammello.
+    _NOTE_TOOL_KEYS = {Qt.Key_1: 'arrow', Qt.Key_2: 'ellipse',
+                       Qt.Key_3: 'rect', Qt.Key_4: 'mark'}
+    _NOTE_COLOR_KEYS = {Qt.Key_R: 'red', Qt.Key_Y: 'yellow',
+                        Qt.Key_G: 'green', Qt.Key_B: 'blue',
+                        Qt.Key_W: 'white'}
+
+    def _cull_toggle_notes(self):
+        """A: start annotating the current picture, or leave the mode."""
+        if self._cull_edits_locked():
+            self._cull_say_locked()
+            return
+        if getattr(self, '_cull_cropping', False):
+            return                      # one tool at a time: finish the crop
+        if self._cull_noting:
+            self._cull_end_notes()
+            return
+        item = self._cull_current_item()
+        if item is None:
+            return
+        if self.cull_view.pipette_active():
+            self._cull_set_pipette(False)
+        self._cull_noting = True
+        # The whole frame, like crop mode: notes are placed on the picture
+        # as it is, and may lie outside the crop.
+        self.cull_view.set_crop_display(None)
+        self.cull_view.note_draw.begin(
+            self._cull_note_tool, self._cull_note_color,
+            annotations.width_for_step(self._cull_note_width))
+        self._cull_set_note_legend(True)
+        self._cull_update_note_readout()
+        self._cull_update_edit_panel()
+
+    def _cull_end_notes(self):
+        if not getattr(self, '_cull_noting', False):
+            return
+        self._cull_noting = False
+        self.cull_view.note_draw.finish()
+        item = self._cull_current_item()
+        if item is not None:
+            self.cull_view.set_crop_display(
+                self._cull_crop_for(item.display_path))
+        self._cull_set_note_legend(False)
+        self._cull_update_info_overlay()
+        self._cull_update_edit_panel()
+
+    def _cull_note_key(self, key, event):
+        """Keys while annotating. Returns True if the key was consumed."""
+        mods = event.modifiers()
+        if mods & Qt.ControlModifier:
+            return False                # Ctrl+Z, Ctrl+A ... stay global
+        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape) or (
+                key == Qt.Key_A and not (mods & Qt.ShiftModifier)):
+            self._cull_end_notes()
+            return True
+        if key == Qt.Key_A:             # Shift+A
+            self._cull_note_clear()
+            return True
+        if key in (Qt.Key_Backspace, Qt.Key_Delete):
+            self._cull_note_remove_last()
+            return True
+        if key in self._NOTE_TOOL_KEYS:
+            self._cull_set_note_tool(self._NOTE_TOOL_KEYS[key])
+            return True
+        if key in self._NOTE_COLOR_KEYS:
+            self._cull_set_note_color(self._NOTE_COLOR_KEYS[key])
+            return True
+        if key == Qt.Key_N:             # through the neon shades
+            self._cull_set_note_color(annotations.next_neon(
+                self._cull_note_color,
+                -1 if mods & Qt.ShiftModifier else 1))
+            return True
+        if key in (Qt.Key_BracketLeft, Qt.Key_BracketRight):
+            self._cull_set_note_width(self._cull_note_width + (
+                1 if key == Qt.Key_BracketRight else -1))
+            return True
+        if key == Qt.Key_C:             # straight on to the crop
+            self._cull_end_notes()
+            self._cull_toggle_crop()
+            return True
+        return False
+
+    def _cull_set_note_tool(self, tool):
+        if tool not in annotations.TOOLS:
+            return
+        self._cull_note_tool = tool
+        self.settings.setValue('cull_note_tool', tool)
+        self.cull_view.note_draw.set_tool(tool)
+        if self._cull_noting:
+            self.cull_edit_panel.set_noting(True, tool, self._cull_note_color)
+            self._cull_update_note_readout()
+
+    def _cull_set_note_color(self, colour):
+        if colour not in annotations.COLORS:
+            return
+        self._cull_note_color = colour
+        self.settings.setValue('cull_note_color', colour)
+        self.cull_view.note_draw.set_colour(colour)
+        if self._cull_noting:
+            self.cull_edit_panel.set_noting(True, self._cull_note_tool, colour)
+            self._cull_update_note_readout()
+
+    def _cull_set_note_width(self, step):
+        """Pen thickness for the NEXT notes (slider or [ ]); drawn notes
+        keep their own."""
+        step = max(0, min(annotations.WIDTH_STEPS, int(step)))
+        self._cull_note_width = step
+        self.settings.setValue('cull_note_width', step)
+        self.cull_edit_panel.set_note_width(step)
+        self.cull_view.note_draw.set_width(annotations.width_for_step(step))
+        if self._cull_noting:
+            self._cull_update_note_readout()
+
+    def _cull_note_drawn(self, note):
+        """The overlay finished one note: store it as ONE undo step."""
+        if not self._cull_noting:
+            return
+        item = self._cull_current_item()
+        if item is None:
+            return
+        path = item.display_path
+        if len(edits.get_notes(self._cull_edits, path)) \
+                >= annotations.MAX_NOTES:
+            self.statusBar().showMessage(
+                tr('This picture has reached the limit of {n} '
+                   'annotations.').format(n=annotations.MAX_NOTES), 5000)
+            return
+        self._cull_remember_edit(path)
+        if edits.add_note(self._cull_edits, path, note):
+            self.logger.info('Annotation (%s, %s) added to %s', note['t'],
+                             note['c'], os.path.basename(path))
+            self._cull_after_notes_changed(item)
+
+    def _cull_note_remove_last(self):
+        item = self._cull_current_item()
+        if item is None:
+            return
+        path = item.display_path
+        if not edits.get_notes(self._cull_edits, path):
+            return
+        self._cull_remember_edit(path)
+        edits.remove_last_note(self._cull_edits, path)
+        self._cull_after_notes_changed(item)
+
+    def _cull_note_clear(self):
+        item = self._cull_current_item()
+        if item is None:
+            return
+        path = item.display_path
+        if not edits.get_notes(self._cull_edits, path):
+            return
+        self._cull_remember_edit(path)
+        edits.set_notes(self._cull_edits, path, [])
+        self.logger.info('Annotations removed from %s',
+                         os.path.basename(path))
+        self._cull_after_notes_changed(item)
+
+    def _cull_after_notes_changed(self, item):
+        self._cull_save_edits_soon()
+        self._cull_refresh_edit_badge(item)
+        self._cull_update_edit_panel()
+        self.cull_view.set_notes(
+            edits.get_notes(self._cull_edits, item.display_path))
+
+    def _cull_note_names(self):
+        tools = {'arrow': tr('arrow'), 'ellipse': tr('ellipse'),
+                 'rect': tr('rectangle'), 'mark': tr('highlight')}
+        colours = {'red': tr('red'), 'yellow': tr('yellow'),
+                   'green': tr('green'), 'blue': tr('blue'),
+                   'white': tr('white'),
+                   'neon_yellow': tr('neon yellow'),
+                   'neon_green': tr('neon green'),
+                   'neon_pink': tr('neon pink'),
+                   'neon_orange': tr('neon orange'),
+                   'neon_blue': tr('neon blue')}
+        return tools[self._cull_note_tool], colours[self._cull_note_color]
+
+    def _cull_update_note_readout(self):
+        """The top-left info overlay says what a drag will draw."""
+        if not self._cull_noting:
+            self._cull_update_info_overlay()
+            return
+        tool, colour = self._cull_note_names()
+        self.cull_view.set_info_overlay(
+            tr('Annotating: {tool} \u00b7 {color}  \u2014  drag on the '
+               'picture, Enter: done').format(tool=tool, color=colour))
+        self.cull_view.show_info_overlay(True)
+
+    def _cull_set_note_legend(self, on):
+        """Like the crop legend: while annotating, the toolbar's mode label
+        lists the annotation keys; leaving restores the normal text."""
+        if hasattr(self, 'cull_edit_panel'):
+            self.cull_edit_panel.set_noting(on, self._cull_note_tool,
+                                            self._cull_note_color)
+        if on:
+            self.cull_mode_lbl.setText(tr(
+                '[annotate] 1 arrow \u00b7 2 ellipse \u00b7 3 rectangle '
+                '\u00b7 4 highlight  \u00b7  R Y G B W color  \u00b7  N neon  '
+                '\u00b7  [ ] thickness  \u00b7  '
+                '\u232b remove last \u00b7 \u21e7A remove all \u00b7 '
+                'Enter done'))
+            self.cull_mode_lbl.setToolTip(tr(
+                'Annotation keys:\n'
+                '  1  arrow    2  ellipse    3  rectangle    4  highlight\n'
+                '  R  red    Y  yellow    G  green    B  blue    W  white\n'
+                '  N  next neon color (Shift+N: previous)    '
+                '[  thinner    ]  thicker\n'
+                'Drag on the picture to draw; hold Shift for a circle, a '
+                'square or an arrow in 45 degree steps.\nBackspace removes '
+                'the last one, Shift+A all of them, Ctrl+Z steps back. '
+                'Enter, Esc or A ends the mode.'))
+        else:
+            self._cull_update_mode_label()
+            self.cull_mode_lbl.setToolTip(tr(
+                'Number keys 1-5 set stars or colors; M toggles the mode.'))
 
     def _cull_refresh_edit_badge(self, item):
         """Update the strip row's badge data and repaint it."""
@@ -3613,7 +3878,8 @@ class MWCullingMixin:
                 continue
             item = self._cull_visible[r]
             sc = item.sidecar_path
-            if (sc and item.raw_path in path_set and os.path.exists(sc)
+            if (sc and (item.raw_path or item.jpg_path) in path_set
+                    and os.path.exists(sc)
                     and sc not in path_set):
                 with_sidecars.append(sc)
         self._cull_copy_dlg = UploadProgressDialog(

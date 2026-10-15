@@ -26,7 +26,8 @@ class UploadWorker(QThread):
     file_started = pyqtSignal(int, str)   # index, target filename
 
     def __init__(self, api, rows, gallery_prefix, ignore_warnings,
-                 journal=None, capture_sdc=False, edits_store=None):
+                 journal=None, capture_sdc=False, edits_store=None,
+                 statements=None):
         super().__init__()
         self.api = api
         self.log = api.log
@@ -35,6 +36,9 @@ class UploadWorker(QThread):
         # transparently at upload. Off by default at the worker level - the
         # GUI passes the setting.
         self.capture_sdc = bool(capture_sdc)
+        # 0.18.33: the picked workflow's [workflow.statements] - fixed SDC
+        # claims for every file of the run (property -> text).
+        self.statements = dict(statements or {})
         # 0.15.0: the long-standing gap - crop, exposure and white balance
         # were applied in the culling export but NOT on upload, so the
         # original went to Commons. The edited copy is rendered here, in
@@ -472,6 +476,18 @@ class UploadWorker(QThread):
                     bare = src.strip('{} ').strip().lower()
                     if bare in OWN_WORK_TEMPLATES:
                         claims.append((SOURCE_PROPERTY, SOURCE_OWN_WORK))
+
+                # 0.18.33: the workflow's own statements. Added last so that a
+                # property the fields or the EXIF settings already produced
+                # wins and nothing is written twice.
+                if self.statements:
+                    extra = statement_claims(
+                        self.statements, taken={p for p, _v in claims})
+                    if extra:
+                        self.log.info('Workflow statements for "%s": %s',
+                                      fname, ', '.join(sorted(
+                                          {p for p, _v in extra})))
+                    claims.extend(extra)
 
                 if labels or claims:
                     self.api.clear_token()

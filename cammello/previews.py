@@ -77,6 +77,9 @@ except Exception as e:
 # RAW extensions that must never be opened with pyexiv2 (exiv2 crashes on some,
 # e.g. .RW2). Kept in sync with culling.RAW_EXTENSIONS; duplicated here to
 # avoid an import cycle (culling imports heavy siblings).
+# Files Qt decodes itself, straight from disk (0.18.33: PNG joins JPEG - a
+# screenshot is shown and annotated like a photo).
+_DIRECT_EXTS = ('.jpg', '.jpeg', '.png')
 _RAW_EXTS = {'.cr3', '.cr2', '.crw', '.nef', '.nrw', '.arw', '.raf',
              '.orf', '.rw2', '.dng', '.pef', '.srw', '.x3f'}
 
@@ -355,7 +358,7 @@ def extract_preview_bytes(path):
     JPEG file -> the file itself. RAW -> embedded preview via rawpy. A bitmap
     thumb (rare) is converted to JPEG via QImage. Raises on failure."""
     ext = os.path.splitext(path)[1].lower()
-    if ext in ('.jpg', '.jpeg'):
+    if ext in _DIRECT_EXTS:
         with open(path, 'rb') as f:
             return f.read()
     if rawpy is None:
@@ -391,7 +394,7 @@ def decode_preview(path, orientation=None, max_edge=None):
     culling._read_rating_label_text.
     """
     ext = os.path.splitext(path)[1].lower()
-    if ext in ('.jpg', '.jpeg'):
+    if ext in _DIRECT_EXTS:
         reader = QImageReader(path)
         buf = None
     else:

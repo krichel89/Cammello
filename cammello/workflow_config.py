@@ -52,11 +52,19 @@ Design decisions:
     0.18.29 and earlier is still read - nothing a user or a recipient has
     on disk stops working.
 
+  * 0.18.33: `[workflow.statements]` adds FIXED structured-data claims to every
+    file uploaded with the workflow: `P1435 = "Q123"` (Q-IDs, several with ";"
+    give several claims) or `P856 = "https://..."` (anything else is one
+    string). The fields of the dialog win over a statement for the same
+    property. Cammello does not check the value against the property's
+    datatype - Wikibase does, and rejects a wrong one.
+
 Qt-free apart from what .constants drags in (QRegExp/QStandardPaths at
 import time, no QApplication needed), so plain logic tests can use it.
 """
 import os
 import tomllib
+from .sdc import STATEMENT_PROPERTY_RE
 
 from .constants import APP_NAME
 
@@ -155,7 +163,7 @@ ENGLISH_NAMES = {
 BLOCK_KEYS = (('key', 'schluessel'), ('name', 'name'),
               ('hide_fields', 'felder_aus'), ('show_fields', 'felder_an'),
               ('prefill', 'vorbelegung'), ('set', 'setzen'),
-              ('example', 'beispiel'))
+              ('example', 'beispiel'), ('statements', 'statements'))
 
 FIELD_NAMES = [name for name, _label, _text, _on in FIELDS]
 TEXT_FIELDS = [name for name, _label, text, _on in FIELDS if text]
@@ -199,6 +207,7 @@ BUILTIN = [
         'show': [],
         'preset': {},
         'set': {},
+        'statements': {},
         'example': {},
     },
     {
@@ -208,6 +217,7 @@ BUILTIN = [
         'show': [],
         'preset': {},
         'set': {},
+        'statements': {},
         'example': {},
     },
     # 0.18.0: audio uploads. This is the only workflow that switches the
@@ -223,6 +233,7 @@ BUILTIN = [
         'show': list(DEFAULT_OFF),
         'preset': {'quelle': ''},
         'set': {},
+        'statements': {},
         'example': {
             'komponist': '[[:en:Felix Mendelssohn|Felix Mendelssohn]]',
             'lizenz_komposition': '{{PD-old-auto-expired}}',
@@ -307,6 +318,9 @@ def template_text(translate=None):
         f'#   [workflow.set]      {tr("REPLACES the field when you pick the workflow, even if filled")}',
         f'#   [workflow.example]  {tr("grey hint only, never uploaded")}',
         '#',
+        f'# {tr("And one more for structured data (SDC):")}',
+        f'#   [workflow.statements]  {tr("fixed claims for EVERY file of the workflow, e.g. P1435 = Q123 in quotes (several items: Q1; Q2); other text becomes one string value. A field in the dialog wins over a statement for the same property.")}',
+        '#',
         f'# {tr("Files written before version 0.18.30 use German names (schluessel, felder_aus, vorbelegung, ...); they are still read.")}',
         '#',
         f'# {tr("Available field names:")}',
@@ -346,6 +360,9 @@ def template_text(translate=None):
             '  # categories = "Event 2026; Another category"',
             '  # created_during = "Q12345678"',
             '',
+            '  # [workflow.statements]',
+            '  # P1435 = "Q12345678"',
+            '',
             '  # [workflow.example]',
             '  # author = "[[User:Seewolf|Harald Krichel]]"',
             '',
@@ -380,6 +397,8 @@ def render_block(wf):
         lines.append(f'set.{external_name(name)} = {_quote(value)}')
     for name, value in wf.get('example', {}).items():
         lines.append(f'example.{external_name(name)} = {_quote(value)}')
+    for prop, value in wf.get('statements', {}).items():
+        lines.append(f'statements.{prop} = {_quote(value)}')
     return '\n'.join(lines) + '\n'
 
 
@@ -475,6 +494,33 @@ def _clean_map(raw, where, warnings):
     return out
 
 
+def _clean_statements(raw, where, warnings):
+    """A {"P123": text} section. Lists of values are joined with ";"."""
+    out = {}
+    if raw is None:
+        return out
+    if not isinstance(raw, dict):
+        warnings.append(f'{where}: expected a section, got {type(raw).__name__}')
+        return out
+    for given, value in raw.items():
+        prop = given.strip().upper() if isinstance(given, str) else ''
+        if not STATEMENT_PROPERTY_RE.match(prop):
+            warnings.append(f'{where}: {given} ignored (not a property like P123)')
+            continue
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            value = '; '.join(v.strip() for v in value if v.strip())
+        if not isinstance(value, str):
+            warnings.append(f'{where}: {given} ignored (not text)')
+            continue
+        value = value.strip()
+        if not value or any(ord(c) < 32 for c in value):
+            warnings.append(f'{where}: {given} ignored (empty or contains '
+                            f'control characters)')
+            continue
+        out[prop] = value
+    return out
+
+
 def _field_list(raw, option, where, warnings):
     """A list of field names (either spelling) -> internal names."""
     if raw is None:
@@ -535,6 +581,8 @@ def _parse(data, warnings):
                               f'{where} set', warnings),
             'example': _clean_map(_pick(raw, 'example', 'beispiel'),
                                   f'{where} example', warnings),
+            'statements': _clean_statements(raw.get('statements'),
+                                            f'{where} statements', warnings),
         })
     if not out:
         raise ValueError('no usable workflow in the file')
@@ -565,7 +613,8 @@ def load(translate=None):
     if entries is None:
         entries = [dict(w, hide=list(w['hide']), show=list(w.get('show', [])),
                         preset=dict(w['preset']), example=dict(w['example']),
-                        set=dict(w.get('set', {})))
+                        set=dict(w.get('set', {})),
+                        statements=dict(w.get('statements', {})))
                    for w in BUILTIN]
     _load_extras(entries, warnings)
     LAST_WARNINGS = warnings
@@ -757,12 +806,15 @@ def preview_text(entries, translate=None):
                 mark = '  ⚠' if name in SENSITIVE_FIELDS else ''
                 lines.append(f'    {heading}: {shown(name)} = '
                              f'{value(text) or "(empty)"}{mark}')
+        for prop, text in wf.get('statements', {}).items():
+            lines.append(f'    {tr("adds statement")}: {prop} = '
+                         f'{value(text)}  ⚠')
         for heading, names in ((tr('hides'), wf.get('hide', [])),
                                (tr('shows'), wf.get('show', []))):
             if names:
                 lines.append(f'    {heading}: '
                              + ', '.join(shown(n) for n in names))
-        if not (wf.get('set') or wf.get('preset')
+        if not (wf.get('set') or wf.get('preset') or wf.get('statements')
                 or wf.get('hide') or wf.get('show')):
             lines.append(f'    {tr("sets no field")}')
     return '\n'.join(lines)

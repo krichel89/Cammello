@@ -4,10 +4,10 @@ keyboard handling and data logic live in mw_culling.py.
 """
 from PyQt5.QtWidgets import (QGraphicsView, QGraphicsScene,
                              QGraphicsPixmapItem, QLabel)
-from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QBrush
-from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QRect, QPoint
+from PyQt5.QtGui import (QPixmap, QPainter, QColor, QPen, QBrush, QPolygonF)
+from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QRect, QPoint, QPointF
 
-from . import previews
+from . import annotations, previews
 from .constants import cull_bg
 from .edit_panel import pipette_cursor
 
@@ -303,6 +303,169 @@ class CropOverlay(QLabel):
             self._apply_aspect_keep_origin()
 
 
+def paint_notes(p, notes, frame_w, frame_h):
+    """Paint annotations with `p`, whose origin is the top-left of the frame
+    they refer to; (frame_w, frame_h) is that frame's size in painter units
+    (0.18.33).
+
+    The geometry (line width, arrow head, outline inset) comes from
+    annotations.py, the same helpers the pixel renderer uses, so the view
+    and the exported copy agree. Used to bake the notes into the displayed
+    pixmap and to draw the stroke in progress."""
+    if not notes or frame_w <= 0 or frame_h <= 0:
+        return
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing, True)
+    long_edge = max(frame_w, frame_h)
+    for note in notes:
+        stroke = annotations.stroke_px(long_edge, note.get('w'))
+        x1, y1, x2, y2 = note['p']
+        x1, x2 = x1 * frame_w, x2 * frame_w
+        y1, y2 = y1 * frame_h, y2 * frame_h
+        r, g, b = annotations.COLORS[note['c']]
+        kind = note['t']
+        if kind == 'arrow':
+            parts = annotations.arrow_parts(x1, y1, x2, y2, stroke)
+            if parts is None:
+                continue
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(r, g, b))
+            for poly in parts:
+                p.drawPolygon(QPolygonF([QPointF(px, py) for px, py in poly]))
+        elif kind == 'mark':
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(r, g, b,
+                              int(round(255 * annotations.MARK_OPACITY))))
+            p.drawRect(QRectF(x1, y1, x2 - x1, y2 - y1))
+        else:
+            sb = annotations.box_stroke(stroke, x2 - x1, y2 - y1)
+            pen = QPen(QColor(r, g, b), sb)
+            pen.setJoinStyle(Qt.MiterJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            # The box is the OUTER edge, like in the pixel renderer; a pen
+            # is centred on its path, so the path sits half a line inside.
+            rect = QRectF(x1 + sb / 2.0, y1 + sb / 2.0,
+                          x2 - x1 - sb, y2 - y1 - sb)
+            if kind == 'ellipse':
+                p.drawEllipse(rect)
+            else:
+                p.drawRect(rect)
+    p.restore()
+
+
+class NoteOverlay(QLabel):
+    """Transparent child over the whole view that takes the mouse while
+    annotating (0.18.33): drag from one corner to the other, release to
+    finish one note. Only the stroke IN PROGRESS is painted here - finished
+    notes are baked into the picture by CullImageView.set_notes, so they
+    stay sharp at any zoom.
+
+    Works in normalized coordinates of the full frame; the tab hands it the
+    full frame (no crop display) for as long as the mode lasts."""
+    drawn = pyqtSignal(dict)
+
+    def __init__(self, view):
+        super().__init__(view)
+        self._view = view
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setStyleSheet('background: transparent;')
+        self._tool = annotations.DEFAULT_TOOL
+        self._color = annotations.DEFAULT_COLOR
+        self._width = annotations.width_for_step(
+            annotations.DEFAULT_WIDTH_STEP)
+        self._start = None          # QPointF in widget pixels
+        self._end = None
+        self._square = False        # Shift held
+        self.hide()
+
+    def begin(self, tool, colour, width=None):
+        self._tool, self._color = tool, colour
+        if width is not None:
+            self._width = width
+        self._start = self._end = None
+        self.setGeometry(self._view.rect())
+        self.setCursor(Qt.CrossCursor)
+        self.show()
+        self.raise_()
+
+    def finish(self):
+        self._start = self._end = None
+        self.hide()
+
+    def set_tool(self, tool):
+        self._tool = tool
+        self.update()
+
+    def set_colour(self, colour):
+        self._color = colour
+        self.update()
+
+    def set_width(self, width):
+        self._width = width
+        self.update()
+
+    def _image_rect(self):
+        item = self._view._item
+        if item.pixmap().isNull():
+            return None
+        poly = self._view.mapFromScene(item.mapToScene(item.boundingRect()))
+        return QRectF(poly.boundingRect())
+
+    def _norm(self, pos, r):
+        return (max(0.0, min(1.0, (pos.x() - r.x()) / r.width())),
+                max(0.0, min(1.0, (pos.y() - r.y()) / r.height())))
+
+    def _live_note(self):
+        r = self._image_rect()
+        if r is None or not r.width() or not r.height() \
+                or self._start is None or self._end is None:
+            return None, r
+        note = annotations.make_note(
+            self._tool, self._norm(self._start, r), self._norm(self._end, r),
+            self._color,
+            square=(r.width(), r.height()) if self._square else False,
+            width=self._width)
+        return note, r
+
+    def paintEvent(self, event):
+        note, r = self._live_note()
+        if note is None:
+            return
+        p = QPainter(self)
+        p.translate(r.x(), r.y())
+        paint_notes(p, [note], r.width(), r.height())
+        p.end()
+
+    def mousePressEvent(self, event):
+        r = self._image_rect()
+        if event.button() == Qt.LeftButton and r is not None \
+                and r.contains(QPointF(event.pos())):
+            self._start = self._end = QPointF(event.pos())
+            self._square = bool(event.modifiers() & Qt.ShiftModifier)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._start is not None:
+            self._end = QPointF(event.pos())
+            self._square = bool(event.modifiers() & Qt.ShiftModifier)
+            self.update()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._start is not None and event.button() == Qt.LeftButton:
+            self._end = QPointF(event.pos())
+            self._square = bool(event.modifiers() & Qt.ShiftModifier)
+            note, _r = self._live_note()
+            self._start = self._end = None
+            self.update()
+            if note is not None:
+                self.drawn.emit(note)
+        event.accept()
+
+
 class CullImageView(QGraphicsView):
 
     zoom_requested = pyqtSignal()      # emitted on click/Z; mixin loads 'full'
@@ -348,6 +511,11 @@ class CullImageView(QGraphicsView):
         # Crop overlay (0.13): a transparent child that edits a crop box in
         # normalized coordinates. Hidden until the tab turns crop mode on.
         self.crop = CropOverlay(self)
+        # 0.18.33: annotations. `_notes` are baked into the DISPLAYED pixmap
+        # (see _apply_crop_display); the overlay only takes the mouse while
+        # the tab is in annotation mode.
+        self.note_draw = NoteOverlay(self)
+        self._notes = []
         # 0.14: the untouched pixmap plus the crop currently DISPLAYED.
         # 0.14.2: _source_image is the image AS DECODED; _full_pixmap is
         # that image with white balance and exposure applied. Keeping the
@@ -405,6 +573,20 @@ class CullImageView(QGraphicsView):
     def crop_display(self):
         return self._crop_display
 
+    def set_notes(self, notes, rebuild=True):
+        """Show these annotations on the picture (0.18.33). rebuild=False
+        only remembers them - for a picture change, where the new pixels
+        are about to be set and carry the notes with them."""
+        notes = list(notes or [])
+        if notes == self._notes:
+            return
+        self._notes = notes
+        if rebuild and not self._full_pixmap.isNull():
+            self._apply_crop_display(True)
+
+    def notes(self):
+        return list(self._notes)
+
     def _apply_crop_display(self, keep_view):
         pm = self._full_pixmap
         if pm.isNull():
@@ -420,6 +602,14 @@ class CullImageView(QGraphicsView):
         if keep_view and old_w and old_h:
             c = self.mapToScene(self.viewport().rect().center())
             rel_center = (c.x() / old_w, c.y() / old_h)
+        if self._notes:
+            # Baked into a COPY of the full frame, before any crop cut-out:
+            # the note coordinates refer to the full frame, and the tone
+            # pass (which made _full_pixmap) never touches the colours.
+            pm = pm.copy()
+            painter = QPainter(pm)
+            paint_notes(painter, self._notes, pm.width(), pm.height())
+            painter.end()
         if self._crop_display:
             x, y, w, h = self._crop_display
             rect = QRect(int(round(x * pm.width())),
@@ -626,6 +816,9 @@ class CullImageView(QGraphicsView):
         if self.crop.isVisible():
             self.crop.setGeometry(self.rect())
             self.crop.update()
+        if not self.note_draw.isHidden():
+            self.note_draw.setGeometry(self.rect())
+            self.note_draw.update()
         # The edit panel is a child of the view, so it has to be re-placed
         # whenever the view changes size (window resize, fullscreen).
         panel = getattr(self, 'edit_panel', None)

@@ -13,7 +13,7 @@ emits what the user asked for. All edits live in edits.py.
 """
 from PyQt5.QtWidgets import (QApplication, QFrame, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QToolButton, QSizePolicy,
-                             QAbstractButton)
+                             QAbstractButton, QWidget, QSlider)
 from PyQt5.QtCore import (Qt, pyqtSignal, QSize, QPointF,
                           QSettings)
 from PyQt5.QtGui import (QIcon, QPixmap, QPainter, QPen, QColor,
@@ -21,7 +21,7 @@ from PyQt5.QtGui import (QIcon, QPixmap, QPainter, QPen, QColor,
 
 from .i18n import tr
 from .constants import APP_NAME
-from . import edits
+from . import annotations, edits
 
 
 def pipette_icon(px=16, color=None):
@@ -114,6 +114,10 @@ class EditPanel(QFrame):
     the mouse."""
 
     crop_requested = pyqtSignal()
+    notes_requested = pyqtSignal()          # A: annotation mode on/off
+    note_tool_requested = pyqtSignal(str)   # one of annotations.TOOLS
+    note_color_requested = pyqtSignal(str)  # any key of annotations.COLORS
+    note_width_requested = pyqtSignal(int)  # slider step 0..WIDTH_STEPS
     pipette_toggled = pyqtSignal(bool)
     ev_step_requested = pyqtSignal(int)     # +1 / -1 sixths of a stop
     reset_requested = pyqtSignal()
@@ -185,6 +189,103 @@ class EditPanel(QFrame):
         self.crop_help.hide()
         lay.addWidget(self.crop_help)
 
+        # 0.18.33: annotations (arrows, outlines, highlights) - made for
+        # screenshots. The tool and colour rows below only show while the
+        # mode is on, so the panel stays small otherwise.
+        self.notes_btn = QPushButton(tr('Annotate (A)'))
+        self.notes_btn.setToolTip(tr(
+            'Draw arrows, outlines and highlights on this image, e.g. for '
+            'screenshots. Drag on the picture; Enter or Esc ends.'))
+        self.notes_btn.clicked.connect(self.notes_requested)
+        lay.addWidget(self.notes_btn)
+
+        self.note_box = QWidget()
+        box = QVBoxLayout(self.note_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(4)
+        tool_row = QHBoxLayout()
+        tool_row.setSpacing(4)
+        self._tool_btns = {}
+        for tool, glyph, tip in (
+                ('arrow', '\u2197', tr('Arrow (1)')),
+                ('ellipse', '\u25cb', tr('Ellipse (2)')),
+                ('rect', '\u25a1', tr('Rectangle (3)')),
+                ('mark', '\u25ac', tr('Highlight (4)'))):
+            b = QToolButton()
+            b.setText(glyph)
+            b.setCheckable(True)
+            b.setToolTip(tip)
+            b.setFixedSize(34, 26)
+            b.clicked.connect(
+                lambda _c=False, t=tool: self.note_tool_requested.emit(t))
+            tool_row.addWidget(b)
+            self._tool_btns[tool] = b
+        tool_row.addStretch(1)
+        box.addLayout(tool_row)
+        self._colour_btns = {}
+
+        def colour_row(keys):
+            row = QHBoxLayout()
+            row.setSpacing(5)
+            for key, tip in keys:
+                r, g, bl = annotations.COLORS[key]
+                b = QToolButton()
+                b.setCheckable(True)
+                b.setToolTip(tip)
+                b.setFixedSize(22, 22)
+                # The button's OWN style sheet wins over the panel's, so the
+                # amber "checked" colour of the other buttons cannot repaint
+                # a swatch - the ring is what marks the chosen colour.
+                b.setStyleSheet(
+                    f'QToolButton {{ background: rgb({r}, {g}, {bl});'
+                    ' border: 2px solid rgba(255, 255, 255, 60);'
+                    ' border-radius: 11px; padding: 0; }'
+                    f'QToolButton:checked {{ background: rgb({r}, {g}, {bl});'
+                    ' border: 3px solid #ffffff; }')
+                b.clicked.connect(
+                    lambda _c=False, k=key: self.note_color_requested.emit(k))
+                row.addWidget(b)
+                self._colour_btns[key] = b
+            row.addStretch(1)
+            return row
+
+        box.addLayout(colour_row((
+            ('red', tr('Red (R)')), ('yellow', tr('Yellow (Y)')),
+            ('green', tr('Green (G)')), ('blue', tr('Blue (B)')),
+            ('white', tr('White (W)')))))
+        # 0.18.33: neon shades; N steps through them.
+        box.addLayout(colour_row((
+            ('neon_yellow', tr('Neon yellow (N)')),
+            ('neon_green', tr('Neon green (N)')),
+            ('neon_pink', tr('Neon pink (N)')),
+            ('neon_orange', tr('Neon orange (N)')),
+            ('neon_blue', tr('Neon blue (N)')))))
+        # Pen thickness for NEW notes; [ and ] do the same by key.
+        width_row = QHBoxLayout()
+        width_row.setSpacing(6)
+        width_lbl = QLabel(tr('Thickness'))
+        width_lbl.setObjectName('cammelloCropHelp')
+        width_row.addWidget(width_lbl)
+        self.note_width = QSlider(Qt.Horizontal)
+        self.note_width.setRange(0, annotations.WIDTH_STEPS)
+        self.note_width.setValue(annotations.DEFAULT_WIDTH_STEP)
+        self.note_width.setToolTip(tr(
+            'Line thickness for new annotations ([ thinner, ] thicker). '
+            'Existing ones keep theirs.'))
+        self.note_width.setFixedWidth(140)
+        self.note_width.valueChanged.connect(self.note_width_requested)
+        width_row.addWidget(self.note_width)
+        width_row.addStretch(1)
+        box.addLayout(width_row)
+        self.note_help = QLabel()
+        self.note_help.setObjectName('cammelloCropHelp')
+        self.note_help.setTextFormat(Qt.RichText)
+        self.note_help.setWordWrap(True)
+        self.note_help.setMaximumWidth(260)
+        box.addWidget(self.note_help)
+        self.note_box.hide()
+        lay.addWidget(self.note_box)
+
         self.wb_btn = QToolButton()
         self.wb_btn.setText(tr('White balance (W)'))
         # 0.15.0 (Harald): the white balance button carries a pipette, so
@@ -239,9 +340,12 @@ class EditPanel(QFrame):
         self.hide()
 
     # -- state ------------------------------------------------------------
-    def show_state(self, record, cropping=False):
+    def show_state(self, record, cropping=False, noting=False):
         """Reflect one image's edit record. record may be None."""
         record = record or {}
+        self.notes_btn.setText(tr('Annotate (A)')
+                               + (' \u2713' if record.get('notes') else ''))
+        self.notes_btn.setDown(noting)
         ev = record.get('ev', 0.0)
         self.ev_lbl.setText(self._format_ev(ev))
         has_wb = 'wb' in record
@@ -272,6 +376,36 @@ class EditPanel(QFrame):
             self.wb_btn.blockSignals(True)
             self.wb_btn.setChecked(on)
             self.wb_btn.blockSignals(False)
+
+    def set_note_width(self, step):
+        """Move the thickness slider without echoing a request back."""
+        if self.note_width.value() != step:
+            self.note_width.blockSignals(True)
+            self.note_width.setValue(step)
+            self.note_width.blockSignals(False)
+
+    def set_noting(self, on, tool=None, colour=None):
+        """Show or hide the annotation tool and colour rows and mark the
+        chosen ones (0.18.33)."""
+        if on:
+            for key, btn in self._tool_btns.items():
+                btn.setChecked(key == tool)
+            for key, btn in self._colour_btns.items():
+                btn.setChecked(key == colour)
+            self.note_help.setText(
+                '<b>' + tr('Annotation keys') + '</b><br>'
+                '1 ' + tr('arrow') + ' &middot; 2 ' + tr('ellipse')
+                + ' &middot; 3 ' + tr('rectangle') + ' &middot; 4 '
+                + tr('highlight') + '<br>'
+                'R Y G B W ' + tr('color') + ' &middot; N '
+                + tr('neon') + '<br>'
+                '[ ] ' + tr('thickness') + '<br>'
+                '<b>\u232b</b> ' + tr('remove last') + ' &middot; '
+                '<b>\u21e7A</b> ' + tr('remove all') + '<br>'
+                '<b>\u21b5</b> ' + tr('done'))
+        self.note_box.setVisible(bool(on))
+        self.adjustSize()
+        self.place()
 
     def set_cropping(self, on):
         """Show or hide the crop key legend (0.14.2). The same keys the

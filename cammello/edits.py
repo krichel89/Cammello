@@ -6,8 +6,11 @@ NO Qt import so the logic is testable on its own. The QSettings object is
 passed in by the caller.
 
 An edit record is:
-    {'crop': (x, y, w, h) | None,   # normalized 0..1, fraction of the image
-     'ev':   float}                 # -3.0 .. +3.0 exposure stops, 0 = none
+    {'crop':  (x, y, w, h) | None,  # normalized 0..1, fraction of the image
+     'ev':    float,                # -3.0 .. +3.0 exposure stops, 0 = none
+     'wb':    (r, g, b) | None,     # channel gains, green = 1.0
+     'notes': [note, ...]}          # arrows, outlines, highlights (0.18.33,
+                                    # see annotations.py for the note format)
 
 Nothing here touches the source file. Edits are applied only when a file
 LEAVES Cammello - Commons upload, FTP, Flickr, or a culling folder export -
@@ -21,6 +24,11 @@ preview of a different pixel size.
 """
 import json
 import os
+
+try:
+    from . import annotations
+except ImportError:                       # standalone use of the module
+    import annotations
 
 try:
     from PIL import Image, ImageOps
@@ -143,7 +151,8 @@ def _normalize_record(rec):
     crop = _valid_crop(rec.get('crop'))
     ev = _clamp_ev(rec.get('ev', 0.0))
     wb = _valid_wb(rec.get('wb'))
-    if crop is None and ev == 0.0 and wb is None:
+    notes = annotations.clean_notes(rec.get('notes'))
+    if crop is None and ev == 0.0 and wb is None and not notes:
         return None
     out = {}
     if crop is not None:
@@ -152,6 +161,8 @@ def _normalize_record(rec):
         out['ev'] = ev
     if wb is not None:
         out['wb'] = list(wb)
+    if notes:
+        out['notes'] = notes
     return out
 
 
@@ -202,6 +213,38 @@ def set_wb(edits, path, wb):
     return _update(edits, path, wb=('set', _valid_wb(wb)))
 
 
+def get_notes(edits, path):
+    """The annotations of one path as a list (empty when there are none)."""
+    rec = get_edit(edits, path)
+    return list(rec.get('notes') or []) if rec else []
+
+
+def set_notes(edits, path, notes):
+    """Replace the annotations of a path (an empty list clears them), in
+    place. -> True on change."""
+    return _update(edits, path, notes=('set', annotations.clean_notes(notes)))
+
+
+def add_note(edits, path, note):
+    """Append one annotation. -> True when it was added (False for an
+    unusable note or when the picture already carries MAX_NOTES)."""
+    cleaned = annotations.clean_note(note)
+    current = get_notes(edits, path)
+    if cleaned is None or len(current) >= annotations.MAX_NOTES:
+        return False
+    current.append(cleaned)
+    return set_notes(edits, path, current)
+
+
+def remove_last_note(edits, path):
+    """Take the newest annotation away. -> True when there was one."""
+    current = get_notes(edits, path)
+    if not current:
+        return False
+    current.pop()
+    return set_notes(edits, path, current)
+
+
 def get_ev(edits, path):
     rec = get_edit(edits, path)
     return rec.get('ev', 0.0) if rec else 0.0
@@ -221,9 +264,15 @@ def clear_edit(edits, path):
     return False
 
 
-def _update(edits, path, crop=None, ev=None, wb=None):
+def _update(edits, path, crop=None, ev=None, wb=None, notes=None):
     key = norm(path)
     rec = dict(edits.get(key) or {})
+    if notes is not None:
+        _tag, value = notes
+        if value:
+            rec['notes'] = list(value)
+        else:
+            rec.pop('notes', None)
     if crop is not None:
         _tag, value = crop
         if value is None:
@@ -397,12 +446,14 @@ def _exif_upright(exif_bytes):
         return exif_bytes
 
 
-def _apply_crop_image(img, crop):
-    """Crop a PIL image with a normalized (x, y, w, h) box."""
+def _crop_box_px(size, crop):
+    """The pixel box (left, upper, right, lower) a normalized crop makes on
+    an image of `size`, or None without a crop. Shared by the crop itself
+    and by the annotations, which need the same offset (0.18.33)."""
     if crop is None:
-        return img
+        return None
     x, y, w, h = crop
-    W, H = img.size
+    W, H = size
     left = int(round(x * W))
     upper = int(round(y * H))
     right = int(round((x + w) * W))
@@ -411,25 +462,48 @@ def _apply_crop_image(img, crop):
     upper = max(0, min(upper, H - 1))
     right = max(left + 1, min(right, W))
     lower = max(upper + 1, min(lower, H))
-    return img.crop((left, upper, right, lower))
+    return (left, upper, right, lower)
+
+
+def _apply_crop_image(img, crop):
+    """Crop a PIL image with a normalized (x, y, w, h) box."""
+    box = _crop_box_px(img.size, crop)
+    if box is None:
+        return img
+    return img.crop(box)
 
 
 def _is_raw(path):
     return os.path.splitext(path)[1].lower() in RAW_EXTENSIONS
 
 
-def render_edited(path, record, out_path, log=None):
-    """Render an edited copy of `path` to `out_path` (a JPEG). Returns
-    out_path on success, or None if nothing could be rendered (the caller
-    then uploads the original).
+def _is_png(path):
+    return os.path.splitext(path)[1].lower() == '.png'
 
-    - JPEG/other Pillow-readable source: open -> crop -> EV -> save q95,
-      EXIF passed through so the camera metadata survives.
+
+def render_extension(path):
+    """The extension a rendered copy of `path` gets: a PNG stays a PNG (a
+    screenshot saved as JPEG would smear its text), everything else becomes
+    a JPEG (0.18.33)."""
+    return '.png' if _is_png(path) else '.jpg'
+
+
+def render_edited(path, record, out_path, log=None):
+    """Render an edited copy of `path` to `out_path` (a JPEG, or a PNG when
+    the source is a PNG). Returns out_path on success, or None if nothing
+    could be rendered (the caller then uploads the original).
+
+    - JPEG/other Pillow-readable source: open -> crop -> EV/WB ->
+      annotations -> save (JPEG q95 with the EXIF passed through; a PNG
+      keeps its transparency and colour profile).
     - RAW source with an EV change: rawpy postprocess with exp_shift for a
       true raw-domain exposure where the range allows (exp_shift 0.25..8.0 =
       -2..+3 EV); outside that, fall back to the sRGB-domain LUT.
     - RAW source, crop only: crop the embedded preview if one is available,
       else the full postprocessed image.
+
+    The annotations come LAST, after the tone change: a red arrow must stay
+    red, not be shifted by the white balance of the picture under it.
     """
     if not HAS_PIL:
         return None
@@ -439,8 +513,11 @@ def render_edited(path, record, out_path, log=None):
     crop = tuple(rec['crop']) if 'crop' in rec else None
     ev = rec.get('ev', 0.0)
     wb = tuple(rec['wb']) if 'wb' in rec else None
+    notes = rec.get('notes') or None
+    png = _is_png(path)
 
     try:
+        icc = None
         if _is_raw(path):
             # rawpy applies the camera flip during postprocess, so the pixels
             # already match what the culling view showed; the crop box (drawn
@@ -458,20 +535,32 @@ def render_edited(path, record, out_path, log=None):
             # (0.14.1; reproduced with an orientation-6 test image).
             img = ImageOps.exif_transpose(img)
             exif = img.info.get('exif')
-            img = _apply_crop_image(img, crop)
-            img = _apply_wb_ev_image(img, wb, ev)
-            if img.mode not in ('RGB', 'L'):
-                img = img.convert('RGB')
-            save_kwargs = {'quality': 95}
-            exif = _exif_upright(exif)
-            if exif:
-                save_kwargs['exif'] = exif
-            img.save(out_path, 'JPEG', **save_kwargs)
-            return out_path
-
-        # RAW path continues here (crop happens after the raw render).
+            icc = img.info.get('icc_profile')
+            ev_done = False
+        if png:
+            # Palette and 1-bit PNGs are widened first, so transparency
+            # survives the tone and annotation passes.
+            if img.mode in ('P', 'PA'):
+                img = img.convert('RGBA' if (img.mode == 'PA' or
+                                             'transparency' in img.info)
+                                  else 'RGB')
+            elif img.mode == '1':
+                img = img.convert('L')
+        full_size = img.size
+        crop_box = _crop_box_px(full_size, crop)
         img = _apply_crop_image(img, crop)
         img = _apply_wb_ev_image(img, wb, 0.0 if ev_done else ev)
+        if notes:
+            offset = (crop_box[0], crop_box[1]) if crop_box else (0, 0)
+            img = annotations.draw_notes(img, notes, full_size, offset)
+        if png:
+            if img.mode not in ('RGB', 'RGBA', 'L', 'LA'):
+                img = img.convert('RGBA' if 'A' in img.mode else 'RGB')
+            save_kwargs = {}
+            if icc:
+                save_kwargs['icc_profile'] = icc
+            img.save(out_path, 'PNG', **save_kwargs)
+            return out_path
         if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
         save_kwargs = {'quality': 95}
@@ -550,17 +639,18 @@ def effective_upload_path(path, edits, tmp_dir, log=None):
     if rec is None:
         return path
     stem = os.path.splitext(os.path.basename(path))[0]
-    out_path = os.path.join(tmp_dir, stem + EDIT_SUFFIX + '.jpg')
+    out_path = os.path.join(tmp_dir,
+                            stem + EDIT_SUFFIX + render_extension(path))
     rendered = render_edited(path, rec, out_path, log)
     return rendered or path
 
 
 def export_name(path):
     """The filename an edited copy gets in a folder export: '<stem>_edit.jpg'
-    (Harald, 0.13). Unedited files keep their own name - the caller decides
-    which to use via has_edit()."""
+    ('.png' for a PNG source, 0.18.33; Harald, 0.13). Unedited files keep
+    their own name - the caller decides which to use via has_edit()."""
     stem = os.path.splitext(os.path.basename(path))[0]
-    return stem + EDIT_SUFFIX + '.jpg'
+    return stem + EDIT_SUFFIX + render_extension(path)
 
 
 # ── Undo (0.15.0) ────────────────────────────────────────────────────────────
